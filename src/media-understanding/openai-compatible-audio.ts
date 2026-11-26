@@ -23,20 +23,32 @@ export async function transcribeOpenAiCompatibleAudio(
     /** Form field that carries `language`; some models take a `languages[]` list instead. */
     languageField?: "language" | "languages[]";
   },
+  /** Internal adapter override for a caller that owns admission and the HTTP boundary. */
+  transport?: {
+    baseUrl: string;
+    post: typeof postTranscriptionRequest;
+    readResponse: (response: Response, headers: Headers) => Promise<Record<string, unknown>>;
+  },
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-    resolveProviderHttpRequestConfig({
-      baseUrl: params.baseUrl,
-      defaultBaseUrl: params.defaultBaseUrl,
-      headers: params.headers,
-      request: params.request,
-      defaultHeaders: buildOpenAiCompatibleAuthHeaders(params),
-      provider: params.provider,
-      api: OPENAI_AUDIO_TRANSCRIPTIONS_API,
-      capability: "audio",
-      transport: "media-understanding",
-    });
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } = transport
+    ? {
+        baseUrl: transport.baseUrl,
+        headers: new Headers(),
+        allowPrivateNetwork: false,
+        dispatcherPolicy: undefined,
+      }
+    : resolveProviderHttpRequestConfig({
+        baseUrl: params.baseUrl,
+        defaultBaseUrl: params.defaultBaseUrl,
+        headers: params.headers,
+        request: params.request,
+        defaultHeaders: buildOpenAiCompatibleAuthHeaders(params),
+        provider: params.provider,
+        api: OPENAI_AUDIO_TRANSCRIPTIONS_API,
+        capability: "audio",
+        transport: "media-understanding",
+      });
   const url = `${baseUrl}/audio/transcriptions`;
 
   const model = resolveMediaUnderstandingString(params.model, params.defaultModel);
@@ -52,7 +64,7 @@ export async function transcribeOpenAiCompatibleAudio(
     },
   });
 
-  const { response: res, release } = await postTranscriptionRequest({
+  const { response: res, release } = await (transport?.post ?? postTranscriptionRequest)({
     url,
     headers,
     body: form,
@@ -65,11 +77,17 @@ export async function transcribeOpenAiCompatibleAudio(
   });
 
   try {
-    await assertOkOrThrowHttpError(res, "Audio transcription failed", { requestHeaders: headers });
-
-    const payload = await readProviderJsonObjectResponse(res, "Audio transcription failed", {
-      requestHeaders: headers,
-    });
+    let payload: Record<string, unknown>;
+    if (transport) {
+      payload = await transport.readResponse(res, headers);
+    } else {
+      await assertOkOrThrowHttpError(res, "Audio transcription failed", {
+        requestHeaders: headers,
+      });
+      payload = await readProviderJsonObjectResponse(res, "Audio transcription failed", {
+        requestHeaders: headers,
+      });
+    }
     const text = requireTranscriptionText(
       payload.text,
       "Audio transcription response missing text",
