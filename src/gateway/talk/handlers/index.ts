@@ -49,6 +49,10 @@ import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 import { assertValidParams } from "../../server-methods/validation.js";
 import { formatForLog } from "../../ws-log.js";
 import { buildTalkRealtimeConfig } from "../session-config.js";
+import {
+  assertTalkConversationSpeechAllowed,
+  captureTalkSpeechDataAuthority,
+} from "../speech-data-policy.js";
 import { talkCatalogHandler } from "./catalog.js";
 import { talkClientHandlers } from "./client.js";
 import { talkSessionHandlers } from "./session.js";
@@ -412,6 +416,11 @@ export const talkHandlers: GatewayRequestHandlers = {
 
     try {
       const runtimeConfig = context.getRuntimeConfig();
+      assertTalkConversationSpeechAllowed(runtimeConfig);
+      const assertSpeechPolicy = captureTalkSpeechDataAuthority(
+        runtimeConfig,
+        context.getRuntimeConfig,
+      );
       const setup = buildTalkTtsConfig(runtimeConfig);
       if ("error" in setup) {
         respond(false, undefined, talkSpeakError(setup.reason, setup.error));
@@ -444,6 +453,7 @@ export const talkHandlers: GatewayRequestHandlers = {
         cfg: setup.cfg,
         overrides,
         disableFallback: true,
+        assertCurrent: assertSpeechPolicy,
       });
       if (!result.success || !result.audioBuffer) {
         respond(

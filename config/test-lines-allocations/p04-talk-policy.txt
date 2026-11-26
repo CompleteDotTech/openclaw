@@ -1,0 +1,5 @@
+# P04 core review layer: resolver, actual RPC admission, config normalization,
+# active-session revocation, and deferred TTS preparation retain independent
+# boundary regressions without introducing test-only production hooks.
+# Net test growth is 935 lines against the restricted transport review layer.
+535

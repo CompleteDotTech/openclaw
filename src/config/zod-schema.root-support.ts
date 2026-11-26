@@ -256,12 +256,36 @@ const TalkRealtimeSchema = z
   })
   .superRefine((realtime, ctx) => validateTalkProviderSelection(realtime, ctx, "talk.realtime"));
 
+const TalkSpeechDataPolicySchema = z.discriminatedUnion("mode", [
+  z.strictObject({ mode: z.literal("device-local") }),
+  z.strictObject({
+    mode: z.literal("trusted-endpoint"),
+    endpoint: z
+      .string()
+      .min(1)
+      .refine((value) => {
+        const url = URL.parse(value);
+        return (
+          value === value.trim() &&
+          url !== null &&
+          (url.protocol === "http:" || url.protocol === "https:") &&
+          !url.username &&
+          !url.password &&
+          !url.search &&
+          !url.hash
+        );
+      }, "Speech endpoint must be an HTTP(S) base URL without credentials, query, fragment, or surrounding whitespace"),
+  }),
+  z.strictObject({ mode: z.literal("external") }),
+]);
+
 export const TalkSchema = z
   .strictObject({
     agentId: z.string().trim().min(1).optional(),
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     realtime: TalkRealtimeSchema.optional(),
+    speechDataPolicy: TalkSpeechDataPolicySchema.optional(),
     consultThinkingLevel: z.enum(ALL_THINKING_LEVELS).optional(),
     consultFastMode: z.boolean().optional(),
     speechLocale: z.string().optional(),

@@ -152,6 +152,9 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
     silenceTimeoutMs: normalizeInteger(value.silenceTimeoutMs, 1),
     providers: normalizeTalkProviders(value.providers),
     realtime: normalizeTalkRealtimeConfig(value.realtime),
+    // Doctor also calls this before validation. Retain authored restrictions,
+    // including unsupported fields, so normalization cannot silently erase them.
+    speechDataPolicy: value.speechDataPolicy,
     provider: normalizeOptionalString(value.provider),
   });
 }
@@ -210,6 +213,7 @@ export function buildTalkConfigResponse(
     consultThinkingLevel: normalized.consultThinkingLevel,
     consultFastMode: normalized.consultFastMode,
     speechLocale: normalized.speechLocale,
+    speechDataPolicy: normalized.speechDataPolicy,
     providers: Object.keys(normalized.providers ?? {}).length ? normalized.providers : undefined,
     realtime: Object.keys(normalized.realtime ?? {}).length ? normalized.realtime : undefined,
     ...(provider

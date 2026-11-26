@@ -8,11 +8,16 @@ import {
 import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import { captureTalkSpeechDataAuthority } from "./speech-data-policy.js";
 
 /** Retain the authenticated source at ingress; audio replacement is not revocation. */
 export async function retainTalkClientRunAuthority(
   params: Pick<GatewayRequestHandlerOptions, "client" | "context" | "hasCurrentClientAuthority">,
 ) {
+  const assertSpeechPolicy = captureTalkSpeechDataAuthority(
+    params.context.getRuntimeConfig(),
+    params.context.getRuntimeConfig,
+  );
   const captured = await prepareGatewayOperatorRunAuthority({
     ...params,
     client: params.client ?? null,
@@ -38,11 +43,13 @@ export async function retainTalkClientRunAuthority(
   return {
     operatorAuthority: captured?.authority,
     assertCurrent() {
+      assertSpeechPolicy();
       if (released || sourceCurrent?.() === false) {
         throw new Error("Talk caller source ended or changed. Start a new request.");
       }
     },
     accept() {
+      assertSpeechPolicy();
       // Retention during provider setup is not acceptance. The logical voice
       // owner calls this only after its final request/target commit checks.
       if (released || params.hasCurrentClientAuthority?.() === false) {
@@ -51,6 +58,7 @@ export async function retainTalkClientRunAuthority(
       acceptGatewayDeviceSourceAuthority(params.hasCurrentClientAuthority);
     },
     async retainRun(runId: string) {
+      assertSpeechPolicy();
       if (released || sourceCurrent?.() === false) {
         throw new Error("Talk caller source ended or changed. Start a new request.");
       }
@@ -62,6 +70,7 @@ export async function retainTalkClientRunAuthority(
         entry: getRpcSourceForGateway(runId, params.context.resolveGatewayContext),
       });
       const assertSourceCurrent = () => {
+        assertSpeechPolicy();
         retained.authority?.signal?.throwIfAborted();
       };
       try {

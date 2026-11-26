@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { resolveCommandAuthorization } from "../../../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -25,6 +26,7 @@ import type { GatewayClient, GatewayRequestHandlerOptions } from "../../server-m
 import { gatewayConnect, gatewayProfile } from "../../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "../../test-helpers.rpc-source.js";
+import * as talkHandoff from "../handoff.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
 import { preparedTalkSessionProjection as projection } from "../test-helpers.js";
 import { createBrowserProvider, createBrowserSessionMock } from "./client-fixtures.test-support.js";
@@ -312,7 +314,7 @@ vi.mock("../../sessions-resolve.js", () => ({
   withPreparedSessionResolve: async (
     { isCurrent: _isCurrent, ...params }: Record<string, unknown>,
     consume: (result: unknown) => unknown,
-  ) => consume(mocks.resolveSessionKeyFromResolveParams(params)),
+  ) => consume(await mocks.resolveSessionKeyFromResolveParams(params)),
 }));
 
 vi.mock("../relay/session-create.js", async (importOriginal) => ({
@@ -1520,6 +1522,43 @@ describe("talk.session unified handlers", () => {
     expect(mocks.ensureClientVoiceAgentSessionEntry).not.toHaveBeenCalled();
   });
 
+  it("rechecks speech authority after the asynchronous session entry is ensured", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const provider = realtimeProvider();
+    mocks.listRealtimeVoiceProviders.mockReturnValue([provider]);
+    resolveRealtimeProvider(provider, { model: "fixture-realtime" });
+    mocks.createTalkRealtimeRelaySession.mockReturnValue(
+      relaySession("relay-revoked-policy", "fixture-realtime", "fixture-voice"),
+    );
+    mocks.ensureClientVoiceAgentSessionEntry.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return "session-main";
+    });
+    const config: OpenClawConfig = realtimeConfig({
+      provider: "openai",
+      providers: { openai: { apiKey: "synthetic-cloud-key" } },
+    });
+    const pending = invokeTalkHandler("talk.session.create", {
+      params: { mode: "realtime", transport: "gateway-relay", brain: "agent-consult" },
+      context: { getRuntimeConfig: () => config, logGateway: { warn: vi.fn() } },
+    });
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "create settled before ensure");
+      config.talk!.speechDataPolicy = { mode: "device-local" };
+      release.resolve();
+      expectRespondError(await pending, {
+        code: ErrorCodes.UNAVAILABLE,
+        message: expect.stringContaining("Speech permission or the selected route changed"),
+      });
+      expect(mocks.createTalkRealtimeRelaySession).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await pending;
+    }
+  });
+
   it("returns classified talk issue details when realtime relay creation fails", async () => {
     const provider = realtimeProvider();
     resolveRealtimeProvider(provider, { apiKey: "bad-key" });
@@ -1735,6 +1774,47 @@ describe("talk.session unified handlers", () => {
       }
     },
   );
+
+  it("rechecks speech authority after managed-room session resolution before making a handoff", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const handoff = vi.spyOn(talkHandoff, "createTalkHandoff");
+    onTestFinished(() => {
+      for (const result of handoff.mock.results) {
+        if (result.type === "return") {
+          talkHandoff.revokeTalkHandoff(result.value.id);
+        }
+      }
+      handoff.mockRestore();
+    });
+    mocks.resolveSessionKeyFromResolveParams.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return { ok: true, key: "session:main" };
+    });
+    const config: OpenClawConfig = {};
+    const pending = invokeTalkHandler("talk.session.create", {
+      params: { mode: "stt-tts", transport: "managed-room" },
+      client: { connId: "policy-managed", connect: { scopes: ["operator.admin"] } },
+      context: {
+        getRuntimeConfig: () => config,
+        ...bindSessionRowProjection({}, () => projection),
+      },
+    });
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "create settled before resolution");
+      config.talk = { speechDataPolicy: { mode: "device-local" } };
+      release.resolve();
+      expectRespondError(await pending, {
+        code: ErrorCodes.UNAVAILABLE,
+        message: expect.stringContaining("Speech permission or the selected route changed"),
+      });
+      expect(handoff).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await pending;
+    }
+  });
 
   it.each([
     {

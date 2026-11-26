@@ -7,6 +7,7 @@ import {
   listTalkTranscriptionProviders,
   resolveConfiguredRealtimeTranscriptionProvider,
 } from "../session-config.js";
+import { isTalkSpeechDataRestricted } from "../speech-data-policy.js";
 
 /** A failed row must not release single-flight custody of its still-running siblings. */
 export async function settleTalkCatalogTasks<const T extends readonly Promise<unknown>[]>(
@@ -44,10 +45,42 @@ export async function buildTalkTranscriptionCatalog(
   config: OpenClawConfig,
   agentId: string,
   onReadinessError: (error: unknown) => false,
+  overrides: { provider?: string; model?: string } = {},
+  assertCurrent: () => void = () => {},
 ) {
+  if (isTalkSpeechDataRestricted(config)) {
+    const selected = await buildTalkTranscriptionConfig(
+      config,
+      overrides.provider,
+      overrides.model,
+      agentId,
+      undefined,
+      assertCurrent,
+    );
+    const file = selected.file;
+    return {
+      source: selected.source,
+      ready: file?.ready ?? false,
+      ...(file?.provider ? { activeProvider: file.provider } : {}),
+      dataPolicy: file?.speechData?.readiness,
+      providers: (file?.providers ?? []).map((provider) => ({
+        ...provider,
+        label: "OpenAI-compatible batch endpoint",
+        modes: ["transcription"],
+        transports: ["gateway-relay"],
+        brains: ["none"],
+      })),
+    };
+  }
   const fileTranscription = resolveTalkFileTranscriptionConfig(config, agentId);
   const [transcriptionConfig, mediaConfig] = await settleTalkCatalogTasks([
-    buildTalkTranscriptionConfig(config, undefined, undefined, agentId, fileTranscription),
+    buildTalkTranscriptionConfig(
+      config,
+      overrides.provider,
+      overrides.model,
+      agentId,
+      fileTranscription,
+    ),
     fileTranscription,
   ]);
   const transcriptionSelection = transcriptionConfig.file
@@ -60,6 +93,7 @@ export async function buildTalkTranscriptionCatalog(
             configuredProviderId: transcriptionConfig.provider,
             providerConfigs: transcriptionConfig.providers,
             defaultModel: transcriptionConfig.model,
+            requestedModel: overrides.model,
           }),
       );
   const activeTranscriptionProvider = transcriptionSelection.activeProvider;

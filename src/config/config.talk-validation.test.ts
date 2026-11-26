@@ -10,6 +10,7 @@ import {
   resolveConfiguredTalkSpeechProviderId,
 } from "./talk.js";
 import { withTempHomeConfig } from "./test-helpers.js";
+import { TalkSchema } from "./zod-schema.root-support.js";
 
 describe("talk config validation fail-closed behavior", () => {
   beforeEach(() => {
@@ -50,6 +51,30 @@ describe("talk config validation fail-closed behavior", () => {
     },
   );
 
+  it("preserves an explicit speech restriction and existing credentials during config load", async () => {
+    const talk = {
+      provider: "acme",
+      providers: { acme: { apiKey: "synthetic-cloud-key", voiceId: "synthetic-voice" } },
+      speechDataPolicy: { mode: "device-local" },
+    };
+    await withTempHomeConfig({ agents: { entries: { main: {} } }, talk }, async () => {
+      const config = loadConfig({ skipPluginValidation: true, pin: false });
+      expect(config.talk).toEqual(talk);
+    });
+  });
+
+  it("leaves existing cloud configuration without a speech policy unchanged", async () => {
+    const talk = {
+      provider: "acme",
+      providers: { acme: { apiKey: "synthetic-cloud-key" } },
+    };
+    await withTempHomeConfig({ agents: { entries: { main: {} } }, talk }, async () => {
+      const config = loadConfig({ skipPluginValidation: true, pin: false });
+      expect(config.talk).toEqual(talk);
+      expect(config.talk).not.toHaveProperty("speechDataPolicy");
+    });
+  });
+
   it.each([
     {
       name: "provider absent from providers",
@@ -79,5 +104,42 @@ describe("talk config validation fail-closed behavior", () => {
       });
       expect(consoleSpy).toHaveBeenCalled();
     });
+  });
+});
+
+describe("Talk speech data policy schema", () => {
+  it.each([
+    { mode: "device-local" },
+    { mode: "trusted-endpoint", endpoint: "http://127.0.0.1:8080/v1" },
+    { mode: "external" },
+  ])("preserves the explicit $mode policy", (speechDataPolicy) => {
+    const parsed = TalkSchema.safeParse({ speechDataPolicy });
+    expect(parsed.success && parsed.data.speechDataPolicy).toEqual(speechDataPolicy);
+  });
+
+  it.each([
+    {},
+    { mode: "local" },
+    { mode: "device-local", version: 2 },
+    { mode: "device-local", endpoint: "http://127.0.0.1:8080/v1" },
+    { mode: "trusted-endpoint" },
+    { mode: "trusted-endpoint", endpoint: "" },
+    { mode: "external", endpoint: "https://speech.example.test/v1" },
+    { mode: "external", allowFallback: true },
+  ])("rejects unsupported or ambiguous policy %j", (speechDataPolicy) => {
+    expect(TalkSchema.safeParse({ speechDataPolicy }).success).toBe(false);
+  });
+
+  it.each([
+    "file:///speech/model",
+    "ftp://speech.example.test/v1",
+    "https://user:synthetic-password@speech.example.test/v1",
+    "https://speech.example.test/v1?api_key=synthetic-secret",
+    "https://speech.example.test/v1#synthetic-fragment",
+    " https://speech.example.test/v1 ",
+  ])("rejects a non-HTTP or secret-bearing approved endpoint %s", (endpoint) => {
+    expect(
+      TalkSchema.safeParse({ speechDataPolicy: { mode: "trusted-endpoint", endpoint } }).success,
+    ).toBe(false);
   });
 });

@@ -214,6 +214,8 @@ export const TalkAgentControlResultSchema = closedObject({
 
 export const TalkSessionCreateParamsSchema = closedObject({
   sessionKey: Type.Optional(Type.String()),
+  // Raw composer capture returns text to a draft; conversational Talk omits this.
+  purpose: Type.Optional(Type.Literal("dictation")),
   voiceChangeId: Type.Optional(NonEmptyString),
   capabilities: Type.Optional(Type.Array(Type.Literal("voice-selection"), { uniqueItems: true })),
   spawnedBy: Type.Optional(NonEmptyString),
@@ -279,6 +281,8 @@ export const TalkSessionCloseParamsSchema = closedObject({
 export const TalkCatalogParamsSchema = closedObject({
   provider: Type.Optional(NonEmptyString),
   model: Type.Optional(NonEmptyString),
+  transcriptionProvider: Type.Optional(NonEmptyString),
+  transcriptionModel: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
 });
 
@@ -335,8 +339,24 @@ const TalkCatalogProviderGroupProperties = {
 
 const TalkCatalogProviderGroupSchema = closedObject(TalkCatalogProviderGroupProperties);
 
+const TalkSpeechDataPolicySchema = closedObject({
+  mode: stringLiteralUnion(["device-local", "trusted-endpoint", "external"]),
+  configured: Type.Boolean(),
+  initialized: Type.Boolean(),
+  available: Type.Boolean(),
+  permitted: Type.Boolean(),
+  transport: Type.Literal("batch"),
+  provider: Type.Optional(Type.String()),
+  model: Type.Optional(Type.String()),
+  destination: Type.Optional(Type.String()),
+  reason: Type.String(),
+  message: Type.String(),
+  refinement: Type.Literal("unavailable"),
+});
+
 const TalkCatalogTranscriptionGroupSchema = closedObject({
   ...TalkCatalogProviderGroupProperties,
+  dataPolicy: Type.Optional(TalkSpeechDataPolicySchema),
   // Which path Talk transcription uses: a streaming transcription provider
   // named by the Voice Call streaming config (`streaming`) or picked
   // automatically from configured keys (`streaming-auto`), the
@@ -380,6 +400,7 @@ export const TalkSessionCreateResultSchema = closedObject({
   roomUrl: Type.Optional(NonEmptyString),
   token: Type.Optional(NonEmptyString),
   audio: Type.Optional(Type.Unknown()),
+  dataPolicy: Type.Optional(TalkSpeechDataPolicySchema),
   model: Type.Optional(Type.String()),
   voice: Type.Optional(Type.String()),
   expiresAt: Type.Optional(Type.Number()),

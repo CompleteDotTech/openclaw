@@ -21,6 +21,7 @@ export type MdnsDiscoveryMode = NonNullable<MdnsDiscoveryConfig["mode"]>;
 
 export type TalkProviderConfig = NonNullable<TalkConfigInput["providers"]>[string];
 export type TalkRealtimeConfig = NonNullable<TalkConfigInput["realtime"]>;
+export type TalkSpeechDataPolicy = NonNullable<TalkConfigInput["speechDataPolicy"]>;
 
 export type ResolvedTalkConfig = {
   /** Active Talk TTS provider resolved from the current config payload. */

@@ -67,6 +67,10 @@ import { readTalkRealtimeInitialItems } from "../session-history.js";
 import { restoreTalkSessionTarget } from "../session-start.js";
 import { requirePreparedTalkSessionTarget } from "../session-target.js";
 import {
+  assertTalkConversationSpeechAllowed,
+  captureTalkSpeechDataAuthority,
+} from "../speech-data-policy.js";
+import {
   markTalkVoiceSessionReady,
   prepareTalkVoiceReplacement,
   registerTalkVoiceSession,
@@ -96,6 +100,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
     respond(false, undefined, errorShape(code, message));
   let runAuthority: TalkClientRunAuthority | undefined;
   try {
+    assertTalkConversationSpeechAllowed(context.getRuntimeConfig());
     sessionMutationAuthorization?.assertCurrent();
     if (params.voiceChangeId && params.voiceSessionId) {
       return rejectRequest(
@@ -141,7 +146,10 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
     replacement?.assertCurrent(target);
     const { agentId, sessionKey } = target;
     const assertTargetCurrent = composeSessionSourceAssertion(
-      [sessionMutationAuthorization?.assertCurrent],
+      [
+        sessionMutationAuthorization?.assertCurrent,
+        captureTalkSpeechDataAuthority(runtimeConfig, context.getRuntimeConfig),
+      ],
       (assertSources) => {
         assertSources();
         replacement?.assertCurrent(target);

@@ -313,6 +313,12 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.remote.sshHostKeyPolicy":
     'macOS SSH host-key verification policy. "strict" requires an already trusted host key; "openssh" explicitly delegates to effective OpenSSH configuration.',
   "talk.provider": 'Active Talk provider id (for example "acme-speech").',
+  "talk.speechDataPolicy":
+    "Opt-in policy for the Talk dictation data path. Leave unset to preserve existing provider behavior. This does not restrict unrelated Gateway traffic.",
+  "talk.speechDataPolicy.mode":
+    'Speech destination category: "device-local" remains unavailable until capture-device inference is verified; "trusted-endpoint" allows only the explicit supported endpoint; "external" keeps configured external routes. Unsupported strict routes fail unavailable.',
+  "talk.speechDataPolicy.endpoint":
+    "Approved OpenAI-compatible transcription base URL, required only for trusted-endpoint mode. The initial transport supports IP literals, HTTP on loopback or HTTPS, without authentication, query parameters, or fragments. Approval does not establish that a remote server performs local inference.",
   "talk.providers":
     "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
   "talk.providers.*": "Provider-owned Talk config fields for the matching provider id.",

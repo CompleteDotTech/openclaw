@@ -21,7 +21,11 @@ import {
   resolveSupportedVoiceModelRefs,
   type VoiceModelProvider,
 } from "../../tts/voice-models.js";
-import { resolveTalkFileTranscriptionConfig } from "./file-transcription.js";
+import {
+  resolveRestrictedTalkFileTranscriptionConfig,
+  resolveTalkFileTranscriptionConfig,
+} from "./file-transcription.js";
+import { isTalkSpeechDataRestricted, resolveTalkSpeechDataPlan } from "./speech-data-policy.js";
 
 export async function resolveTalkRealtimeProviderInstructions(params: {
   config: OpenClawConfig;
@@ -190,8 +194,33 @@ export async function buildTalkTranscriptionConfig(
   requestedModel?: string,
   agentId?: string,
   fileTranscription?: ReturnType<typeof resolveTalkFileTranscriptionConfig>,
+  assertCurrent: () => void = () => {},
 ) {
   const streamingConfig = getVoiceCallStreamingConfig(config);
+  if (isTalkSpeechDataRestricted(config)) {
+    const plan = resolveTalkSpeechDataPlan(config, {
+      streamingSelected: Boolean(
+        streamingConfig.provider ||
+        Object.keys(streamingConfig.providers ?? {}).length ||
+        config.agents?.defaults?.voiceModel,
+      ),
+      requestedProvider,
+      requestedModel,
+    });
+    const file = await resolveRestrictedTalkFileTranscriptionConfig(
+      config,
+      agentId,
+      plan,
+      assertCurrent,
+    );
+    return {
+      provider: file.provider,
+      providers: {},
+      model: file.speechData?.readiness.model,
+      file,
+      source: "media-understanding" as const,
+    };
+  }
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
   const providerConfigs = streamingConfig.providers ?? {};
   const configuredProviderIds = [provider, ...Object.keys(providerConfigs)];
