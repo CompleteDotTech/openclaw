@@ -258,15 +258,12 @@ export class ComposerDictationOwner extends EventTarget {
           void this.stop({ commit: false });
         }
       });
-      const sessionKey = options.prepareSession ? await options.prepareSession() : options.sessionKey;
+      const sessionKey = options.prepareSession
+        ? await options.prepareSession()
+        : options.sessionKey;
       const { ComposerDictationSession, ComposerDictationCommits, describeDictationStartError } =
         await import("./composer-dictation-session.ts");
-      if (
-        this.capture !== capture ||
-        this.disposed ||
-        !this.connecting ||
-        !this.canStart()
-      ) {
+      if (this.capture !== capture || this.disposed || !this.connecting || !this.canStart()) {
         return;
       }
       describeStartError = describeDictationStartError;
