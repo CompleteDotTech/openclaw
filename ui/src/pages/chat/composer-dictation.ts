@@ -3,6 +3,7 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
+import { VoiceRouteSession } from "../../lib/voice-route.ts";
 import type {
   ComposerDictationCommits,
   ComposerDictationSession,
@@ -10,10 +11,7 @@ import type {
 } from "./composer-dictation-session.ts";
 import type { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
-const HOLD_ARM_DELAY_MS = 150,
-  HOLD_PROGRESS_MS = 350;
-
-type DictationPhase = "idle" | "pressing" | "holding" | "connecting" | "recording" | "stopping";
+type DictationPhase = "idle" | "starting" | "connecting" | "recording" | "stopping";
 
 type ComposerDictationFailure = {
   kind: "interrupted" | "start" | "busy";
@@ -23,35 +21,35 @@ type ComposerDictationFailure = {
 type ComposerDictationOwnerOptions = {
   client: GatewayBrowserClient | null;
   sessionKey?: string;
+  sessionId?: string;
   prepareSession?: () => Promise<string | undefined>;
   draftKey?: string;
   connected: boolean;
+  presented?: boolean;
   enabled: boolean;
   dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
+  readDraftRevision?: () => number | string;
   onCommit: (text: string, late?: true, preservePreview?: true) => void;
   onError: (message: string, failure: ComposerDictationFailure) => void;
-  onTap?: () => void;
   onDictationUnavailable?: () => void;
 };
 
-// Gesture and session admission must remain synchronous across pointer and media callbacks.
+type DictationCapture = {
+  route: VoiceRouteSession;
+  options: ComposerDictationOwnerOptions;
+  session?: ComposerDictationSession;
+};
+
+// Session admission must remain synchronous across user and media callbacks.
 export class ComposerDictationOwner extends EventTarget {
   private readonly playback = new GatewaySpeechPlayback();
   private phase: DictationPhase = "idle";
-  private pointerId: number | null = null;
-  private pointerTarget: HTMLElement | null = null;
-  private pointerBounds: DOMRect | null = null;
-  private pointerListeners: AbortController | null = null;
-  private suppressionListeners: AbortController | null = null;
   private cancellationListeners: AbortController | null = null;
-  private holdTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private captureStart: object | undefined;
-  private session: ComposerDictationSession | null = null;
-  private suppressedPointerId: number | null = null;
-  private suppressClickTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private capture: DictationCapture | undefined;
   // Created with the lazy capture module, before the first transcript exists.
   private commits: ComposerDictationCommits | undefined;
+  private continuationGeneration = 0;
   private disposed = false;
 
   constructor(private options: ComposerDictationOwnerOptions) {
@@ -68,10 +66,6 @@ export class ComposerDictationOwner extends EventTarget {
 
   get connecting(): boolean {
     return this.phase === "connecting";
-  }
-
-  get arming(): boolean {
-    return this.phase === "holding";
   }
 
   get finalizing(): boolean {
@@ -95,37 +89,62 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   get inputLevel(): RealtimeTalkLevelSignal | undefined {
-    return this.session?.inputLevel;
+    return this.capture?.session?.inputLevel;
   }
 
   get transcript(): string {
-    return this.session?.transcriptSnapshot() ?? "";
+    return this.capture?.session?.transcriptSnapshot() ?? "";
   }
 
   // Returns the stop promise so the confirming control can remain tied to the
   // session that actually inserted text into the draft.
-  finishActive(): Promise<boolean> {
-    return this.stop({ commit: true });
+  finishActive(options: { forSend?: true } = {}): Promise<boolean> {
+    if (!options.forSend) {
+      return this.stop({ commit: true });
+    }
+    const capture = this.capture;
+    const readRevision = capture?.options.readDraftRevision;
+    const revision = readRevision?.();
+    const continuationGeneration = this.continuationGeneration;
+    return this.stop({
+      commit: true,
+      canContinue: () => readRevision !== undefined && readRevision() === revision,
+    }).then(
+      (committed) =>
+        committed &&
+        capture !== undefined &&
+        continuationGeneration === this.continuationGeneration &&
+        this.sameScope(capture.options) &&
+        this.options.presented !== false &&
+        this.options.enabled,
+    );
   }
 
   startDirect(): boolean {
-    if (this.phase !== "idle" || !this.canHold()) {
+    if (this.phase !== "idle" || !this.canStart()) {
       return false;
     }
-    // Surfaces without Talk do not need the hold discriminator. Enter the same
-    // session start path directly so capture, errors, partials and finalization stay canonical.
-    this.setPhase("holding");
-    void this.start();
+    const capture: DictationCapture = {
+      route: new VoiceRouteSession({
+        route: "dictation",
+        destination: { kind: "draft", key: this.options.draftKey ?? this.options.sessionKey },
+        owner: this,
+      }),
+      options: { ...this.options },
+    };
+    this.continuationGeneration += 1;
+    this.capture = capture;
+    this.setPhase("starting");
+    void this.start(capture);
     return true;
   }
 
   update(options: ComposerDictationOwnerOptions): void {
-    if (
-      this.options.client !== options.client ||
-      this.options.sessionKey !== options.sessionKey ||
-      this.options.draftKey !== options.draftKey
-    ) {
+    if (!this.sameScope(options)) {
       this.cancel();
+    }
+    if (this.options.presented !== false && options.presented === false) {
+      this.continuationGeneration += 1;
     }
     this.options = options;
     if (!options.connected) {
@@ -134,12 +153,15 @@ export class ComposerDictationOwner extends EventTarget {
     if (this.phase === "stopping") {
       return;
     }
-    if (this.phase !== "idle" && !this.canHold()) {
-      const keepFinal = this.active && !options.connected;
-      const preservesText = keepFinal ? (this.session?.markGatewayDisconnected() ?? false) : false;
+    if (this.phase !== "idle" && !this.canStart()) {
+      const keepFinal = this.active && (!options.connected || options.presented === false);
+      const preservesText =
+        keepFinal && !options.connected
+          ? (this.capture?.session?.markGatewayDisconnected() ?? false)
+          : false;
       void this.stop({ commit: keepFinal });
       // Empty drains report through the session; retained text still needs this notice.
-      if (keepFinal && preservesText) {
+      if (keepFinal && preservesText && !options.connected) {
         options.onError(t("chat.composer.dictationDisconnected"), {
           kind: "interrupted",
           preservesText,
@@ -148,63 +170,8 @@ export class ComposerDictationOwner extends EventTarget {
     }
   }
 
-  handlePointerDown(event: PointerEvent): boolean {
-    if (event.button !== 0 || this.phase !== "idle" || !this.canHold()) {
-      return false;
-    }
-    event.preventDefault();
-    this.pointerId = event.pointerId;
-    this.pointerTarget = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-    this.pointerBounds = this.pointerTarget?.getBoundingClientRect() ?? null;
-    this.pointerTarget?.setPointerCapture?.(event.pointerId);
-    this.pointerListeners = new AbortController();
-    const pointerOptions = { signal: this.pointerListeners.signal };
-    if (this.pointerTarget) {
-      listen(
-        this.pointerTarget,
-        "lostpointercapture",
-        this.handleDocumentPointerCancel,
-        pointerOptions,
-      );
-    }
-    this.suppressedPointerId = event.pointerId;
-    this.setPhase("pressing");
-    // A normal click gets a quiet grace period. Only a sustained press enters
-    // the visible 350ms ring, so the hold affordance cannot steal tap-to-talk.
-    this.holdTimer = globalThis.setTimeout(() => {
-      if (this.phase !== "pressing") {
-        return;
-      }
-      this.setPhase("holding");
-      this.holdTimer = globalThis.setTimeout(() => void this.start(), HOLD_PROGRESS_MS);
-    }, HOLD_ARM_DELAY_MS);
-    listen(document, "pointermove", this.handleDocumentPointerMove, pointerOptions);
-    listen(document, "pointerup", this.handleDocumentPointerUp, pointerOptions);
-    listen(document, "pointercancel", this.handleDocumentPointerCancel, pointerOptions);
-    this.suppressionListeners?.abort();
-    this.suppressionListeners = new AbortController();
-    const suppressionOptions = { signal: this.suppressionListeners.signal };
-    listen(document, "pointerup", this.handleSuppressedPointerRelease, suppressionOptions);
-    listen(document, "pointercancel", this.handleSuppressedPointerRelease, suppressionOptions);
-    return true;
-  }
-
-  handleClick(event: MouseEvent): void {
-    if (this.suppressedPointerId !== null) {
-      this.clearClickSuppression();
-    } else if (this.active) {
-      void this.finishActive();
-    } else if (this.phase === "idle") {
-      this.options.onTap?.();
-      return;
-    }
-    event.preventDefault();
-  }
-
-  handleContextMenu(event: MouseEvent): void {
-    if (this.phase !== "idle") {
-      event.preventDefault();
-    }
+  setPresented(presented: boolean): void {
+    this.update({ ...this.options, presented });
   }
 
   dispose(): void {
@@ -213,7 +180,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   cancel(): void {
-    this.clearClickSuppression();
+    this.continuationGeneration += 1;
     this.playback.stop();
     if (this.commits?.size) {
       this.commits.retire();
@@ -221,50 +188,6 @@ export class ComposerDictationOwner extends EventTarget {
     }
     void this.stop({ commit: false });
   }
-
-  private readonly handleDocumentPointerMove = (event: PointerEvent): void => {
-    if (event.pointerId !== this.pointerId || !this.pointerBounds) {
-      return;
-    }
-    const rect = this.pointerBounds;
-    const outside =
-      event.clientX < rect.left ||
-      event.clientX > rect.right ||
-      event.clientY < rect.top ||
-      event.clientY > rect.bottom;
-    if (outside) {
-      void this.stop({ commit: false });
-    }
-  };
-
-  private readonly handleDocumentPointerUp = (event: PointerEvent): void => {
-    if (event.pointerId !== this.pointerId) {
-      return;
-    }
-    if (this.phase === "pressing" || this.phase === "holding") {
-      const cleanTap = this.phase === "pressing";
-      this.clearPointerGesture();
-      this.setPhase("idle");
-      if (cleanTap) {
-        this.options.onTap?.();
-      }
-      this.expireClickSuppression();
-      return;
-    }
-    void this.stop({ commit: true });
-  };
-
-  private readonly handleDocumentPointerCancel = (event: PointerEvent): void => {
-    if (event.pointerId === this.pointerId) {
-      void this.stop({ commit: false });
-    }
-  };
-
-  private readonly handleSuppressedPointerRelease = (event: PointerEvent): void => {
-    if (event.pointerId === this.suppressedPointerId) {
-      this.expireClickSuppression();
-    }
-  };
 
   private readonly handleDocumentKeyDown = (event: KeyboardEvent): void => {
     if (event.key !== "Escape" || (this.phase === "idle" && !this.transcribing)) {
@@ -286,40 +209,50 @@ export class ComposerDictationOwner extends EventTarget {
     ) {
       return;
     }
-    this.clearClickSuppression();
+    this.continuationGeneration += 1;
     void this.finishActive();
   };
 
-  private canHold(): boolean {
+  private sameScope(options: ComposerDictationOwnerOptions): boolean {
     return (
+      this.options.client === options.client &&
+      this.options.sessionKey === options.sessionKey &&
+      this.options.sessionId === options.sessionId &&
+      this.options.draftKey === options.draftKey
+    );
+  }
+
+  private canStart(): boolean {
+    return (
+      !this.disposed &&
       this.options.enabled &&
       this.options.connected &&
+      this.options.presented !== false &&
       !this.options.realtimeTalkActive &&
       this.options.client !== null
     );
   }
 
-  private async start(): Promise<void> {
-    const client = this.options.client;
-    if (this.phase !== "holding" || !client || !this.canHold()) {
+  private async start(capture: DictationCapture): Promise<void> {
+    if (this.capture !== capture) {
+      return;
+    }
+    const client = capture.options.client;
+    if (this.phase !== "starting" || !client || !this.canStart()) {
       await this.stop({ commit: false });
       return;
     }
-    if (this.options.dictationAvailable === false && !this.options.prepareSession) {
-      this.clearPointerGesture();
+    const { route, options } = capture;
+    if (options.dictationAvailable === false && !options.prepareSession) {
+      route.cancel();
+      this.capture = undefined;
       this.setPhase("idle");
-      this.options.onDictationUnavailable?.();
-      // The held pointer still owns a synthetic click. Its release expires this
-      // suppression only after handleClick has had a chance to consume the tail.
+      options.onDictationUnavailable?.();
       return;
     }
-    // Crossing the threshold latches dictation. Pointer ownership ends here,
-    // while Escape/visibility/blur keep guarding the live capture lifecycle.
-    this.clearPointerGesture();
-    const captureStart = {};
-    this.captureStart = captureStart;
+    // Escape/visibility/blur guard the live capture lifecycle.
     this.setPhase("connecting");
-    if (this.captureStart !== captureStart) {
+    if (this.capture !== capture) {
       return;
     }
     let describeStartError = (error: unknown): [string, ComposerDictationFailure["kind"]] => [
@@ -327,18 +260,28 @@ export class ComposerDictationOwner extends EventTarget {
       "start",
     ];
     try {
-      // Preserve Safari playback activation before the lazy capture module loads.
-      this.playback.prepare(client, () => this.cancel());
-      const sessionKey = this.options.prepareSession
-        ? await this.options.prepareSession()
-        : this.options.sessionKey;
+      // Preserve gesture activation without taking another route's playback before admission.
+      this.playback.prepare();
+      await route.acquireCapture();
+      if (this.capture !== capture || !route.acceptsResults) {
+        return;
+      }
+      this.playback.prepare(client, () => {
+        if (this.capture === capture) {
+          void this.stop({ commit: false });
+        }
+      });
+      const sessionKey = options.prepareSession
+        ? await options.prepareSession()
+        : options.sessionKey;
       const { ComposerDictationSession, ComposerDictationCommits, describeDictationStartError } =
         await import("./composer-dictation-session.ts");
       if (
-        this.captureStart !== captureStart ||
+        this.capture !== capture ||
+        !route.acceptsResults ||
         this.disposed ||
         !this.connecting ||
-        !this.canHold()
+        !this.canStart()
       ) {
         return;
       }
@@ -348,89 +291,112 @@ export class ComposerDictationOwner extends EventTarget {
         client,
         {
           onError: (message, preservesText) => {
-            if (this.session !== session && !commits.has(session)) {
+            if (!route.acceptsResults || (this.capture !== capture && !commits.has(session))) {
               return;
             }
             try {
-              this.options.onError(message, { kind: "interrupted", preservesText });
+              options.onError(message, { kind: "interrupted", preservesText });
             } finally {
-              if (this.session === session) {
+              if (this.capture === capture) {
                 void this.stop({ commit: true });
               } else if (commits.has(session)) {
                 this.dispatchEvent(new Event("change"));
               }
             }
           },
-          onTranscriptChange: () => this.dispatchEvent(new Event("change")),
+          onTranscriptChange: () => {
+            if (route.acceptsResults && this.capture === capture) {
+              this.dispatchEvent(new Event("change"));
+            }
+          },
           onReady: () => {
-            if (this.session === session && this.phase === "connecting") {
+            if (route.acceptsResults && this.capture === capture && this.phase === "connecting") {
               this.setPhase("recording");
             }
           },
         },
-        { sessionKey },
+        { sessionKey, voiceRoute: route },
       );
-      this.session = session;
+      capture.session = session;
       await session.start();
     } catch (error) {
-      if (this.captureStart !== captureStart || this.disposed || this.finalizing) {
+      if (this.capture !== capture || !route.acceptsResults || this.disposed || this.finalizing) {
         return;
       }
       const [message, kind] = describeStartError(error);
-      this.options.onError(message, { kind, preservesText: false });
-      await this.stop({ commit: false });
+      try {
+        options.onError(message, { kind, preservesText: false });
+      } finally {
+        if (this.capture === capture) {
+          await this.stop({ commit: false });
+        }
+      }
     }
   }
 
-  private stop(options: { commit: boolean }): Promise<boolean> {
-    this.captureStart = undefined;
+  private stop(options: { commit: boolean; canContinue?: () => boolean }): Promise<boolean> {
     if (this.phase === "idle" || this.phase === "stopping") {
       return Promise.resolve(false);
     }
     const wasActive = this.active;
-    this.clearPointerGesture();
-    const session = this.session;
-    if (!session) {
+    const capture = this.capture;
+    this.capture = undefined;
+    if (!capture?.session) {
+      capture?.route.cancel();
       this.setPhase("idle");
       this.releasePlayback();
       return Promise.resolve(false);
     }
-    this.setPhase("stopping");
-    this.session = null;
-    this.setPhase("idle");
+    const session = capture.session;
+    // Publish Stop only after its pending commit is registered, so a change
+    // listener can cancel or replace the draft without missing this recording.
+    this.phase = "stopping";
     if (!options.commit) {
-      this.releasePlayback();
       void session.cancel().catch(() => undefined);
+      capture.route.cancel();
+      this.setPhase("idle");
+      this.releasePlayback();
       return Promise.resolve(false);
     }
     // Capture and typing unlock immediately. Stopped recordings retain ownership
     // and commit in capture order, even when a later provider finishes first.
     const committed = this.commits!.add(session, (lateTranscript) => {
-      this.releasePlayback();
-      this.pendingCommitsChanged();
-      if (
-        !lateTranscript ||
-        !wasActive ||
-        this.disposed ||
-        !this.options.enabled ||
-        this.options.realtimeTalkActive
-      ) {
-        return false;
+      try {
+        if (
+          !lateTranscript ||
+          !wasActive ||
+          !capture.route.acceptsResults ||
+          this.disposed ||
+          !this.options.enabled
+        ) {
+          return false;
+        }
+        capture.route.requireRoute("dictation");
+        // Read before insertion: the transcript itself changes the draft revision.
+        // Later typing is preserved but needs another explicit Send activation.
+        const canContinue = options.canContinue?.() ?? true;
+        if (this.active) {
+          capture.options.onCommit(lateTranscript, true, true);
+        } else {
+          capture.options.onCommit(lateTranscript, true);
+        }
+        return canContinue;
+      } finally {
+        capture.route.complete();
+        this.pendingCommitsChanged();
       }
-      if (this.active) {
-        this.options.onCommit(lateTranscript, true, true);
-      } else {
-        this.options.onCommit(lateTranscript, true);
-      }
-      this.dispatchEvent(new Event("change"));
-      return true;
     });
+    // finish() stops capture synchronously. Its pending result keeps the original
+    // route and draft sink without retaining microphone or playback ownership.
+    capture.route.releaseCapture();
+    this.setPhase("idle");
+    this.releasePlayback();
     this.pendingCommitsChanged();
     return committed;
   }
 
   private releasePlayback(): void {
-    if (this.phase === "idle" && !this.transcribing) {
+    if (this.phase === "idle") {
       this.playback.stop();
     }
   }
@@ -438,38 +404,6 @@ export class ComposerDictationOwner extends EventTarget {
   private pendingCommitsChanged(): void {
     this.syncCancellationListeners();
     this.dispatchEvent(new Event("change"));
-  }
-
-  private clearPointerGesture(): void {
-    globalThis.clearTimeout(this.holdTimer ?? undefined);
-    this.holdTimer = null;
-    this.pointerListeners?.abort();
-    this.pointerListeners = null;
-    if (this.pointerId !== null) {
-      try {
-        this.pointerTarget?.releasePointerCapture?.(this.pointerId);
-      } catch {
-        // A reactive render can replace the button and implicitly release capture first.
-      }
-    }
-    this.pointerId = null;
-    this.pointerTarget = null;
-    this.pointerBounds = null;
-  }
-
-  private expireClickSuppression(): void {
-    if (this.suppressedPointerId === null || this.suppressClickTimer !== null) {
-      return;
-    }
-    this.suppressClickTimer = globalThis.setTimeout(() => this.clearClickSuppression(), 0);
-  }
-
-  private clearClickSuppression(): void {
-    globalThis.clearTimeout(this.suppressClickTimer ?? undefined);
-    this.suppressClickTimer = null;
-    this.suppressionListeners?.abort();
-    this.suppressionListeners = null;
-    this.suppressedPointerId = null;
   }
 
   private setPhase(phase: DictationPhase): void {

@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { loadSettings, patchSettings } from "../../../app/settings.ts";
 import { formatUiError, formatUiExternalText } from "../../../lib/format-error.ts";
 import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
+import type { VoiceRouteSession } from "../../../lib/voice-route.ts";
 import type { ChatRealtimeState, stopChatRealtimeTalk } from "../chat-realtime.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { orderRealtimeTalkConversation, updateRealtimeTalkConversation } from "./conversation.ts";
@@ -134,6 +135,7 @@ export async function switchRealtimeTalkCamera(state: ChatRealtimeState) {
 type RealtimeTalkStart = {
   client: GatewayBrowserClient;
   sessionKey: string;
+  currentSessionId?: string | null;
   voiceController: RealtimeTalkVoiceSelection | null;
   useSystemDefault: boolean;
   voiceChange?: TalkVoiceChangeEvent;
@@ -142,6 +144,7 @@ type RealtimeTalkStart = {
   videoDeviceId?: string;
   split?: SplitTalkOptions;
   playback: GatewaySpeechPlayback;
+  voiceRoute: VoiceRouteSession;
   autoEnableCamera: boolean;
   itemPrefix: string;
   orderOffset: number;
@@ -157,6 +160,7 @@ export async function startChatRealtimeSession(
   {
     client,
     sessionKey,
+    currentSessionId,
     voiceController: initialVoiceController,
     useSystemDefault,
     voiceChange,
@@ -165,6 +169,7 @@ export async function startChatRealtimeSession(
     videoDeviceId,
     split,
     playback,
+    voiceRoute,
     autoEnableCamera,
     itemPrefix,
     orderOffset,
@@ -172,6 +177,12 @@ export async function startChatRealtimeSession(
     stopRealtimeTalk,
   }: RealtimeTalkStart,
 ): Promise<RealtimeTalkSession | undefined> {
+  const conversationScope = state.realtimeTalk.conversationScope;
+  const isConversationCurrent = () =>
+    state.realtimeTalk.conversationScope === conversationScope &&
+    state.client === client &&
+    state.sessionKey === sessionKey &&
+    state.currentSessionId === currentSessionId;
   let voiceController = initialVoiceController;
   if (!voiceChange) {
     const controller: RealtimeTalkVoiceSelection = new RealtimeTalkVoiceSelection({
@@ -179,8 +190,7 @@ export async function startChatRealtimeSession(
       sessionKey,
       isCurrent: () =>
         state.realtimeTalk.snapshot.realtimeTalkVoiceController === controller &&
-        state.client === client &&
-        state.sessionKey === sessionKey &&
+        isConversationCurrent() &&
         state.connected,
       currentCall: () => state.realtimeTalk.snapshot.realtimeTalkSession,
       restart: (request) => startRealtimeTalk(useSystemDefault, request),
@@ -195,11 +205,22 @@ export async function startChatRealtimeSession(
     voiceController = controller;
     state.realtimeTalk.update({ realtimeTalkVoiceController: controller });
   }
+  let inputLevel = 0;
+  let playbackLevel = 0;
   let autoEnableCameraAttempted = false;
   const forCurrentSession =
     <Args extends unknown[]>(callback: (...args: Args) => void) =>
     (...args: Args) => {
-      if (state.realtimeTalk.snapshot.realtimeTalkSession === session) {
+      if (state.realtimeTalk.snapshot.realtimeTalkSession === session && !isConversationCurrent()) {
+        stopRealtimeTalk(state);
+        return;
+      }
+      if (
+        state.realtimeTalk.snapshot.realtimeTalkSession === session &&
+        state.realtimeTalk.snapshot.voiceRoute === voiceRoute &&
+        voiceRoute.acceptsResults &&
+        isConversationCurrent()
+      ) {
         callback(...args);
       }
     };
@@ -248,7 +269,12 @@ export async function startChatRealtimeSession(
         });
       }),
       onInputLevel: forCurrentSession((level) => {
-        state.realtimeTalk.snapshot.realtimeTalkInputLevel.set(level);
+        inputLevel = level;
+        state.realtimeTalk.snapshot.realtimeTalkInputLevel.set(Math.max(inputLevel, playbackLevel));
+      }),
+      onPlaybackLevel: forCurrentSession((level) => {
+        playbackLevel = level;
+        state.realtimeTalk.snapshot.realtimeTalkInputLevel.set(Math.max(inputLevel, playbackLevel));
       }),
       onTranscript: forCurrentSession((entry) => {
         state.realtimeTalk.update({
@@ -318,16 +344,25 @@ export async function startChatRealtimeSession(
           transport: replacementTransport,
         }
       : {},
-    { inputDeviceId, videoDeviceId, split, playback },
+    { inputDeviceId, videoDeviceId, split, playback, voiceRoute, isConversationCurrent },
   );
   state.realtimeTalk.update({
     realtimeTalkSession: session,
   });
   try {
     await session.start();
+    if (!isConversationCurrent()) {
+      if (state.realtimeTalk.snapshot.realtimeTalkSession === session) {
+        stopRealtimeTalk(state);
+      }
+      return undefined;
+    }
     return state.realtimeTalk.snapshot.realtimeTalkSession === session ? session : undefined;
   } catch (error) {
-    if (state.realtimeTalk.snapshot.realtimeTalkSession !== session) {
+    if (state.realtimeTalk.snapshot.realtimeTalkSession !== session || !isConversationCurrent()) {
+      if (state.realtimeTalk.snapshot.realtimeTalkSession === session) {
+        stopRealtimeTalk(state);
+      }
       return undefined;
     }
     if (voiceChange) {
@@ -349,7 +384,12 @@ export async function startChatRealtimeSession(
         state.realtimeTalk.update({
           realtimeTalkUseSystemDefault: null,
         });
-        if (!state.connected || state.client !== client || state.sessionKey !== sessionKey) {
+        if (
+          !state.connected ||
+          state.client !== client ||
+          state.sessionKey !== sessionKey ||
+          state.currentSessionId !== currentSessionId
+        ) {
           return;
         }
         await startRealtimeTalk(true);

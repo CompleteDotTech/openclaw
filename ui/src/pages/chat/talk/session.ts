@@ -11,6 +11,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
+import { VoiceRouteSession } from "../../../lib/voice-route.ts";
 import { RealtimeTalkInputOwner } from "./input.ts";
 import type {
   RealtimeTalkCallbacks,
@@ -39,6 +40,8 @@ type RealtimeTalkLocalOptions = {
   videoDeviceId?: string;
   split?: SplitTalkOptions;
   playback?: GatewaySpeechPlayback;
+  voiceRoute?: VoiceRouteSession;
+  isConversationCurrent?: () => boolean;
 };
 
 const activeRealtimeTalkSessions = new Set<RealtimeTalkSession>();
@@ -77,6 +80,7 @@ export class RealtimeTalkSession {
   private transcriptQueue = VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue();
   private clientVoiceSessionOwner: ClientVoiceSessionOwner | undefined;
   private readonly callbacks: RealtimeTalkCallbacks;
+  private voiceRoute: VoiceRouteSession | undefined;
 
   constructor(
     private readonly client: GatewayBrowserClient,
@@ -100,12 +104,47 @@ export class RealtimeTalkSession {
     const owner = reserveClientVoiceSessionOwner(this.client, this.sessionKey);
     let ownerTransferred = false;
     let input: RealtimeTalkInputOwner | undefined;
+    let voiceRoute: VoiceRouteSession | undefined;
     try {
       // Each start owns a new call. Provider allocation can retire an earlier
       // transport, so a failed start cannot restore that transport locally.
       void this.retireTransport();
       const lifecycleGeneration = this.lifecycleGeneration;
       this.closed = false;
+      this.voiceRoute?.cancel();
+      voiceRoute =
+        this.localOptions.voiceRoute ??
+        new VoiceRouteSession({
+          route: "talk",
+          destination: { kind: "conversation", key: this.sessionKey },
+          owner: this,
+        });
+      this.voiceRoute = voiceRoute;
+      voiceRoute.requireRoute("talk");
+      await voiceRoute.acquireCapture();
+      if (
+        this.closed ||
+        lifecycleGeneration !== this.lifecycleGeneration ||
+        !voiceRoute.acceptsResults
+      ) {
+        voiceRoute.cancel();
+        return;
+      }
+      const route = voiceRoute;
+      const routeCallbacks: RealtimeTalkCallbacks = {
+        ...this.callbacks,
+        onStatus: (status, detail) => {
+          const terminal = status === "idle" || status === "error";
+          if (
+            this.voiceRoute !== route ||
+            !route.acceptsResults ||
+            (!terminal && lifecycleGeneration !== this.lifecycleGeneration)
+          ) {
+            return;
+          }
+          this.callbacks.onStatus?.(status, detail);
+        },
+      };
       this.callbacks.onStatus?.("connecting", t("chat.voice.preparing"));
       if (this.localOptions.split) {
         const { SplitTalkTransport } = await import("./split.ts");
@@ -115,9 +154,10 @@ export class RealtimeTalkSession {
         const transport = new SplitTalkTransport(
           this.client,
           this.sessionKey,
-          this.callbacks,
+          routeCallbacks,
           this.localOptions.split,
           this.localOptions.inputDeviceId,
+          voiceRoute,
         );
         this.pendingStartup = transport;
         try {
@@ -151,6 +191,7 @@ export class RealtimeTalkSession {
       input = new RealtimeTalkInputOwner(
         () => undefined,
         (detail) => this.callbacks.onStatus?.("connecting", detail),
+        () => route.releaseCapture(),
       );
       this.pendingStartup = input;
       try {
@@ -207,8 +248,13 @@ export class RealtimeTalkSession {
       }
       const callbacks =
         transport === "gateway-relay"
-          ? this.callbacks
-          : this.clientOwnedTranscriptCallbacks(voiceSessionId, lifecycleGeneration, owner.signal);
+          ? routeCallbacks
+          : this.clientOwnedTranscriptCallbacks(
+              voiceSessionId,
+              lifecycleGeneration,
+              owner.signal,
+              routeCallbacks,
+            );
       const transcriptQueue = this.transcriptQueue;
       let nextTransport: RealtimeTalkTransport | null = null;
       const retireCandidate = () => {
@@ -234,6 +280,7 @@ export class RealtimeTalkSession {
           client: this.client,
           sessionKey: this.sessionKey,
           voiceSessionId,
+          isConversationCurrent: this.localOptions.isConversationCurrent,
           flushTranscriptWrites: async () => await transcriptQueue.flush(),
           callbacks,
           input,
@@ -282,6 +329,10 @@ export class RealtimeTalkSession {
         }
         throw error;
       }
+    } catch (error) {
+      input?.stop();
+      voiceRoute?.cancel();
+      throw error;
     } finally {
       if (input && this.pendingStartup === input) {
         this.pendingStartup = null;
@@ -318,12 +369,20 @@ export class RealtimeTalkSession {
     }
   }
 
+  private requireCurrentConversation(): void {
+    if (this.localOptions.isConversationCurrent?.() === false) {
+      throw new DOMException("The Talk destination changed.", "AbortError");
+    }
+  }
+
   private async createSession(
     options: RealtimeTalkLaunchOptions & {
       capabilities?: Array<"camera-frame" | "voice-transcript" | "voice-selection">;
     },
     lifecycleGeneration: number,
   ): Promise<RealtimeTalkSessionResult> {
+    this.voiceRoute?.requireRoute("talk");
+    this.requireCurrentConversation();
     if (options.voiceChangeId && options.transport === "gateway-relay") {
       return this.createRelaySession(options);
     }
@@ -373,6 +432,8 @@ export class RealtimeTalkSession {
   }
 
   private createRelaySession(options: RealtimeTalkLaunchOptions) {
+    this.voiceRoute?.requireRoute("talk");
+    this.requireCurrentConversation();
     return this.client.request<RealtimeTalkSessionResult>(
       "talk.session.create",
       {
@@ -391,6 +452,7 @@ export class RealtimeTalkSession {
     try {
       return this.retireTransport(options);
     } finally {
+      this.voiceRoute?.cancel();
       this.callbacks.onStatus?.("idle");
     }
   }
@@ -466,14 +528,16 @@ export class RealtimeTalkSession {
     owningVoiceSessionId: string,
     owningGeneration: number,
     transcriptSignal: AbortSignal,
+    callbacks: RealtimeTalkCallbacks,
   ): RealtimeTalkCallbacks {
     const transcripts = new ClientVoiceTranscriptQueue(
       this.transcriptQueue,
       async (entryId, role, text) => {
         await retryVoiceTranscriptPersistence(
           transcriptSignal,
-          () =>
-            this.client.request(
+          () => {
+            this.requireCurrentConversation();
+            return this.client.request(
               "talk.client.transcript",
               {
                 sessionKey: this.sessionKey,
@@ -487,12 +551,13 @@ export class RealtimeTalkSession {
                 signal: transcriptSignal,
                 timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
               },
-            ),
+            );
+          },
           "voice transcript save failed",
         );
       },
       (error) => {
-        if (transcriptSignal.aborted) {
+        if (transcriptSignal.aborted || this.localOptions.isConversationCurrent?.() === false) {
           return;
         }
         const detail = `Voice transcript could not be saved: ${formatUiError(error)}`;
@@ -504,7 +569,10 @@ export class RealtimeTalkSession {
     );
     this.transcriptItems = transcripts;
     const isCurrent = () =>
-      this.transportGeneration === owningGeneration && this.voiceSessionId === owningVoiceSessionId;
+      this.localOptions.isConversationCurrent?.() !== false &&
+      this.voiceRoute?.acceptsResults === true &&
+      this.transportGeneration === owningGeneration &&
+      this.voiceSessionId === owningVoiceSessionId;
     const applyTranscript = <T>(operation: () => T): T | undefined => {
       if (!isCurrent()) {
         return undefined;
@@ -517,7 +585,7 @@ export class RealtimeTalkSession {
       }
     };
     return {
-      ...this.callbacks,
+      ...callbacks,
       onTalkEvent: (event) => {
         if (!isCurrent()) {
           return;
@@ -529,13 +597,13 @@ export class RealtimeTalkSession {
             void this.retireTransport();
           }
         } finally {
-          this.callbacks.onTalkEvent?.(event);
+          callbacks.onTalkEvent?.(event);
         }
       },
       onTranscriptItem: (item) => {
         const orders = applyTranscript(() => transcripts.observe(item));
         if (orders?.length) {
-          this.callbacks.onTranscriptOrder?.(orders);
+          callbacks.onTranscriptOrder?.(orders);
         }
       },
       onTranscript: (entry) => {
@@ -543,7 +611,7 @@ export class RealtimeTalkSession {
         // not be able to drop an already-finalized utterance from the write tail.
         const published = applyTranscript(() => transcripts.publish(entry));
         if (published) {
-          this.callbacks.onTranscript?.(published);
+          callbacks.onTranscript?.(published);
         }
       },
     };
