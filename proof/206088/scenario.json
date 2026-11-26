@@ -1,48 +1,82 @@
 {
   "leadingSilenceMs": 500,
+  "tts": {
+    "model": "gpt-4o-mini-tts"
+  },
+  "takes": [
+    {
+      "id": "alloy-steady",
+      "voice": "alloy",
+      "instructions": "Read the text verbatim in American English at a steady conversational pace. Say every word clearly, including repeated words. Use punctuation as intonation; do not read quotation marks aloud."
+    },
+    {
+      "id": "nova-deliberate",
+      "voice": "nova",
+      "instructions": "Dictate verbatim in clear American English, slightly slower than conversation. Enunciate end distinctly. Keep the words of the sentence connected without inserting extra pauses. Do not read quotation marks aloud."
+    },
+    {
+      "id": "sage-connected",
+      "voice": "sage",
+      "instructions": "Read the exact words in natural American English, as one connected sentence. Give every repeated word its own syllables without adding a sentence break. For quoted speech, use a subtle change in intonation, not extra words."
+    }
+  ],
   "cases": [
     {
       "id": "contractions",
       "segments": [
-        { "text": "Let's inspect", "pauseAfterMs": 120 },
-        { "text": "reference file src slash auth dot ts end reference", "pauseAfterMs": 120 },
-        { "text": "because it's failing.", "pauseAfterMs": 1400 }
+        {
+          "text": "Let's inspect reference file src slash auth dot ts end reference because it's failing.",
+          "pauseAfterMs": 1500
+        }
       ],
-      "expectedTranscript": "Let's inspect reference file src slash auth dot ts end reference because it's failing.",
+      "file": "src/auth.ts",
+      "before": "Let's inspect",
+      "after": "because it's failing",
       "expectedComposer": "Let's inspect @src/auth.ts because it's failing.",
-      "commandFile": "src/auth.ts",
-      "chooser": { "opens": true, "select": "src/auth.ts", "exitKey": "Enter" }
+      "chooser": { "opens": true, "exitKey": "Enter" }
     },
     {
       "id": "single-quoted-command",
       "segments": [
-        { "text": "Say, ‘let’s use reference file notes end reference,’ as an example.", "pauseAfterMs": 1400 }
+        {
+          "text": "She said, ‘let’s use reference file notes end reference,’ as an example.",
+          "pauseAfterMs": 1500
+        }
       ],
-      "expectedTranscript": "Say, ‘let’s use reference file notes end reference,’ as an example.",
-      "expectedComposer": "Say, ‘let’s use reference file notes end reference,’ as an example.",
-      "commandFile": "notes",
-      "requiresSingleQuotes": true,
-      "chooser": { "opens": false, "select": null, "exitKey": null }
+      "file": "notes",
+      "before": "She said let's use",
+      "after": "as an example",
+      "singleQuoted": true,
+      "expectedComposer": "She said, ‘let’s use reference file notes end reference,’ as an example.",
+      "chooser": { "opens": false, "exitKey": null }
     },
     {
       "id": "keyboard-confirm",
       "segments": [
-        { "text": "Please inspect reference file notes end reference tomorrow.", "pauseAfterMs": 1400 }
+        {
+          "text": "Please inspect reference file notes end reference tomorrow.",
+          "pauseAfterMs": 1500
+        }
       ],
-      "expectedTranscript": "Please inspect reference file notes end reference tomorrow.",
+      "file": "notes",
+      "before": "Please inspect",
+      "after": "tomorrow",
       "expectedComposer": "Please inspect @notes tomorrow.",
-      "commandFile": "notes",
-      "chooser": { "opens": true, "select": "notes", "exitKey": "Enter" }
+      "chooser": { "opens": true, "exitKey": "Enter" }
     },
     {
       "id": "keyboard-cancel",
       "segments": [
-        { "text": "Please inspect reference file checklist end reference before lunch.", "pauseAfterMs": 1400 }
+        {
+          "text": "Please inspect reference file checklist end reference before lunch.",
+          "pauseAfterMs": 1500
+        }
       ],
-      "expectedTranscript": "Please inspect reference file checklist end reference before lunch.",
+      "file": "checklist",
+      "before": "Please inspect",
+      "after": "before lunch",
       "expectedComposer": "Please inspect reference file checklist end reference before lunch.",
-      "commandFile": "checklist",
-      "chooser": { "opens": true, "select": "checklist", "exitKey": "Escape" }
+      "chooser": { "opens": true, "exitKey": "Escape" }
     }
   ]
 }
