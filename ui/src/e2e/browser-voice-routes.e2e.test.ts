@@ -509,9 +509,9 @@ suite.define(() => {
           )
           .toBe(false);
         expect(await page.getByRole("button", { name: "Stop Talk", exact: true }).count()).toBe(0);
-        expect(await page.getByRole("button", { name: "Cancel dictation", exact: true }).count()).toBe(
-          0,
-        );
+        expect(
+          await page.getByRole("button", { name: "Cancel dictation", exact: true }).count(),
+        ).toBe(0);
         if (route === "Dictation") {
           await emit("Late old speech must stay discarded.", true);
         } else {
@@ -527,7 +527,9 @@ suite.define(() => {
         expect(await gateway.getRequests("talk.session.create")).toHaveLength(
           route === "Dictation" ? 1 : 0,
         );
-        expect(await gateway.getRequests("talk.client.create")).toHaveLength(route === "Talk" ? 1 : 0);
+        expect(await gateway.getRequests("talk.client.create")).toHaveLength(
+          route === "Talk" ? 1 : 0,
+        );
       }),
   );
 
