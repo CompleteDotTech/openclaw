@@ -57,8 +57,9 @@ const ownedInputs = new Set<RealtimeTalkInputOwner>();
 function createMicrophoneInput(
   onEnded: (detail: string) => void = () => undefined,
   onConnecting?: (detail?: string) => void,
+  onStopped?: () => void,
 ) {
-  const input = new RealtimeTalkInputOwner(onEnded, onConnecting);
+  const input = new RealtimeTalkInputOwner(onEnded, onConnecting, onStopped);
   ownedInputs.add(input);
   return input;
 }
@@ -74,6 +75,32 @@ afterEach(() => {
 });
 
 describe("realtime Talk microphone lifetime", () => {
+  it.each(["Stop", "microphone loss"])(
+    "releases the capture reservation after every track stops on %s",
+    async (reason) => {
+      const first = microphoneFixture();
+      const second = microphoneFixture();
+      const stream = { getTracks: () => [first.track, second.track] } as unknown as MediaStream;
+      stubMediaDevices({ getUserMedia: vi.fn(async () => stream) });
+      const onStopped = vi.fn(() => {
+        expect(input.stream).toBeNull();
+        expect(first.track.stop).toHaveBeenCalledOnce();
+        expect(second.track.stop).toHaveBeenCalledOnce();
+      });
+      const input = createMicrophoneInput(undefined, undefined, onStopped);
+      input.stop();
+      await input.open(undefined);
+      expect(onStopped).not.toHaveBeenCalled();
+      if (reason === "microphone loss") {
+        microphoneEndedListener(first.addEventListener)(new Event("ended"));
+      } else {
+        input.stop();
+      }
+      input.stop();
+      expect(onStopped).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(["requesting", "acquired"])(
     "releases ownership if the %s status callback throws",
     async (phase) => {

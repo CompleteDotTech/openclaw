@@ -7,12 +7,17 @@ import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
+import { VoiceRouteSession } from "../../lib/voice-route.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { renderComposerVoiceButtonSolid } from "./components/chat-composer-controls.tsx";
 import { ComposerDictationSession, placeComposerDictation } from "./composer-dictation-session.ts";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
-import { MockDictationAudioContext, type MockAudioProcessor } from "./talk/input.test-support.ts";
+import {
+  MockDictationAudioContext,
+  type MockAudioProcessor,
+  useVoiceCaptureLocksFixture,
+} from "./talk/input.test-support.ts";
 
 type GatewayListener = (event: GatewayEventFrame) => void;
 const listeners = new Set<GatewayListener>();
@@ -209,6 +214,8 @@ function latestAudio() {
   return audio;
 }
 
+useVoiceCaptureLocksFixture();
+
 beforeEach(() => {
   vi.useFakeTimers();
   listeners.clear();
@@ -366,7 +373,13 @@ describe("ComposerDictationOwner", () => {
       const replacementCommit = vi.fn();
       controller.update({ ...options, realtimeTalkActive: true, onCommit: replacementCommit });
       const talkPlayback = new GatewaySpeechPlayback();
+      const talkRoute = new VoiceRouteSession({
+        route: "talk",
+        destination: { kind: "conversation", key: "original" },
+        owner: talkPlayback,
+      });
       try {
+        await talkRoute.acquireCapture();
         talkPlayback.prepare(options.client);
         if (cancel) {
           controller.cancel();
@@ -390,6 +403,7 @@ describe("ComposerDictationOwner", () => {
           brain: "none",
         });
       } finally {
+        talkRoute.cancel();
         talkPlayback.stop();
       }
     },
@@ -1034,7 +1048,7 @@ it.each([false, true])(
     const prepareSession = vi.fn(() => pending.promise);
     const { controller } = createHarness({ prepareSession, dictationAvailable: false });
     expect(controller.startDirect()).toBe(true);
-    expect(prepareSession).toHaveBeenCalledOnce();
+    await waitForFast(() => expect(prepareSession).toHaveBeenCalledOnce());
     expect(request).not.toHaveBeenCalledWith("talk.session.create", expect.anything());
     if (cancel) {
       controller.cancel();

@@ -6,6 +6,7 @@ import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings, saveSettings } from "../../app/settings.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
+import type { VoiceRouteSession } from "../../lib/voice-route.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   attachChatRealtimeActions,
@@ -14,6 +15,7 @@ import {
   stopChatRealtimeTalk,
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
+import { voiceCaptureLocksFixture } from "./talk/input.test-support.ts";
 import { RealtimeTalkSelectedMicrophoneError } from "./talk/input.ts";
 import { RealtimeTalkSession } from "./talk/session.ts";
 import type { RealtimeTalkCallbacks } from "./talk/shared.ts";
@@ -21,7 +23,11 @@ import type { RealtimeTalkCallbacks } from "./talk/shared.ts";
 type InspectableRealtimeTalkSession = {
   callbacks: RealtimeTalkCallbacks;
   options: { provider?: string; transport?: string };
-  localOptions: { inputDeviceId?: string; videoDeviceId?: string };
+  localOptions: {
+    inputDeviceId?: string;
+    videoDeviceId?: string;
+    voiceRoute?: VoiceRouteSession;
+  };
 };
 
 let state: ChatRealtimeState;
@@ -81,14 +87,22 @@ function preview(nextDeviceId: string, label: string) {
 
 let startSpy: MockInstance<RealtimeTalkSession["start"]>;
 let prepareSpy: MockInstance<GatewaySpeechPlayback["prepare"]>;
+let locks: ReturnType<typeof voiceCaptureLocksFixture>;
+const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
 
 beforeEach(() => {
+  locks = voiceCaptureLocksFixture();
+  Object.defineProperty(navigator, "locks", { configurable: true, value: locks });
   vi.stubGlobal("localStorage", createStorageMock());
   prepareSpy = vi
     .spyOn(GatewaySpeechPlayback.prototype, "prepare")
     .mockImplementation(() => document.createElement("audio"));
   startSpy = vi.spyOn(RealtimeTalkSession.prototype, "start").mockResolvedValue(undefined);
-  vi.spyOn(RealtimeTalkSession.prototype, "stop").mockResolvedValue(undefined);
+  vi.spyOn(RealtimeTalkSession.prototype, "stop").mockImplementation(async function (
+    this: RealtimeTalkSession,
+  ) {
+    (this as unknown as InspectableRealtimeTalkSession).localOptions.voiceRoute?.cancel();
+  });
   vi.spyOn(RealtimeTalkSession.prototype, "switchCamera").mockResolvedValue(undefined);
   state = {
     client: {
@@ -104,16 +118,32 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  stopChatRealtimeTalk(state);
   vi.restoreAllMocks();
   saveSettings(loadSettings());
   localStorage.clear();
   vi.unstubAllGlobals();
+  if (originalLocks) {
+    Object.defineProperty(navigator, "locks", originalLocks);
+  } else {
+    Reflect.deleteProperty(navigator, "locks");
+  }
 });
 
 it.each([false, true])(
   "changes only audio while retaining captions and effective microphone (default recovery: %s)",
   async (useSystemDefault) => {
     configure({ realtimeTalkInputDeviceId: "usb-mic" });
+    const nativeRelease = createDeferred<void>();
+    const nativeReleasePending = createDeferred<void>();
+    let delayNativeRelease = false;
+    locks.request.mockImplementation(async (name, _options, callback) => {
+      await callback({ name, mode: "exclusive" });
+      if (delayNativeRelease) {
+        nativeReleasePending.resolve();
+        await nativeRelease.promise;
+      }
+    });
     const listeners = new Set<(event: GatewayEventFrame) => void>();
     const request = vi.fn(async () => ({ ok: true }));
     state.client = {
@@ -143,6 +173,8 @@ it.each([false, true])(
     if (useSystemDefault) {
       await read().realtimeTalkUseSystemDefault!();
     }
+    delayNativeRelease = true;
+    const captureRequests = locks.request.mock.calls.length;
     const oldSession = read().realtimeTalkSession!;
     const old = inspectSession();
     transcript(old.callbacks, "Old speech");
@@ -164,7 +196,15 @@ it.each([false, true])(
         },
       });
     }
+    try {
+      await nativeReleasePending.promise;
+      expect(old.localOptions.voiceRoute?.acceptsResults).toBe(false);
+      expect(locks.request).toHaveBeenCalledTimes(captureRequests);
+    } finally {
+      nativeRelease.resolve();
+    }
     await vi.waitFor(() => expect(creates).toBe(2));
+    expect(locks.request).toHaveBeenCalledTimes(captureRequests + 1);
     expect(state.sessionKey).toBe("main");
     expect(read().realtimeTalkSession).not.toBe(oldSession);
     expect(read()).toMatchObject({
@@ -673,6 +713,27 @@ it("retires callback ownership before stopping a session", async () => {
   });
 });
 
+it("does not dispatch a stopped Talk activation when browser capture admission arrives late", async () => {
+  const admission = createDeferred<LockGrantedCallback<unknown>>();
+  const complete = createDeferred();
+  locks.request.mockImplementation(async (_name, _options, callback) => {
+    admission.resolve(callback);
+    await complete.promise;
+  });
+  const starting = state.toggleRealtimeTalk();
+  try {
+    const callback = await admission.promise;
+    stopChatRealtimeTalk(state);
+    await starting;
+    await callback({ name: "openclaw-voice-capture", mode: "exclusive" });
+    expect(state.client?.request).not.toHaveBeenCalled();
+    expect(startSpy).not.toHaveBeenCalled();
+    expect(read()).toMatchObject({ realtimeTalkActive: false, realtimeTalkStatus: "idle" });
+  } finally {
+    complete.resolve();
+  }
+});
+
 it.each(["stop", "route", "disconnect", "superseded", "replacement"] as const)(
   "prepares gesture audio synchronously and admits only the current startup after %s",
   async (change) => {
@@ -701,7 +762,7 @@ it.each(["stop", "route", "disconnect", "superseded", "replacement"] as const)(
       } else if (change === "disconnect") {
         state.connected = false;
       } else {
-        const superseded = prepareSpy.mock.calls[0]?.[1];
+        const superseded = prepareSpy.mock.calls.find(([, callback]) => callback)?.[1];
         expect(superseded).toBeTypeOf("function");
         superseded?.();
       }

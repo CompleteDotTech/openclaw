@@ -273,6 +273,7 @@ export class RealtimeTalkInputOwner {
   constructor(
     private onEnded: (detail: string) => void,
     private readonly onConnecting?: (detail?: string) => void,
+    private readonly onStopped?: () => void,
   ) {}
 
   get stream(): MediaStream | null {
@@ -330,6 +331,7 @@ export class RealtimeTalkInputOwner {
   }
 
   stop(): void {
+    const hadCapture = this.controller !== null || this.media !== null;
     const controller = this.controller;
     const media = this.media;
     this.controller = null;
@@ -338,6 +340,9 @@ export class RealtimeTalkInputOwner {
     // keeping normal stop quiet without disturbing other consumers' listeners.
     controller?.abort();
     media?.getTracks().forEach((track) => track.stop());
+    if (hadCapture) {
+      this.onStopped?.();
+    }
   }
 }
 

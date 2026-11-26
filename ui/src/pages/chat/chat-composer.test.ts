@@ -14,7 +14,10 @@ import {
 } from "./chat-composer.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatQuestionCard } from "./components/chat-question-card.ts";
-import { MockDictationAudioContext } from "./talk/input.test-support.ts";
+import {
+  MockDictationAudioContext,
+  useVoiceCaptureLocksFixture,
+} from "./talk/input.test-support.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
 
 const discoverRealtimeTalkInputsMock = vi.fn();
@@ -166,6 +169,8 @@ it("labels the send action as Suggest and emits ephemeral typing state", () => {
   expect(onTypingChange).toHaveBeenNthCalledWith(1, true, "hello", 5);
   expect(onTypingChange).toHaveBeenLastCalledWith(false);
 });
+
+useVoiceCaptureLocksFixture();
 
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
