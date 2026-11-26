@@ -1136,11 +1136,7 @@ describe("chat voice controls", () => {
       onToggleRealtimeTalk,
     });
 
-    const stop = requireElement(
-      container,
-      '[aria-label="Stop voice input"]',
-      "stop voice input button",
-    );
+    const stop = requireElement(container, '[aria-label="Stop Talk"]', "stop voice input button");
     stop.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onToggleRealtimeTalk).toHaveBeenCalledTimes(1);
@@ -1148,8 +1144,8 @@ describe("chat voice controls", () => {
   });
 
   it.each([
-    ["connecting", "Connecting voice input…"],
-    ["thinking", "Asking the agent…"],
+    ["connecting", "Talk: Connecting voice input…"],
+    ["thinking", "Talk: Asking the agent…"],
   ] as const)("renders %s voice activity with the appropriate status region", (status, label) => {
     const inputLevel = new RealtimeTalkLevelSignal();
     inputLevel.set(0.64);
@@ -1159,7 +1155,7 @@ describe("chat voice controls", () => {
       realtimeTalkInputLevel: inputLevel,
     });
 
-    const stopVoiceButton = container.querySelector('button[aria-label="Stop voice input"]');
+    const stopVoiceButton = container.querySelector('button[aria-label="Stop Talk"]');
     const visualizer = stopVoiceButton?.querySelector<HTMLElement>(
       `.agent-chat__voice-activity[data-status="${status}"]`,
     );
@@ -1193,11 +1189,7 @@ describe("chat voice controls", () => {
         .querySelector('[role="alert"].agent-chat__composer-alert .callout__content')
         ?.textContent?.trim(),
     ).toBe(detail);
-    const stop = requireElement(
-      container,
-      '[aria-label="Stop voice input"]',
-      "stop voice input button",
-    );
+    const stop = requireElement(container, '[aria-label="Stop Talk"]', "stop voice input button");
     expect(stop.classList.contains("chat-send-btn--voice-error")).toBe(true);
     expect(stop.querySelector(".agent-chat__voice-activity")).toBeNull();
     expect(container.querySelector(".agent-chat__voice-status")).toBeNull();
@@ -1225,8 +1217,8 @@ describe("chat voice controls", () => {
       expect(host.getAttribute("data-level")).toBe("0.8");
       expect(canvas.hasAttribute("data-ready")).toBe(false);
       expectDefined(
-        container.querySelector<HTMLButtonElement>('[aria-label="Stop voice input"]'),
-        "Stop voice input",
+        container.querySelector<HTMLButtonElement>('[aria-label="Stop Talk"]'),
+        "Stop Talk",
       ).click();
       expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
     } finally {
