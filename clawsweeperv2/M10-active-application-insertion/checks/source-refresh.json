@@ -1,0 +1,312 @@
+{
+  "schema_version": 1,
+  "purpose": "Source and review observations for the M10 native-control decision proposal; not implementation acceptance or runtime proof.",
+  "repository": "openclaw/openclaw",
+  "refresh_window_utc": {
+    "started_at": "2026-11-26T16:12:36Z",
+    "completed_at": "2026-11-26T16:14:02Z",
+    "atomic_snapshot": false
+  },
+  "local_source": {
+    "base_commit": "30daf88b038a5b5ca4eec818fff38bab1543b393",
+    "base_tree": "abf90a2fa5d7d0cf8303cfbf5aefdabc76317ce3",
+    "branch": "docs/m10-native-control-decision-20261126",
+    "document_root": "clawsweeperv2/M10-active-application-insertion",
+    "initial_remote_main_observation": "cab8e5aca1c26f0a7b2fec0270ae5aa4153d48a2",
+    "note": "Main advanced between initial remote lookup and the fresh clone. All current source claims are pinned to base_commit, not to an assumed moving main.",
+    "preparation": "Fresh shallow filtered no-checkout clone with explicit sparse materialization, then a new local documentation branch. No dependencies installed and no repository runtime code executed.",
+    "root_agents_blob": "fc573037b020b05ae1ea5fc97755a0067cf52f86"
+  },
+  "issues": [
+    {
+      "number": 205846,
+      "url": "https://github.com/openclaw/openclaw/issues/205846",
+      "state": "open",
+      "updated_at": "2026-11-26T08:34:07Z",
+      "returned_comment_count": 1,
+      "human_acceptance_observed": false,
+      "review": {
+        "url": "https://github.com/openclaw/openclaw/issues/205846#issuecomment-7186467107",
+        "reviewed_at": "2026-11-26T08:33:33.349Z",
+        "implementation_sha": null,
+        "implementation_sha_marker": "na",
+        "reviewed_source_commit": "fa9fa2c5436150645fbfbb887e0722b71db0cbec",
+        "digest": "f652baf716247264397875828745ad330da3255b26f893bfd6ac5f102c91a294",
+        "interpretation": "Native owner with P01 must decide the first control, route and commit outcome before implementation. Preserve preview/copy, scope one route, avoid speculative persistence/generations/repeated feature authorization and plan actual native qualification."
+      },
+      "capability": "M10",
+      "relevant_labels": [
+        "P3",
+        "clawsweeper:needs-product-decision",
+        "clawsweeper:no-new-fix-pr"
+      ],
+      "labels_are_complete_inventory": false,
+      "mapped_implementation_pr": null,
+      "new_source_defect_or_implementation_head_observed": false
+    },
+    {
+      "number": 205853,
+      "url": "https://github.com/openclaw/openclaw/issues/205853",
+      "state": "open",
+      "updated_at": "2026-11-26T08:32:45Z",
+      "returned_comment_count": 1,
+      "human_acceptance_observed": false,
+      "review": {
+        "url": "https://github.com/openclaw/openclaw/issues/205853#issuecomment-7186720252",
+        "reviewed_at": "2026-11-26T08:32:05.475Z",
+        "implementation_sha": null,
+        "implementation_sha_marker": "na",
+        "reviewed_source_commit": "fa9fa2c5436150645fbfbb887e0722b71db0cbec",
+        "digest": "0e7cf4977e97803884592287af6112a1db79a14493e871d25a826a8bc7ef966b",
+        "interpretation": "Native workflow/control and shared M10 decision remain open."
+      },
+      "capability": "P01"
+    },
+    {
+      "number": 205845,
+      "url": "https://github.com/openclaw/openclaw/issues/205845",
+      "state": "open",
+      "updated_at": "2026-11-26T08:34:40Z",
+      "returned_comment_count": 1,
+      "human_acceptance_observed": false,
+      "review": {
+        "url": "https://github.com/openclaw/openclaw/issues/205845#issuecomment-7186462779",
+        "reviewed_at": "2026-11-26T08:33:56.210Z",
+        "implementation_sha": null,
+        "implementation_sha_marker": "na",
+        "reviewed_source_commit": "fa9fa2c5436150645fbfbb887e0722b71db0cbec",
+        "digest": "2f615d98b89d2b311a814061f30c8a64a95eee72e7a0a1140d3eef766f98cb08",
+        "interpretation": "Bounded private/shared refinement owner and admission/cancellation contract, including coordination with #205788, remain unaccepted."
+      },
+      "capability": "M11"
+    }
+  ],
+  "related_pull_requests": [
+    {
+      "number": 204107,
+      "url": "https://github.com/openclaw/openclaw/pull/204107",
+      "role": "Browser dictation lifecycle; coordination only, not native insertion proof.",
+      "state": "closed",
+      "merged": true,
+      "merged_at": "2026-11-26T12:52:40Z",
+      "updated_at": "2026-11-26T13:51:30Z",
+      "merge_commit": "762aa006f9482f44d7975efe9cef2679d498c885",
+      "head_commit": "a6f9b7b22af974e2dca86e04b0e9b722c628b727",
+      "reported_base_commit": "6837fd38ed42875cdaadcefb65ed402c2b55d488",
+      "review": {
+        "url": "https://github.com/openclaw/openclaw/pull/204107#issuecomment-7105978491",
+        "reviewed_at": "2026-11-26T09:52:37.824Z",
+        "reviewed_head": "a6f9b7b22af974e2dca86e04b0e9b722c628b727",
+        "reviewed_source_commit": "ef7867a9a7c8ae0c5d3b68547eda4672773563a7",
+        "digest": "30538697f7e27866b4a512ba9f937db421fd0faafede7d8409fe8f8d63dbda95",
+        "actionable_findings": 0,
+        "historical_limit": "The review predates merge. Its incomplete-CI/absent-from-main language does not describe the later current merged state. Landing check runs were not independently inventoried."
+      },
+      "formal_reviews_returned": [
+        {
+          "state": "COMMENTED",
+          "substantive_acceptance": false
+        }
+      ],
+      "review_threads_returned": 0,
+      "implies_m10_or_p01_native_acceptance": false
+    },
+    {
+      "number": 205973,
+      "url": "https://github.com/openclaw/openclaw/pull/205973",
+      "title": "feat: review finalized dictation before inserting it",
+      "role": "Separate M11 draft; record coordination, do not repair its source in the M10 branch.",
+      "state": "open",
+      "draft": true,
+      "merged": false,
+      "created_at": "2026-11-26T13:31:24Z",
+      "updated_at": "2026-11-26T13:51:27Z",
+      "head_ref": "CompleteDotTech/openclaw:feat/dictation-refinement-coordinator",
+      "head_commit": "7dab77ee268617d70ab5f035bb7864cc278aa327",
+      "reported_base_commit": "84d4c6f71ff5d9c887ba2fb29029adaa8e6d2ff2",
+      "review": {
+        "url": "https://github.com/openclaw/openclaw/pull/205973#issuecomment-7193928672",
+        "reviewed_at": "2026-11-26T13:50:02.862Z",
+        "reviewed_head": "7dab77ee268617d70ab5f035bb7864cc278aa327",
+        "reviewed_source_commit": "12eb8c01fe4044a995e37d578e9454fbdc9b8c0b",
+        "digest": "a813bb1633c94892685982e6dd8537f50ddfeb7a6a538d2bf7c63c7d4ced54e6",
+        "actionable_findings": [
+          {
+            "priority": "P2",
+            "path": "ui/src/pages/chat/composer-dictation-refinement.ts",
+            "lines": [
+              106,
+              109
+            ],
+            "summary": "Review timeout is 2500 ms while production relay drain is 5000 ms and finishSnapshot becomes complete after close. Normal Stop may time out as incomplete; immediate-close fixtures miss the boundary.",
+            "requested_response": "Align with the existing relay completion contract and cover the real drain boundary in the owning M11 change."
+          }
+        ],
+        "remaining_gates": [
+          "Native/browser refinement owner decision and minimal scope.",
+          "Real Gateway/browser/microphone Stop-to-review-to-unsent-insertion proof.",
+          "Cancellation and realtime/file route proof."
+        ]
+      },
+      "formal_reviews_returned": [],
+      "review_threads_returned": 0,
+      "accepted_m10_parent": false
+    },
+    {
+      "number": 205876,
+      "url": "https://github.com/openclaw/openclaw/pull/205876",
+      "role": "P02 existing transport-authority repair; not a native outcome owner or full P02 acceptance.",
+      "state": "open",
+      "draft": true,
+      "merged": false,
+      "updated_at": "2026-11-26T09:28:06Z",
+      "head_commit": "854d3a5a74e31eaa8e13346ed29b3f9ddbd9ca16",
+      "reported_base_commit": "24e17e75e2d9e958bb79858cd96c4d1425e45eb0",
+      "review": {
+        "url": "https://github.com/openclaw/openclaw/pull/205876#issuecomment-7187811502",
+        "reviewed_at": "2026-11-26T09:19:05.721Z",
+        "reviewed_head": "854d3a5a74e31eaa8e13346ed29b3f9ddbd9ca16",
+        "reviewed_source_commit": "b6a0808d1235b5eb340ac47841f2e5af2e8b1e17",
+        "digest": "7dda36c2b8f4c81e2787075dfe0aab8baac5b2313a92bf0eca430a2dc35cbedf",
+        "actionable_findings": 0,
+        "remaining_gates": [
+          "Real transport proof around credential/DNS awaits, revocation and dispatch, authorized startup/Stop/final transcript behavior."
+        ]
+      },
+      "formal_reviews_returned": [],
+      "review_threads_returned": 0,
+      "implies_m10_acceptance": false
+    }
+  ],
+  "inventory_and_limits": {
+    "issue_comment_reader": "All-pages API; returned one comment per issue, matching each issue's reported count.",
+    "pr_surfaces": "Read metadata, normalized discussion timeline, formal reviews and review threads for #204107, #205876 and #205973.",
+    "review_thread_pagination": "No pageInfo or cursor exposed; zero returned threads is not an independently proven exhaustive traversal.",
+    "formal_acceptance": "No substantive APPROVED native-owner decision observed in inspected surfaces.",
+    "m10_pr_queries": [
+      {
+        "query": "205846 in:body",
+        "result_summary": "Only dependency #205876 returned."
+      },
+      {
+        "query": "\"dictation\" \"insertion\"",
+        "result_summary": "Adjacent PRs including #205973; none mapped to M10."
+      },
+      {
+        "query": "author:CompleteDotTech \"dictation\"",
+        "result_summary": "Eleven open results; none mapped to M10."
+      },
+      {
+        "query": "head:feat/dictation-target-insertion-m10",
+        "result_summary": "No results."
+      },
+      {
+        "query": "\"active-application\" \"insertion\" author:CompleteDotTech",
+        "result_summary": "No results."
+      }
+    ],
+    "query_limit": 100,
+    "any_query_reached_limit": false,
+    "search_limits": "Search wrappers did not expose a total/cursor; naming, indexing and query scope can omit a PR. No mapped PR is a bounded observation, not proof that none can exist.",
+    "transient_errors": [
+      {
+        "surface": "#205876 review threads",
+        "error": "RemoteProtocolError",
+        "response": "One read-only retry succeeded; no write or guard bypass."
+      }
+    ],
+    "not_inspected": [
+      "Complete current workflow/check-run inventory",
+      "Any unpublished local implementation bytes",
+      "Actual native product execution"
+    ],
+    "no_poll_for_green": true
+  },
+  "current_source_audit": {
+    "commit": "30daf88b038a5b5ca4eec818fff38bab1543b393",
+    "method": "Read-only source/guidance inspection; no runtime code execution.",
+    "paths": [
+      "AGENTS.md",
+      "CONTRIBUTING.md",
+      "docs/AGENTS.md",
+      "apps/macos/AGENTS.md",
+      ".agents/skills/openclaw-testing/SKILL.md",
+      "docs/reference/pull-request-review-flow.md",
+      "apps/macos/Sources/OpenClaw/QuickChatController.swift",
+      "apps/macos/Sources/OpenClaw/QuickChatModel.swift",
+      "apps/macos/Sources/OpenClaw/QuickChatDictation.swift",
+      "apps/macos/Sources/OpenClaw/QuickChatPaste.swift",
+      "apps/macos/Sources/OpenClaw/SpeechCaptureResources.swift",
+      "apps/macos/Sources/OpenClaw/PermissionManager.swift",
+      "apps/macos/Tests/OpenClawIPCTests/QuickChatPowerFeaturesTests.swift",
+      "scripts/test-macos-native.mts",
+      "scripts/lint-swift.sh",
+      "scripts/format-swift.sh",
+      "docs/platforms/mac/dev-setup.md",
+      "docs/platforms/mac/webchat.md"
+    ],
+    "findings": [
+      "Quick Chat dictation currently uses its own NSTextView selection and composer.",
+      "Existing reply paste chooses a frontmost app when invoked, overwrites clipboard, activates/checks its PID and posts Command-V; no original external control/accepted-edit acknowledgment.",
+      "Native Stop rotates existing session/request state and cancels recognition; no new provider-final drain guarantee.",
+      "Outside interaction currently dismisses Quick Chat; recoverable preview lifetime for a new external workflow needs an explicit same-owner decision.",
+      "Existing request, capture, presentation and target correctness checks are not repeated feature consent.",
+      "Current composer/reply/PID unit tests do not qualify AX selected-text insertion."
+    ],
+    "tests_not_read_or_run": "QuickChatControllerTests, QuickChatModelTests and QuickChatCatalogPresentationTests are present in the tree, but their bodies were not audited in this source pass and no suite was executed.",
+    "comparison_with_earlier_baseline": {
+      "earlier_commit": "52132ceead241270e9db22acb8e1ec21fbe218a6",
+      "changed_native_file_observed": "apps/macos/Sources/OpenClaw/QuickChatController.swift",
+      "limitation": "Earlier controller blob was unavailable with lazy fetch disabled. No text diff or byte-identical claim for the full source."
+    }
+  },
+  "historical_inputs_and_recovery": {
+    "requested_documents": [
+      "IMPLEMENTATION_PROMPT(2).md",
+      "ISSUE(2).md",
+      "PR(2).md",
+      "Pasted markdown(1).md"
+    ],
+    "prior_files_available_this_iteration": false,
+    "recovery_result": "Earlier checkout and nine-document package absent. Exact-title searches for decision-brief.md, clawsweeper-requirements.md and source-refresh.json found no matching prior package; unrelated results were not used.",
+    "reconstruction_basis": "Visible conversation handoff and supplied requirements plus current source/review observations. Newly authored revision, not byte-perfect restoration.",
+    "missing_parent_package_documents": [
+      "IMPLEMENTATION_WORKFLOW",
+      "ARCHITECTURE",
+      "STACKING_PLAN",
+      "VALIDATION_PLAN",
+      "COVERAGE_MATRIX",
+      "DEPENDENCY_SUMMARIES"
+    ],
+    "missing_shared_preparation_files": true,
+    "shared_fallback_disposition": "Supplied browser/Gateway preparation defaults remain an unaccepted proposal; no native consumer or server-sync behavior implemented.",
+    "historical_source_commits": [
+      "b6a0808d1235b5eb340ac47841f2e5af2e8b1e17",
+      "52132ceead241270e9db22acb8e1ec21fbe218a6"
+    ],
+    "historical_local_implementation": {
+      "commit": "7b8214b317a30a4d2de941eec78c10ba6606d023",
+      "base": "d11cb0518f095ac0eef7d232510e8783a209754f",
+      "tree": "1ebb3802320594def96aaf83a1e2c868e6353335",
+      "available_or_revalidated_now": false,
+      "prior_publication_report": "Five confirmed blob uploads; later blob lookup returned 404; no completed publication tree, remote feature branch or PR. Individual completion timestamps were not captured.",
+      "disposition": "Historical report only; no attempted resurrection/publication of the broad old implementation."
+    },
+    "prior_test_results_are_current_proof": false,
+    "prior_files_deleted_or_overwritten_by_this_iteration": false
+  },
+  "authorization_and_outcome": {
+    "current_instruction": "Continue iterating on ClawSweeper feedback; do not comment; commit the requested work.",
+    "current_change": "Nine-file documentation proposal and source/check records.",
+    "no_comments": true,
+    "native_owner_acceptance": "NEEDS MAINTAINER",
+    "native_implementation": "PLAN ONLY",
+    "runtime_qualification": "NOT COLLECTED",
+    "latency": "UNMEASURED",
+    "no_new_m10_pr": true,
+    "no_sibling_source_edits": true,
+    "no_archive_or_empty_proof_artifacts": true,
+    "historical_no_commit_rule_superseded_for_requested_current_commits": true,
+    "commit_authorization_is_not_product_acceptance": true
+  }
+}
