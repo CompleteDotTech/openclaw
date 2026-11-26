@@ -27,6 +27,7 @@ import type {
   ChatSessionCompanionThread,
   ChatSessionCompanionTurn,
 } from "../chat-session-companion.ts";
+import type { DirectDictationScope } from "../composer-direct-dictation.ts";
 import { resolveChatAttachmentLimits } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
@@ -48,6 +49,15 @@ export function ChatSessionRailPanel(
   props: SidebarPanelDefinitionParams & { registerPanelHost?: SidebarPanelHostRegistration },
 ) {
   const presented = usePanePresentation(() => props.companionPresented);
+  const conversation = projectOwner(
+    props.state.realtimeTalk,
+    (owner) => owner.conversationScope,
+    Object.is,
+  );
+  const readConversationScope = (): DirectDictationScope => ({
+    owner: conversation.read(),
+    sessionId: props.state.currentSessionId ?? undefined,
+  });
   const modelControls = createParkedProjection(
     () =>
       props.onCompanionModelSelect
@@ -67,6 +77,7 @@ export function ChatSessionRailPanel(
       presented={presented()}
       focusRequest={props.companionFocusRequest}
       sessionKey={props.state.sessionKey}
+      readConversationScope={readConversationScope}
       agentId={props.agentId}
       assistantName={props.state.assistantName}
       digest={props.digest}
@@ -144,6 +155,7 @@ function companionQuestionTime(turn: ChatSessionCompanionTurn): number {
 type ChatSessionRailProps = {
   presentation?: "desktop" | "mobile";
   sessionKey: string;
+  readConversationScope?: () => DirectDictationScope;
   agentId?: string | null;
   assistantName?: string;
   digest: SessionObserverDigest | null;
@@ -438,6 +450,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
         textareaRef={(element) => (textarea = element)}
         agentId={props.agentId}
         sessionKey={props.sessionKey}
+        readConversationScope={props.readConversationScope}
         companion={props.companion}
         modelControls={props.modelControls}
         client={props.client}
@@ -466,6 +479,7 @@ export const ChatSessionRail = defineSolidBridge<ChatSessionRailProps>(
     properties: {
       presentation: { default: undefined, attribute: false },
       sessionKey: { default: "", attribute: false },
+      readConversationScope: { default: undefined, attribute: false },
       agentId: { default: undefined, attribute: false },
       assistantName: { default: undefined, attribute: false },
       digest: { default: null, attribute: false },
