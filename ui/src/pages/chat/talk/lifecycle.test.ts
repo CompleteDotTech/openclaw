@@ -21,7 +21,10 @@ vi.mock("./gateway-relay.ts", () => ({
     context: RealtimeTalkTransportContext,
   ) {
     transportMock.relayContexts.push(context);
-    const stop = vi.fn((options?: { emitClosed?: boolean }) => transportMock.stop(options));
+    const stop = vi.fn((options?: { emitClosed?: boolean }) => {
+      context.input.stop();
+      return transportMock.stop(options);
+    });
     transportMock.relayStops.push(stop);
     return {
       start: transportMock.start,
@@ -39,7 +42,10 @@ vi.mock("./webrtc.ts", () => ({
     context: RealtimeTalkTransportContext,
   ) {
     transportMock.webRtcContexts.push(context);
-    const stop = vi.fn((options?: { emitClosed?: boolean }) => transportMock.stop(options));
+    const stop = vi.fn((options?: { emitClosed?: boolean }) => {
+      context.input.stop();
+      return transportMock.stop(options);
+    });
     transportMock.webRtcStops.push(stop);
     return { start: transportMock.start, stop };
   }),
@@ -457,6 +463,7 @@ describe("RealtimeTalkSession lifecycle", () => {
 
   it("bounds active and draining client voice owners across session objects", async () => {
     let createCount = 0;
+    let releaseCloses = false;
     const closes: Array<ReturnType<typeof createDeferred<void>>> = [];
     const request = voiceRequest(
       () => {
@@ -468,7 +475,9 @@ describe("RealtimeTalkSession lifecycle", () => {
         if (method === "talk.client.close") {
           const close = createDeferred();
           closes.push(close);
-          await close.promise;
+          if (!releaseCloses) {
+            await close.promise;
+          }
         }
         return { ok: true };
       },
@@ -477,18 +486,27 @@ describe("RealtimeTalkSession lifecycle", () => {
     const first = new RealtimeTalkSession(client, "agent:main:main");
     const second = new RealtimeTalkSession(client, "agent:main:main");
     const third = new RealtimeTalkSession(client, "agent:main:main");
+    onTestFinished(async () => {
+      releaseCloses = true;
+      for (const close of closes) {
+        close.resolve();
+      }
+      await Promise.all([first.stop(), second.stop(), third.stop()]);
+    });
 
     await first.start();
+    // A stopped microphone frees capture while its held provider close still
+    // occupies the original logical-session quota.
+    const firstClosing = first.stop();
+    await vi.waitFor(() => expect(closes).toHaveLength(1));
     await second.start();
     await expect(first.start()).rejects.toThrow(
       "Too many active or closing realtime Talk voice sessions",
     );
-    expect(transportMock.webRtcStops[0]).not.toHaveBeenCalled();
+    expect(transportMock.webRtcStops[0]).toHaveBeenCalledOnce();
     expect(transportMock.webRtcStops[1]).not.toHaveBeenCalled();
     expect(createCount).toBe(2);
-    void first.stop();
-    await vi.waitFor(() => expect(closes).toHaveLength(1));
-    void second.stop();
+    const secondClosing = second.stop();
     await vi.waitFor(() => expect(closes).toHaveLength(2));
 
     await expect(third.start()).rejects.toThrow(
@@ -497,15 +515,15 @@ describe("RealtimeTalkSession lifecycle", () => {
     expect(createCount).toBe(2);
 
     closes[0]?.resolve();
-    await vi.waitFor(async () => {
-      await third.start();
-      expect(createCount).toBe(3);
-    });
+    await firstClosing;
+    await third.start();
+    expect(createCount).toBe(3);
 
-    void third.stop();
+    const thirdClosing = third.stop();
     await vi.waitFor(() => expect(closes).toHaveLength(3));
     closes[1]?.resolve();
     closes[2]?.resolve();
+    await Promise.all([secondClosing, thirdClosing]);
   });
 
   it("bounds stalled detached owners across browser session keys", async () => {
@@ -568,7 +586,7 @@ describe("RealtimeTalkSession lifecycle", () => {
   it("releases bounded startup owners after request deadlines", async () => {
     vi.useFakeTimers();
     let failCreate = true;
-    const requestsStarted = createDeferred();
+    const requestsStarted = [createDeferred(), createDeferred()];
     let pendingCreates = 0;
     const request = vi.fn(
       async (method: string, _params?: unknown, options?: { timeoutMs?: number }) => {
@@ -580,9 +598,7 @@ describe("RealtimeTalkSession lifecycle", () => {
         }
         await new Promise<void>((_resolve, reject) => {
           setTimeout(() => reject(new Error("request timeout")), options?.timeoutMs);
-          if (++pendingCreates === 2) {
-            requestsStarted.resolve();
-          }
+          requestsStarted[pendingCreates++]?.resolve();
         });
         return { ok: true };
       },
@@ -591,16 +607,25 @@ describe("RealtimeTalkSession lifecycle", () => {
     const first = new RealtimeTalkSession(client, "agent:main:main", {}, { transport: "webrtc" });
     const second = new RealtimeTalkSession(client, "agent:main:main", {}, { transport: "webrtc" });
     const third = new RealtimeTalkSession(client, "agent:main:main", {}, { transport: "webrtc" });
+    onTestFinished(async () => {
+      await Promise.all([first.stop(), second.stop(), third.stop()]);
+    });
 
-    const startsSettled = Promise.allSettled([first.start(), second.start()]);
-    await requestsStarted.promise;
+    const firstSettled = Promise.allSettled([first.start()]);
+    await requestsStarted[0]!.promise;
+    void first.stop();
+    // Stop cannot settle an in-flight provider allocation; its quota remains
+    // occupied until the request deadline even though capture can move on.
+    const secondSettled = Promise.allSettled([second.start()]);
+    await requestsStarted[1]!.promise;
+    void second.stop();
     await expect(third.start()).rejects.toThrow(
       "Too many active or closing realtime Talk voice sessions",
     );
     expect(calls(request, "talk.client.create")).toHaveLength(2);
 
     await vi.advanceTimersByTimeAsync(30_000);
-    const settled = await startsSettled;
+    const settled = (await Promise.all([firstSettled, secondSettled])).flat();
     expect(settled.map((result) => result.status)).toEqual(["rejected", "rejected"]);
 
     failCreate = false;

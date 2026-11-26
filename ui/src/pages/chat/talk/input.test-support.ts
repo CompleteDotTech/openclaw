@@ -102,10 +102,29 @@ export function cameraFixture(deviceId?: string) {
 
 export function voiceCaptureLocksFixture() {
   return {
-    request: vi.fn(async (name: string, _options: LockOptions, callback: LockGrantedCallback<unknown>) =>
-      callback({ name, mode: "exclusive" }),
+    request: vi.fn(
+      async (name: string, _options: LockOptions, callback: LockGrantedCallback<unknown>) =>
+        callback({ name, mode: "exclusive" }),
     ),
   };
+}
+
+export function useVoiceCaptureLocksFixture(): void {
+  beforeEach(() => {
+    const browserNavigator = navigator;
+    const original = Object.getOwnPropertyDescriptor(browserNavigator, "locks");
+    Object.defineProperty(browserNavigator, "locks", {
+      configurable: true,
+      value: voiceCaptureLocksFixture(),
+    });
+    onTestFinished(() => {
+      if (original) {
+        Object.defineProperty(browserNavigator, "locks", original);
+      } else {
+        Reflect.deleteProperty(browserNavigator, "locks");
+      }
+    });
+  });
 }
 
 export function stubMedia(...streams: MediaStream[]) {

@@ -227,7 +227,9 @@ export class ComposerDictationSession {
   private async startInternal(): Promise<void> {
     // Split Talk also uses this transcription-only transport. Its parent keeps
     // the Talk identity; a transcript must never choose the product route.
-    this.voiceRoute.requireRoute(this.voiceRoute.identity.route === "dictation" ? "dictation" : "talk");
+    this.voiceRoute.requireRoute(
+      this.voiceRoute.identity.route === "dictation" ? "dictation" : "talk",
+    );
     await this.voiceRoute.acquireCapture();
     if (this.stopped || !this.voiceRoute.acceptsResults) {
       return;

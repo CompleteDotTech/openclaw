@@ -14,7 +14,7 @@ import {
 } from "./chat-composer.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatQuestionCard } from "./components/chat-question-card.ts";
-import { MockDictationAudioContext, voiceCaptureLocksFixture } from "./talk/input.test-support.ts";
+import { MockDictationAudioContext, useVoiceCaptureLocksFixture } from "./talk/input.test-support.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
 
 const discoverRealtimeTalkInputsMock = vi.fn();
@@ -167,19 +167,9 @@ it("labels the send action as Suggest and emits ephemeral typing state", () => {
   expect(onTypingChange).toHaveBeenLastCalledWith(false);
 });
 
+useVoiceCaptureLocksFixture();
+
 beforeEach(() => {
-  const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
-  Object.defineProperty(navigator, "locks", {
-    configurable: true,
-    value: voiceCaptureLocksFixture(),
-  });
-  onTestFinished(() => {
-    if (originalLocks) {
-      Object.defineProperty(navigator, "locks", originalLocks);
-    } else {
-      Reflect.deleteProperty(navigator, "locks");
-    }
-  });
   onTestFinished(installChatComposerPickerDismissal(document));
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);

@@ -211,10 +211,7 @@ export async function startChatRealtimeSession(
   const forCurrentSession =
     <Args extends unknown[]>(callback: (...args: Args) => void) =>
     (...args: Args) => {
-      if (
-        state.realtimeTalk.snapshot.realtimeTalkSession === session &&
-        !isConversationCurrent()
-      ) {
+      if (state.realtimeTalk.snapshot.realtimeTalkSession === session && !isConversationCurrent()) {
         stopRealtimeTalk(state);
         return;
       }

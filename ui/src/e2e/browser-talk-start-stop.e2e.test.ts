@@ -176,7 +176,9 @@ suite.define(() => {
           page.locator('button[aria-label="Stop Talk"] .agent-chat__voice-activity').count(),
         )
         .toBe(1);
-      const pillBox = await page.getByRole("button", { name: "Stop Talk", exact: true }).boundingBox();
+      const pillBox = await page
+        .getByRole("button", { name: "Stop Talk", exact: true })
+        .boundingBox();
       expect(pillBox?.width ?? 0).toBeGreaterThanOrEqual(60);
       await expect
         .poll(() =>

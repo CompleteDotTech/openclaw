@@ -199,7 +199,8 @@ describe("DirectDictationControl", () => {
       expect(controller.finishActive).toHaveBeenCalledOnce();
 
       // Observed replacement invalidates sinks before any render or history reply.
-      scope = changed === "scope" ? { ...scope, owner: {} } : { ...scope, sessionId: "replacement" };
+      scope =
+        changed === "scope" ? { ...scope, owner: {} } : { ...scope, sessionId: "replacement" };
       commit("old conversation transcript");
       finishing.resolve(true);
       await finishing.promise;

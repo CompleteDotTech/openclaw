@@ -144,7 +144,10 @@ export function SessionRailComposer(props: {
     dictation.revision();
     return dictationControl.previewDraft() ?? props.companion.draft;
   });
-  const draftRef = liveValue<HTMLTextAreaElement>(() => visibleDraft(), scheduleTextareaHeightAdjustment);
+  const draftRef = liveValue<HTMLTextAreaElement>(
+    () => visibleDraft(),
+    scheduleTextareaHeightAdjustment,
+  );
   // The dictated preview reaches the draft only on commit, so submission finishes it first.
   const submit = () => {
     const active = dictationControl.dictation;

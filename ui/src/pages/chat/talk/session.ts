@@ -369,6 +369,12 @@ export class RealtimeTalkSession {
     }
   }
 
+  private requireCurrentConversation(): void {
+    if (this.localOptions.isConversationCurrent?.() === false) {
+      throw new DOMException("The Talk destination changed.", "AbortError");
+    }
+  }
+
   private async createSession(
     options: RealtimeTalkLaunchOptions & {
       capabilities?: Array<"camera-frame" | "voice-transcript" | "voice-selection">;
@@ -376,9 +382,7 @@ export class RealtimeTalkSession {
     lifecycleGeneration: number,
   ): Promise<RealtimeTalkSessionResult> {
     this.voiceRoute?.requireRoute("talk");
-    if (this.localOptions.isConversationCurrent?.() === false) {
-      throw new DOMException("The Talk destination changed.", "AbortError");
-    }
+    this.requireCurrentConversation();
     if (options.voiceChangeId && options.transport === "gateway-relay") {
       return this.createRelaySession(options);
     }
@@ -429,9 +433,7 @@ export class RealtimeTalkSession {
 
   private createRelaySession(options: RealtimeTalkLaunchOptions) {
     this.voiceRoute?.requireRoute("talk");
-    if (this.localOptions.isConversationCurrent?.() === false) {
-      throw new DOMException("The Talk destination changed.", "AbortError");
-    }
+    this.requireCurrentConversation();
     return this.client.request<RealtimeTalkSessionResult>(
       "talk.session.create",
       {
@@ -534,9 +536,7 @@ export class RealtimeTalkSession {
         await retryVoiceTranscriptPersistence(
           transcriptSignal,
           () => {
-            if (this.localOptions.isConversationCurrent?.() === false) {
-              throw new DOMException("The Talk destination changed.", "AbortError");
-            }
+            this.requireCurrentConversation();
             return this.client.request(
               "talk.client.transcript",
               {

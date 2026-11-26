@@ -589,7 +589,8 @@ describe("ChatSessionRailElement", () => {
         .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       expect(finishActive).toHaveBeenCalledWith({ forSend: true });
 
-      scope = changed === "scope" ? { ...scope, owner: {} } : { ...scope, sessionId: "replacement" };
+      scope =
+        changed === "scope" ? { ...scope, owner: {} } : { ...scope, sessionId: "replacement" };
       finishing.resolve(true);
       await finishing.promise;
       await Promise.resolve();

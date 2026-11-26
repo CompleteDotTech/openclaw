@@ -13,14 +13,17 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { renderComposerVoiceButtonSolid } from "./components/chat-composer-controls.tsx";
 import { ComposerDictationSession, placeComposerDictation } from "./composer-dictation-session.ts";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
-import { MockDictationAudioContext, type MockAudioProcessor } from "./talk/input.test-support.ts";
+import {
+  MockDictationAudioContext,
+  type MockAudioProcessor,
+  useVoiceCaptureLocksFixture,
+} from "./talk/input.test-support.ts";
 
 type GatewayListener = (event: GatewayEventFrame) => void;
 const listeners = new Set<GatewayListener>();
 const controllers: ComposerDictationOwner[] = [];
 const processors: MockAudioProcessor[] = [];
 const audios: MockAudio[] = [];
-const originalLocks = Object.getOwnPropertyDescriptor(globalThis.navigator, "locks");
 let speechStarted = createDeferred();
 let request: ReturnType<
   typeof vi.fn<(method: string, params: Record<string, unknown>) => Promise<unknown>>
@@ -211,6 +214,8 @@ function latestAudio() {
   return audio;
 }
 
+useVoiceCaptureLocksFixture();
+
 beforeEach(() => {
   vi.useFakeTimers();
   listeners.clear();
@@ -230,14 +235,6 @@ beforeEach(() => {
   Object.defineProperty(globalThis.navigator, "mediaDevices", {
     configurable: true,
     value: { getUserMedia },
-  });
-  Object.defineProperty(globalThis.navigator, "locks", {
-    configurable: true,
-    value: {
-      request: vi.fn(async (name: string, _options: LockOptions, callback: LockGrantedCallback<unknown>) =>
-        callback({ name, mode: "exclusive" }),
-      ),
-    },
   });
   vi.stubGlobal("AudioContext", MockAudioContext);
   vi.stubGlobal("Audio", MockAudio);
@@ -261,11 +258,6 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  if (originalLocks) {
-    Object.defineProperty(globalThis.navigator, "locks", originalLocks);
-  } else {
-    Reflect.deleteProperty(globalThis.navigator, "locks");
-  }
 });
 
 describe("ComposerDictationOwner", () => {

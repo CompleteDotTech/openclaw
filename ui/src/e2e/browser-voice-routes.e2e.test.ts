@@ -13,8 +13,8 @@ import {
   TALK_READY_HISTORY_MESSAGE,
   waitForTalkReady,
 } from "./browser-talk-start-stop.fixtures.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 // The product and Web Locks run in Chromium. Gateway, provider responses and
@@ -90,7 +90,7 @@ async function installVoice(page: Page, id: string, route: "chat" | "new" = "cha
       }
     },
     textarea: page.locator(
-      route === "new" ? ".new-session-page__message" : ".agent-chat__composer-combobox textarea",
+      route === "new" ? ".new-session-page__message" : ".agent-chat__composer-shell textarea",
     ),
     emit: (text: string, final = false) =>
       gateway.emitGatewayEvent("talk.event", {
@@ -109,7 +109,7 @@ async function installVoice(page: Page, id: string, route: "chat" | "new" = "cha
       const request = await gateway.waitForRequest("talk.session.create");
       expect(request.params).toMatchObject({ mode: "transcription", brain: "none" });
       await gateway.resolveDeferred("talk.session.create");
-      await page.locator(".agent-chat__dictation-phase--listening").waitFor();
+      await page.locator('.agent-chat__dictation-status .agent-chat__voice-activity[data-status="listening"]').waitFor();
     },
     readyTalk: async () => {
       // The synthetic peer exposes its external open event after the real
@@ -186,73 +186,184 @@ async function capture(page: Page, state: string, target: Locator, label: string
 
 suite.define(() => {
   it("keeps Side chat dictation unsent after an edited draft and a hidden Send continuation", () =>
-    suite.withPage({ permissions: ["microphone"], viewport: { width: 1440, height: 900 } }, async ({ page }) => {
-      const { gateway, textarea: main, open, admit, emit, close } = await installVoice(page, "side-draft");
-      await open();
-      await main.fill("Main draft stays here.");
-      await openChatSidePanelType(page, "Side chat");
-      const rail = page.locator("openclaw-chat-session-rail");
-      const side = rail.getByRole("textbox", { name: "Ask in side chat", exact: true });
-      await side.fill("Side draft.");
-      expect(await rail.getByRole("button", { name: "Talk", exact: true }).count()).toBe(0);
-      await rail.getByRole("button", { name: "Dictation", exact: true }).click();
-      await admit();
-      await emit("Send the private file.");
-      await expect.poll(() => side.inputValue()).toBe("Side draft. Send the private file.");
-      await rail.getByRole("button", { name: "Send", exact: true }).click();
-      await gateway.waitForRequest("talk.session.close");
-      await side.fill("Revised side draft.");
-      await selectChatLayoutAction(page, "Collapse side chat");
-      await openChatSidePanelType(page, "Side chat");
-      await emit("Send the private file.", true);
-      await close();
-      await gateway.resolveDeferred("talk.session.close");
-      await expect.poll(() => side.inputValue()).toBe("Revised side draft. Send the private file.");
-      expect(await main.inputValue()).toBe("Main draft stays here.");
-      await expectNoAgentWrites(gateway);
-      expect(await gateway.getRequests("talk.session.create")).toHaveLength(1);
-    }));
+    suite.withPage(
+      { permissions: ["microphone"], viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const {
+          gateway,
+          textarea: main,
+          open,
+          admit,
+          emit,
+          close,
+        } = await installVoice(page, "side-draft");
+        await open();
+        await main.fill("Main draft stays here.");
+        await openChatSidePanelType(page, "Side chat");
+        const rail = page.locator("openclaw-chat-session-rail");
+        const side = rail.getByRole("textbox", { name: "Ask in side chat", exact: true });
+        await side.fill("Side draft.");
+        expect(await rail.getByRole("button", { name: "Talk", exact: true }).count()).toBe(0);
+        await rail.getByRole("button", { name: "Dictation", exact: true }).click();
+        await admit();
+        await emit("Send the private file.");
+        await expect.poll(() => side.inputValue()).toBe("Side draft. Send the private file.");
+        await rail.getByRole("button", { name: "Send", exact: true }).click();
+        await gateway.waitForRequest("talk.session.close");
+        await side.fill("Revised side draft.");
+        await selectChatLayoutAction(page, "Collapse side chat");
+        await openChatSidePanelType(page, "Side chat");
+        await emit("Send the private file.", true);
+        await close();
+        await gateway.resolveDeferred("talk.session.close");
+        await expect
+          .poll(() => side.inputValue())
+          .toBe("Revised side draft. Send the private file.");
+        expect(await main.inputValue()).toBe("Main draft stays here.");
+        await expectNoAgentWrites(gateway);
+        expect(await gateway.getRequests("talk.session.create")).toHaveLength(1);
+      },
+    ));
+
+  it("retires Side chat dictation on an observed replacement before its history arrives", () =>
+    suite.withPage(
+      { permissions: ["microphone"], viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const { gateway, textarea: main, open, admit, emit, close } = await installVoice(
+          page,
+          "replaced-side-draft",
+        );
+        await open();
+        await main.fill("Keep the main draft.");
+        await openChatSidePanelType(page, "Side chat");
+        const rail = page.locator("openclaw-chat-session-rail");
+        const side = rail.getByRole("textbox", { name: "Ask in side chat", exact: true });
+        await side.fill("Keep the side draft.");
+        await rail.getByRole("button", { name: "Dictation", exact: true }).click();
+        await admit();
+        await emit("Provisional speech from the old conversation.");
+        await expect.poll(() => side.inputValue()).toContain("Provisional speech");
+        const audioStates = () => page.evaluate(() =>
+          (window as Window & { openclawVideoTalkTracks?: MediaStreamTrack[] })
+            .openclawVideoTalkTracks?.filter((track) => track.kind === "audio")
+            .map((track) => track.readyState),
+        );
+        expect(await audioStates()).toEqual(["live"]);
+
+        const original = await gateway.getSessionRow("agent:main:main");
+        const after = await gateway.deferNext("chat.history", { sessionKey: original.key });
+        const replacement = {
+          ...original,
+          sessionId: "side-conversation-successor",
+          updatedAt: (original.updatedAt ?? 0) + 1,
+        };
+        await gateway.setSessionRow(replacement);
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...replacement,
+          sessionKey: original.key,
+          reason: "create",
+        });
+        await gateway.waitForRequest("chat.history", { after, match: { sessionKey: original.key } });
+        expect((await gateway.waitForRequest("talk.session.close")).params).toMatchObject({
+          discard: true,
+        });
+        await expect.poll(audioStates).toEqual(["ended"]);
+        await expect.poll(() => page.evaluate(async () =>
+          (await navigator.locks.query()).held?.some((lock) => lock.name === "openclaw-voice-capture"),
+        )).toBe(false);
+        await expect.poll(() => rail.getByRole("button", { name: "Cancel dictation", exact: true }).count()).toBe(0);
+        await emit("Late old speech must stay discarded.", true);
+        await close();
+        await gateway.resolveDeferred("talk.session.close");
+        await expect.poll(() => side.inputValue()).toBe("Keep the side draft.");
+        expect(await main.inputValue()).toBe("Keep the main draft.");
+        await expectNoAgentWrites(gateway);
+        expect(await gateway.getRequests("talk.session.create")).toHaveLength(1);
+        // The real pane observation retired capture while this read remained held.
+        await gateway.resolveDeferred("chat.history", undefined, { match: { sessionKey: original.key } });
+        await expect.poll(() => side.inputValue()).toBe("Keep the side draft.");
+      },
+    ));
 
   it("supports tabbed cancellation at enlarged text without a hidden pointer-hold route", () =>
-    suite.withPage({ permissions: ["microphone"], reducedMotion: "reduce", viewport: { width: 390, height: 844 } }, async ({ page }) => {
-      const { gateway, textarea, open, admit } = await installVoice(page, "accessible-draft");
-      await page.addInitScript(() => {
-        const gatewayUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
-        localStorage.setItem(`openclaw.control.settings.v1:${gatewayUrl}`, JSON.stringify({ gatewayUrl, textScale: 140 }));
-      });
-      await open();
-      await textarea.fill("Keep my text.");
-      const dictate = page.getByRole("button", { name: "Dictation", exact: true });
-      // Cancel a press before click: there is no alternate hold-to-Talk entry.
-      await dictate.dispatchEvent("pointerdown", { pointerId: 1, pointerType: "touch", button: 0 });
-      await dictate.dispatchEvent("pointercancel", { pointerId: 1, pointerType: "touch", button: 0 });
-      expect(await gateway.getRequests("talk.session.create")).toHaveLength(0);
-      expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
-      await textarea.focus();
-      for (let step = 0; step < 20 && !(await dictate.evaluate((element) => element === document.activeElement)); step += 1) {
-        await page.keyboard.press("Tab");
-      }
-      expect(await dictate.evaluate((element) => element === document.activeElement)).toBe(true);
-      await page.keyboard.press("Space");
-      await admit();
-      const cancel = page.getByRole("button", { name: "Cancel dictation", exact: true });
-      for (let step = 0; step < 20 && !(await cancel.evaluate((element) => element === document.activeElement)); step += 1) {
-        await page.keyboard.press("Shift+Tab");
-      }
-      expect(await cancel.evaluate((element) => element === document.activeElement)).toBe(true);
-      const bounds = await cancel.boundingBox();
-      expect(bounds).not.toBeNull();
-      expect(bounds!.x).toBeGreaterThanOrEqual(0);
-      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(391);
-      const phase = page.locator(".agent-chat__dictation-phase");
-      expect(await phase.evaluate((element) => getComputedStyle(element).animationName)).toBe("none");
-      expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--control-ui-text-scale").trim())).toBe("1.4");
-      await page.keyboard.press("Enter");
-      expect((await gateway.waitForRequest("talk.session.close")).params).toMatchObject({ discard: true });
-      await gateway.resolveDeferred("talk.session.close");
-      await expect.poll(() => textarea.inputValue()).toBe("Keep my text.");
-      await expectNoAgentWrites(gateway);
-    }));
+    suite.withPage(
+      {
+        permissions: ["microphone"],
+        reducedMotion: "reduce",
+        viewport: { width: 390, height: 844 },
+      },
+      async ({ page }) => {
+        const { gateway, textarea, open, admit } = await installVoice(page, "accessible-draft");
+        await page.addInitScript(() => {
+          const gatewayUrl = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
+          localStorage.setItem(
+            `openclaw.control.settings.v1:${gatewayUrl}`,
+            JSON.stringify({ gatewayUrl, textScale: 140 }),
+          );
+        });
+        await open();
+        await textarea.fill("Keep my text.");
+        const dictate = page.getByRole("button", { name: "Dictation", exact: true });
+        // Cancel a press before click: there is no alternate hold-to-Talk entry.
+        await dictate.dispatchEvent("pointerdown", {
+          pointerId: 1,
+          pointerType: "touch",
+          button: 0,
+        });
+        await dictate.dispatchEvent("pointercancel", {
+          pointerId: 1,
+          pointerType: "touch",
+          button: 0,
+        });
+        expect(await gateway.getRequests("talk.session.create")).toHaveLength(0);
+        expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
+        await textarea.focus();
+        for (
+          let step = 0;
+          step < 20 && !(await dictate.evaluate((element) => element === document.activeElement));
+          step += 1
+        ) {
+          await page.keyboard.press("Tab");
+        }
+        expect(await dictate.evaluate((element) => element === document.activeElement)).toBe(true);
+        await page.keyboard.press("Space");
+        await admit();
+        const cancel = page.getByRole("button", { name: "Cancel dictation", exact: true });
+        for (
+          let step = 0;
+          step < 20 && !(await cancel.evaluate((element) => element === document.activeElement));
+          step += 1
+        ) {
+          await page.keyboard.press("Shift+Tab");
+        }
+        expect(await cancel.evaluate((element) => element === document.activeElement)).toBe(true);
+        const bounds = await cancel.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(391);
+        const activity = page.locator(
+          '.agent-chat__dictation-status .agent-chat__voice-activity[data-status="listening"]',
+        );
+        expect(await activity.isVisible()).toBe(true);
+        expect(
+          await activity.evaluate((element) => getComputedStyle(element, "::after").animationName),
+        ).toBe("none");
+        expect(
+          await page.evaluate(() =>
+            getComputedStyle(document.documentElement)
+              .getPropertyValue("--control-ui-text-scale")
+              .trim(),
+          ),
+        ).toBe("1.4");
+        await page.keyboard.press("Enter");
+        expect((await gateway.waitForRequest("talk.session.close")).params).toMatchObject({
+          discard: true,
+        });
+        await gateway.resolveDeferred("talk.session.close");
+        await expect.poll(() => textarea.inputValue()).toBe("Keep my text.");
+        await expectNoAgentWrites(gateway);
+      },
+    ));
 
   it("keeps keyboard dictation unsent and owned while Talk starts and the draft changes", () =>
     suite.withPage({ permissions: ["microphone"], reducedMotion: "reduce" }, async ({ page }) => {

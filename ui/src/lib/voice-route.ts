@@ -130,7 +130,9 @@ export class VoiceRouteSession {
       })();
       return attempt.ready.promise;
     } catch (error) {
-      return Promise.reject(error instanceof Error ? error : new Error("Voice capture failed.", { cause: error }));
+      return Promise.reject(
+        error instanceof Error ? error : new Error("Voice capture failed.", { cause: error }),
+      );
     }
   }
 
