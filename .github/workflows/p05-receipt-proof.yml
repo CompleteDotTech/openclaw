@@ -1,0 +1,227 @@
+# Evidence branch only. Product and workflow identities are recorded separately.
+name: P05 committed receipt proof
+on:
+  push:
+    branches:
+      - evidence/p05-receipts-20261126
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p05-receipts-${{ github.workflow_sha }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -e -o pipefail {0}
+
+env:
+  SOURCE_REPOSITORY: CompleteDotTech/openclaw
+  SOURCE_SHA: f65ad6bb6d9f9f130da0bf304e59cdb3c25a4f31
+  EXPECTED_SOURCE_TREE: 5afff037fdf43463f16997370a4afbcb3e3cae39
+  BASE_SHA: 1c3de7eb68481e5d7656e21ec96d43855789fbb0
+  EXPECTED_BASE_TREE: 3216c5a88281562ffbc4449e9f474835ee7665c6
+  WORKFLOW_SHA: ${{ github.workflow_sha }}
+  CI: "true"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  OPENCLAW_VITEST_RUNTIME: node
+  OPENCLAW_VITEST_MAX_WORKERS: "1"
+  OPENCLAW_TEST_PROJECTS_PARALLEL: "1"
+  OPENCLAW_TYPECHECKER: tsgo
+  OPENCLAW_LINT_TOOL: oxlint
+  OPENCLAW_FORMAT_TOOL: oxfmt
+  PNPM_CONFIG_FROZEN_LOCKFILE: "true"
+  GOGC: "30"
+  GOMEMLIMIT: 3GiB
+
+jobs:
+  proof:
+    name: P05 ${{ matrix.lane }}
+    if: github.repository == 'CompleteDotTech/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        lane: [regression, static, native]
+    env:
+      P05_LANE: ${{ matrix.lane }}
+    steps:
+      - name: Require pinned source identities
+        id: initialize
+        run: |
+          for value in "$SOURCE_SHA" "$EXPECTED_SOURCE_TREE" "$BASE_SHA" "$EXPECTED_BASE_TREE" "$WORKFLOW_SHA"; do
+            [[ "$value" =~ ^[0-9a-f]{40}$ ]]
+          done
+          proof_root="$RUNNER_TEMP/p05-receipt-proof-$P05_LANE"
+          install -d -m 700 "$proof_root" "$proof_root/public" "$proof_root/private"
+          printf 'P05_PROOF_ROOT=%s\nP05_PROOF_RUNNER=%s/runner.py\n' "$proof_root" "$proof_root" >> "$GITHUB_ENV"
+
+      - name: Checkout exact product candidate without persisted credentials
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify source and extract the exact workflow harness
+        id: identity
+        run: |
+          git -c core.hooksPath=/dev/null fetch --no-tags --depth=1 origin "$BASE_SHA" "$WORKFLOW_SHA"
+          git show "$WORKFLOW_SHA:.github/workflows/p05-receipt-proof.py" > "$P05_PROOF_RUNNER"
+          git show "$WORKFLOW_SHA:.github/workflows/p05-receipt-proof.yml" > "$P05_PROOF_ROOT/workflow.yml"
+          python3 "$P05_PROOF_RUNNER" identity
+
+      - name: Prepare canonical Node and pnpm with memory containment
+        id: toolchain
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: 24.22.1
+          install-bun: "false"
+          install-deps: "false"
+          semantic-checks: "true"
+          cache-mode: "off"
+
+      - name: Install this checkout's frozen dependencies
+        id: install
+        run: |
+          python3 "$P05_PROOF_RUNNER" run install -- pnpm install --frozen-lockfile
+
+      - name: Run the 37 receipt cases and affected existing consumers
+        id: regressions
+        if: ${{ !cancelled() && matrix.lane == 'regression' && steps.install.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" regressions
+
+      - name: Prove the targeted unverifiable receipt assertion fails on the base
+        id: base-red
+        if: ${{ !cancelled() && matrix.lane == 'regression' && steps.install.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" base-red
+
+      - name: Typecheck the production core
+        id: core-types
+        if: ${{ !cancelled() && matrix.lane == 'static' && steps.install.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" run core-types -- pnpm tsgo:core
+
+      - name: Typecheck receipt and computer fixtures through their existing leaf
+        id: fixture-types
+        if: ${{ !cancelled() && matrix.lane == 'static' && steps.install.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" run fixture-types -- node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.agents-tools.json --incremental
+
+      - name: Typecheck the proof script through the script owner
+        id: script-types
+        if: ${{ !cancelled() && matrix.lane == 'static' && steps.install.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" run script-types -- pnpm tsgo:scripts
+
+      - name: Lint only the affected core and script files
+        id: lint
+        if: ${{ !cancelled() && matrix.lane == 'static' && steps.install.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" run lint-core -- node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/agents/tool-effect-receipt.ts src/agents/tool-effect-receipt.test.ts src/agents/tools/computer-tool.ts src/agents/tools/computer-tool.effect-receipt.test.ts
+          python3 "$P05_PROOF_RUNNER" run lint-proof -- node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts/dev/computer-use-effect-receipt-proof.ts
+
+      - name: Check canonical formatting for all seven changed files
+        id: format
+        if: ${{ !cancelled() && matrix.lane == 'static' && steps.install.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" format
+
+      - name: Check the changed documentation page
+        id: docs
+        if: ${{ !cancelled() && matrix.lane == 'static' && steps.install.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" run docs-mdx -- node scripts/check-docs-mdx.mjs docs/nodes/computer-use.md
+
+      - name: Check maintained script discoverability on the exact product tree
+        id: deadcode
+        if: ${{ !cancelled() && matrix.lane == 'static' && steps.install.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" deadcode
+
+      - name: Check the actual workflow bytes as a disclosed untracked overlay
+        id: workflows
+        if: ${{ !cancelled() && matrix.lane == 'static' && steps.install.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" overlay-workflow
+          python3 "$P05_PROOF_RUNNER" run workflows -- pnpm check:workflows
+
+      - name: Build the complete product from the exact candidate
+        id: full-build
+        if: ${{ !cancelled() && matrix.lane == 'native' && steps.install.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" run full-build -- pnpm build
+
+      - name: Record built entry, stamps, and CUA extension identities
+        id: built-identity
+        if: ${{ !cancelled() && matrix.lane == 'native' && steps.full-build.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" built-identity
+
+      - name: Install the documented disposable Linux X11 fixture prerequisites
+        id: desktop-packages
+        if: ${{ !cancelled() && matrix.lane == 'native' && steps.built-identity.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" run apt-update -- sudo -n apt-get update
+          python3 "$P05_PROOF_RUNNER" run desktop-packages -- sudo -n apt-get install --yes --no-install-recommends at-spi2-core dbus-x11 gir1.2-gtk-3.0 openbox python3-gi x11-utils x11-apps xdotool xvfb
+
+      - name: Exercise the real paired CUA provider and join owned processes
+        id: native-proof
+        if: ${{ !cancelled() && matrix.lane == 'native' && steps.desktop-packages.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" native
+
+      - name: Verify built runtime bytes remained unchanged during the native rig
+        id: built-integrity
+        if: ${{ !cancelled() && matrix.lane == 'native' && steps.built-identity.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" built-integrity
+
+      - name: Verify product source and disclose any evidence overlay
+        id: source-integrity
+        if: ${{ !cancelled() && steps.identity.outcome == 'success' }}
+        run: |
+          python3 "$P05_PROOF_RUNNER" source-integrity
+
+      - name: Publish observed step receipts and require every selected gate
+        if: always()
+        env:
+          P05_STEP_RESULTS: ${{ toJSON(steps) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          lane = os.environ["P05_LANE"]
+          steps = json.loads(os.environ["P05_STEP_RESULTS"])
+          required = ["initialize", "checkout", "identity", "toolchain", "install", "source-integrity"]
+          required += {
+              "regression": ["regressions", "base-red"],
+              "static": ["core-types", "fixture-types", "script-types", "lint", "format", "docs", "deadcode", "workflows"],
+              "native": ["full-build", "built-identity", "desktop-packages", "native-proof", "built-integrity"],
+          }[lane]
+          outcomes = {name: steps.get(name, {}).get("outcome", "not-run") for name in required}
+          report = {
+              "lane": lane,
+              "source_sha": os.environ["SOURCE_SHA"],
+              "source_tree": os.environ["EXPECTED_SOURCE_TREE"],
+              "base_sha": os.environ["BASE_SHA"],
+              "workflow_sha": os.environ["WORKFLOW_SHA"],
+              "outcomes": outcomes,
+              "passed": all(value == "success" for value in outcomes.values()),
+              "unqualified": ["voice", "model/agent E2E", "physical hardware", "upgrade", "post-parent-landing"],
+          }
+          text = json.dumps(report, indent=2)
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("\n## P05 observed " + lane + " gates\n\n~~~json\n" + text + "\n~~~\n")
+          sys.exit(0 if report["passed"] else 1)
+          PY
