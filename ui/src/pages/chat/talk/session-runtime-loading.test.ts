@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
+import { createUnrestrictedTalkTestClient } from "./session.test-support.ts";
 import { RealtimeTalkSession } from "./session.ts";
 
 type TransportRuntime = typeof import("./transport.runtime.ts");
@@ -47,7 +47,7 @@ it.each(["stopped", "failed"] as const)(
       }),
     );
     const runtime = { createRealtimeTalkTransport } satisfies TransportRuntime;
-    const client = createTestGatewayClient(request);
+    const client = createUnrestrictedTalkTestClient(request);
     const session = new RealtimeTalkSession(client, "agent:main:runtime-load");
     const sibling = new RealtimeTalkSession(client, "agent:main:runtime-load");
     const starting = session.start();

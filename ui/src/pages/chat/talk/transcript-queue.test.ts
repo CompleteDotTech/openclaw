@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { useRealtimeTalkMicrophoneFixture } from "./input.test-support.ts";
+import { createUnrestrictedTalkTestClient } from "./session.test-support.ts";
 import type { RealtimeTalkCallbacks, RealtimeTalkTransportContext } from "./shared.ts";
 
 const transportMock = vi.hoisted(() => ({
@@ -27,7 +28,11 @@ vi.mock("./webrtc.ts", () => ({
 import { RealtimeTalkSession } from "./session.ts";
 
 async function start(request: unknown, callbacks: RealtimeTalkCallbacks) {
-  const session = new RealtimeTalkSession({ request } as never, "agent:main:main", callbacks);
+  const session = new RealtimeTalkSession(
+    createUnrestrictedTalkTestClient(request),
+    "agent:main:main",
+    callbacks,
+  );
   await session.start();
   const context = transportMock.context;
   const handleTranscript = context?.callbacks.onTranscript;

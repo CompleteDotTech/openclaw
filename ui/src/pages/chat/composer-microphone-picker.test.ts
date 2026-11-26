@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { speechDataPolicyFixture } from "../../test-helpers/speech-data-policy.ts";
 import { ComposerMicrophoneOwner } from "./composer-microphone-picker.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
 
@@ -11,7 +13,7 @@ function expectStatus(status: string) {
   expect(picker).toMatchObject({ realtimeStatus: status, dictationStatus: status });
 }
 function connect(request: Request, update: () => void = vi.fn(), sessionKey?: string) {
-  const client = { request } as unknown as GatewayBrowserClient;
+  const client = createTestGatewayClient(request);
   picker = new ComposerMicrophoneOwner();
   picker.subscribe(update);
   picker.syncCatalog(client, true, sessionKey);
@@ -100,6 +102,63 @@ it("refreshes after returning from login on the same Gateway connection", async 
   expect(picker).toMatchObject({ dictationStatus: "ready", open: false });
   expect(request).toHaveBeenCalledTimes(4);
   expect(request).toHaveBeenCalledWith("talk.catalog", {});
+});
+
+it("refreshes policy on config changes and ignores an older permissive catalog", async () => {
+  const old = createDeferred<unknown>();
+  const current = createDeferred<unknown>();
+  const reads = vi
+    .fn()
+    .mockResolvedValueOnce(catalog(true))
+    .mockReturnValueOnce(old.promise)
+    .mockReturnValueOnce(current.promise);
+  const client = createTestGatewayClient((method) => (method === "talk.config" ? {} : reads()));
+  let changed: Parameters<GatewayBrowserClient["addEventListener"]>[0] | undefined;
+  client.addEventListener = (listener) => {
+    changed = listener;
+    return () => {
+      changed = undefined;
+    };
+  };
+  picker = new ComposerMicrophoneOwner();
+  picker.syncCatalog(client, true, "main");
+  await vi.waitFor(() => expectStatus("ready"));
+  changed?.({ type: "event", event: "config.changed", payload: {} });
+  expectStatus("ready");
+  changed?.({ type: "event", event: "config.changed", payload: {} });
+  current.resolve({
+    realtime: { ready: true, providers: [] },
+    transcription: {
+      ready: false,
+      providers: [],
+      dataPolicy: speechDataPolicyFixture({
+        mode: "device-local",
+        available: false,
+        permitted: false,
+      }),
+    },
+  });
+  await vi.waitFor(() => expectStatus("unavailable"));
+  old.resolve(catalog(true));
+  await old.promise;
+  await Promise.resolve();
+  expectStatus("unavailable");
+  expect(picker.dataPolicy?.mode).toBe("device-local");
+});
+
+it("keeps the admitted route visible when an older catalog finishes after admission", async () => {
+  const pending = createDeferred<unknown>();
+  connect((method) => (method === "talk.config" ? Promise.resolve({}) : pending.promise));
+  const admitted = speechDataPolicyFixture({ destination: "http://127.0.0.1:9090/v1" });
+  picker.setSessionDataPolicy(admitted);
+  pending.resolve({
+    ...catalog(true),
+    transcription: { ready: true, providers: [], dataPolicy: speechDataPolicyFixture() },
+  });
+  await pending.promise;
+  await Promise.resolve();
+  expect(picker.dataPolicy).toEqual(admitted);
+  expect(picker).toMatchObject({ dictationStatus: "ready", realtimeStatus: "unavailable" });
 });
 
 it.each([
@@ -200,6 +259,7 @@ it("loads only session-scoped dictation readiness for a guest", async () => {
   const request = vi.fn().mockResolvedValue(catalog(true));
   const client = {
     request,
+    addEventListener: () => () => undefined,
     auth: { role: "operator", scopes: ["operator.sessions.write"] },
   } as unknown as GatewayBrowserClient;
   picker = new ComposerMicrophoneOwner();
@@ -218,6 +278,7 @@ it.each([undefined, "agent:roboclaw:guest-chat"])(
     const request = vi.fn();
     const client = {
       request,
+      addEventListener: () => () => undefined,
       auth: {
         role: "operator",
         scopes: sessionKey ? ["operator.sessions.read"] : ["operator.sessions.write"],

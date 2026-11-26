@@ -11,6 +11,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
+import { TalkDataPolicyGuard } from "./data-policy.ts";
 import { RealtimeTalkInputOwner } from "./input.ts";
 import type {
   RealtimeTalkCallbacks,
@@ -77,6 +78,7 @@ export class RealtimeTalkSession {
   private transcriptQueue = VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue();
   private clientVoiceSessionOwner: ClientVoiceSessionOwner | undefined;
   private readonly callbacks: RealtimeTalkCallbacks;
+  private dataPolicy: TalkDataPolicyGuard | undefined;
 
   constructor(
     private readonly client: GatewayBrowserClient,
@@ -100,6 +102,7 @@ export class RealtimeTalkSession {
     const owner = reserveClientVoiceSessionOwner(this.client, this.sessionKey);
     let ownerTransferred = false;
     let input: RealtimeTalkInputOwner | undefined;
+    let dataPolicy: TalkDataPolicyGuard | undefined;
     try {
       // Each start owns a new call. Provider allocation can retire an earlier
       // transport, so a failed start cannot restore that transport locally.
@@ -107,6 +110,20 @@ export class RealtimeTalkSession {
       const lifecycleGeneration = this.lifecycleGeneration;
       this.closed = false;
       this.callbacks.onStatus?.("connecting", t("chat.voice.preparing"));
+      const policy = new TalkDataPolicyGuard(this.client, this.sessionKey, (error) => {
+        if (this.dataPolicy !== policy || this.closed) {
+          return;
+        }
+        void this.retireTransport({ disposition: "abort" }).catch(() => undefined);
+        this.callbacks.onStatus?.("error", error.message);
+      });
+      dataPolicy = policy;
+      this.dataPolicy = policy;
+      // Policy admission precedes microphone acquisition for both browser Talk paths.
+      const catalog = await policy.check();
+      if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
+        return;
+      }
       if (this.localOptions.split) {
         const { SplitTalkTransport } = await import("./split.ts");
         if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
@@ -117,6 +134,7 @@ export class RealtimeTalkSession {
           this.sessionKey,
           this.callbacks,
           this.localOptions.split,
+          () => policy.check().then(() => undefined),
           this.localOptions.inputDeviceId,
         );
         this.pendingStartup = transport;
@@ -143,7 +161,7 @@ export class RealtimeTalkSession {
       }
       const [{ createRealtimeTalkTransport }, providerVideoCapable] = await Promise.all([
         import("./transport.runtime.ts"),
-        this.resolveVideoCapability(),
+        this.resolveVideoCapability(catalog),
       ]);
       if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
         return;
@@ -289,33 +307,28 @@ export class RealtimeTalkSession {
       }
       if (!ownerTransferred) {
         owner.release();
+        if (this.dataPolicy === dataPolicy && !this.transport) {
+          dataPolicy?.dispose();
+          this.dataPolicy = undefined;
+        }
       }
     }
   }
 
-  private async resolveVideoCapability(): Promise<boolean> {
+  private resolveVideoCapability(catalog: TalkCatalogResult): boolean {
     if (!this.callbacks.onVideoCapability) {
       return false;
     }
-    try {
-      const catalog = await this.client.request<TalkCatalogResult>(
-        "talk.catalog",
-        { sessionKey: this.sessionKey },
-        { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
-      );
-      const selectedProvider = catalog.realtime.activeProvider;
-      if (!selectedProvider) {
-        return false;
-      }
-      return (
-        catalog.realtime.providers.find(
-          (provider) =>
-            provider.id === selectedProvider || provider.aliases?.includes(selectedProvider),
-        )?.supportsVideoFrames === true
-      );
-    } catch {
+    const selectedProvider = catalog.realtime.activeProvider;
+    if (!selectedProvider) {
       return false;
     }
+    return (
+      catalog.realtime.providers.find(
+        (provider) =>
+          provider.id === selectedProvider || provider.aliases?.includes(selectedProvider),
+      )?.supportsVideoFrames === true
+    );
   }
 
   private async createSession(
@@ -408,6 +421,8 @@ export class RealtimeTalkSession {
   ): Promise<void> {
     this.lifecycleGeneration += 1;
     this.closed = true;
+    this.dataPolicy?.dispose();
+    this.dataPolicy = undefined;
     this.videoOperation += 1;
     this.rememberVideoEnabled(false);
     const detached = this.detachVoiceSession();

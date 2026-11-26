@@ -157,6 +157,8 @@ export class DirectDictationControl extends EventTarget {
           ? this.options.prepareSession
           : undefined,
       dictationAvailable: this.devicePicker.dictationStatus === "ready",
+      dataPolicy: this.devicePicker.dataPolicy,
+      onDataPolicyChange: this.devicePicker.setSessionDataPolicy,
       realtimeTalkActive: false,
       onCommit: (transcript: string, late?: true, preservePreview?: true) => {
         // Owner changes replace draft ownership. Object identity keeps even an
@@ -194,6 +196,7 @@ export class DirectDictationControl extends EventTarget {
         connected,
         disabled: !enabled,
         readDictation: () => dictation,
+        dataPolicy: this.devicePicker.dataPolicy,
         microphonePicker: {
           devices: this.devicePicker.devices,
           loading: this.devicePicker.loading,
@@ -204,6 +207,7 @@ export class DirectDictationControl extends EventTarget {
           showRealtimeCapability: false,
           realtimeStatus: this.devicePicker.realtimeStatus,
           dictationStatus: this.devicePicker.dictationStatus,
+          dataPolicy: this.devicePicker.dataPolicy,
           onOpen: this.devicePicker.handleOpen,
           onClose: this.devicePicker.handleClose,
           onSelect: (deviceId: string) => {

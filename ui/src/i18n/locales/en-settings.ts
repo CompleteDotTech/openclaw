@@ -458,7 +458,8 @@ const enSettings = {
       description: "How Talk hears you, and which model transcribes voice notes.",
       unavailableHint: "Connect to the Gateway to check speech-to-text readiness.",
       failedHint: "Couldn’t check speech-to-text readiness.",
-      readyWithoutProvider: "A local transcription model is ready.",
+      readyWithoutProvider:
+        "A transcription route is available. Device locality has not been verified.",
       talkTitle: "Talk",
       talkVoiceCall: "{provider} live transcription, set in Voice Call settings.",
       talkVoiceModel: "{provider}, set by the voice model in AI Agents settings.",

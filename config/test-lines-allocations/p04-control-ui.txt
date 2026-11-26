@@ -1,0 +1,5 @@
+# P04 browser review layer: regressions cover the displayed/admitted route,
+# stale catalog results, policy-revoked capture, independent raw versus Talk
+# paths, and recovery when a discarded session never acknowledges cleanup.
+# Net test growth is 428 lines against the core policy review layer.
+28

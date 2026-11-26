@@ -1,12 +1,13 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
 import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { speechDataPolicyFixture } from "../../test-helpers/speech-data-policy.ts";
 import {
   createComposerContainer,
   createComposerProps,
@@ -97,8 +98,47 @@ function catalogClient(realtime: boolean, transcription: boolean) {
     }
     throw new Error(`unexpected request: ${method}`);
   });
-  return { request, gatewayClient: { request } as unknown as GatewayBrowserClient };
+  return { request, gatewayClient: createTestGatewayClient(request) };
 }
+
+it("shows destination and unverified inference before capture and disables Live Talk", async () => {
+  discover.mockResolvedValue(emptyDevices);
+  const request = vi.fn(async (method: string) =>
+    method === "talk.config"
+      ? { config: { talk: { realtime: { mode: "stt-tts" } } } }
+      : {
+          realtime: { ready: true, providers: [] },
+          transcription: { ready: true, providers: [], dataPolicy: speechDataPolicyFixture() },
+        },
+  );
+  const onToggleRealtimeTalk = vi.fn();
+  const v = await mountPicker({
+    gatewayClient: createTestGatewayClient(request),
+    onToggleRealtimeTalk,
+  });
+  await waitForSolid(() =>
+    expect(v.root.textContent).toContain("Endpoint available · model unverified"),
+  );
+  expect(v.root.textContent).toContain("Destination: http://127.0.0.1:8080/v1");
+  expect(v.root.textContent).toContain("Model: synthetic-whisper");
+  const microphone = button(v.root, "Hold to dictate");
+  const description = document.getElementById(microphone.getAttribute("aria-describedby")!);
+  expect(description?.textContent).toContain("Transcription inference has not been verified.");
+  const live = button(
+    v.root,
+    "Live Talk and automatic spoken replies are unavailable under this policy.",
+  );
+  expect(live.disabled).toBe(true);
+  live.click();
+  expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
+  expect(
+    request.mock.calls.every(([method]) => method === "talk.catalog" || method === "talk.config"),
+  ).toBe(true);
+  await v.open();
+  expect(v.root.querySelector('[data-chat-talk-capability="realtime"]')?.textContent).toContain(
+    "unavailable under this policy",
+  );
+});
 
 it("keeps the microphone trigger and keyboard focus while its menu code loads", async () => {
   const ready = createDeferred();
@@ -296,7 +336,7 @@ it("points a sign-in without voice to its provider's API key", async () => {
   const onToggleRealtimeTalk = vi.fn();
   const onOpenModelProvider = navigateToModelProvider.mockReset();
   const v = await mountPicker({
-    gatewayClient: { request } as unknown as GatewayBrowserClient,
+    gatewayClient: createTestGatewayClient(request),
     onToggleRealtimeTalk,
     onOpenTalkSettings: vi.fn(),
     onOpenDictationSettings: vi.fn(),

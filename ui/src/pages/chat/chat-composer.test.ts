@@ -68,7 +68,7 @@ async function mountTalk(
     {
       gatewayClient: {
         request,
-        ...(session ? { addEventListener: vi.fn(() => () => undefined) } : {}),
+        addEventListener: vi.fn(() => () => undefined),
       } as unknown as GatewayBrowserClient,
       onToggleRealtimeTalk: vi.fn(),
       ...overrides,

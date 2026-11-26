@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
-import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  GatewayProtocolRequestError,
+} from "@openclaw/gateway-client/browser";
 import { createComponent } from "solid-js";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -8,6 +11,7 @@ import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { speechDataPolicyFixture } from "../../test-helpers/speech-data-policy.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { renderComposerVoiceButtonSolid } from "./components/chat-composer-controls.tsx";
 import { ComposerDictationSession, placeComposerDictation } from "./composer-dictation-session.ts";
@@ -103,7 +107,7 @@ function expectClosed(sessionId = "dictation-1", discard = false) {
   expect(request).toHaveBeenCalledWith(
     "talk.session.close",
     { sessionId, ...(discard ? { discard: true } : {}) },
-    { timeoutMs: null },
+    { timeoutMs: discard ? DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS : null },
   );
 }
 
@@ -272,6 +276,112 @@ afterEach(() => {
 });
 
 describe("ComposerDictationOwner", () => {
+  it("discards a changed admitted route before capture and uses it only after a new start", async () => {
+    const displayed = speechDataPolicyFixture();
+    const admitted = speechDataPolicyFixture({ destination: "http://127.0.0.1:9090/v1" });
+    const discardAcknowledgement = createDeferred<unknown>();
+    let created = 0;
+    request.mockImplementation(async (method, params) => {
+      if (method === "talk.session.create") {
+        return { ...sessionResult(`dictation-${++created}`), dataPolicy: admitted };
+      }
+      if (method === "talk.session.close" && params.sessionId === "dictation-1") {
+        return discardAcknowledgement.promise;
+      }
+      return params;
+    });
+    const onDataPolicyChange = vi.fn();
+    const { controller, options, onError, onCommit } = controllerFixture({
+      dataPolicy: displayed,
+      onDataPolicyChange,
+    });
+    onDataPolicyChange.mockImplementation((dataPolicy) =>
+      controller.update({ ...options, dataPolicy }),
+    );
+
+    expect(controller.startDirect()).toBe(true);
+    await vi.dynamicImportSettled();
+    await waitForFast(() => expect(onError).toHaveBeenCalledOnce());
+    expect(onDataPolicyChange).toHaveBeenCalledExactlyOnceWith(admitted);
+    expectClosed("dictation-1", true);
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalledWith("talk.session.appendAudio", expect.anything());
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(controller.active).toBe(false);
+    expect(onError.mock.calls[0]?.[0]).toContain("Review the destination and model");
+
+    await startDirect(controller);
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    captureAudio();
+    await waitForFast(() => expectAppended("dictation-2"));
+    discardAcknowledgement.reject(new Error("Discard acknowledgement was lost"));
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  it.each(["missing", "newly restricted", "revoked"] as const)(
+    "requires review before capture when admission policy is %s",
+    async (transition) => {
+      const dataPolicy =
+        transition === "missing"
+          ? undefined
+          : speechDataPolicyFixture({ permitted: transition !== "revoked" });
+      recordRequests(async () => ({ ...sessionResult(), dataPolicy }));
+      const onDataPolicyChange = vi.fn();
+      const { controller, onError } = controllerFixture({
+        dataPolicy: transition === "newly restricted" ? undefined : speechDataPolicyFixture(),
+        onDataPolicyChange,
+      });
+
+      expect(controller.startDirect()).toBe(true);
+      await vi.dynamicImportSettled();
+      await waitForFast(() => expect(onError).toHaveBeenCalledOnce());
+      expect(onDataPolicyChange).toHaveBeenCalledExactlyOnceWith(dataPolicy);
+      expectClosed("dictation-1", true);
+      expect(getUserMedia).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts matching admission whose session scope omits private route details", async () => {
+    const dataPolicy = speechDataPolicyFixture({
+      provider: undefined,
+      model: undefined,
+      destination: undefined,
+    });
+    recordRequests(async () => ({ ...sessionResult(), dataPolicy }));
+    const onDataPolicyChange = vi.fn();
+    const { controller, onError } = controllerFixture({ dataPolicy, onDataPolicyChange });
+
+    await startDirect(controller);
+
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(onDataPolicyChange).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("does not capture or replace a newer displayed route with an older session response", async () => {
+    const before = speechDataPolicyFixture();
+    const current = speechDataPolicyFixture({ model: "newly-selected-model" });
+    const created = createDeferred<
+      ReturnType<typeof sessionResult> & { dataPolicy: typeof before }
+    >();
+    recordRequests(() => created.promise);
+    const onDataPolicyChange = vi.fn();
+    const { controller, options, onError } = controllerFixture({
+      dataPolicy: before,
+      onDataPolicyChange,
+    });
+    expect(controller.startDirect()).toBe(true);
+    await vi.dynamicImportSettled();
+    controller.update({ ...options, dataPolicy: current });
+    created.resolve({ ...sessionResult(), dataPolicy: before });
+
+    await waitForFast(() => expect(onError).toHaveBeenCalledOnce());
+
+    expect(onDataPolicyChange).toHaveBeenCalledExactlyOnceWith(current);
+    expectClosed("dictation-1", true);
+    expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
   it.each(["cancel", "restart", "draft switch"])(
     "does not revive a retired lazy capture after %s",
     async (transition) => {
@@ -692,6 +802,7 @@ describe("ComposerDictationOwner", () => {
     await startHold(target);
     expect(request).toHaveBeenCalledWith("talk.session.create", {
       sessionKey: "agent:researcher:conversation",
+      purpose: "dictation",
       mode: "transcription",
       transport: "gateway-relay",
       brain: "none",

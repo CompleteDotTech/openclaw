@@ -19,6 +19,8 @@ export function createComposerDictationOptions(
     connected: props.connected,
     enabled: props.composerHoldToRecord !== false,
     dictationAvailable: devicePicker.dictationStatus === "ready",
+    dataPolicy: devicePicker.dataPolicy,
+    onDataPolicyChange: devicePicker.setSessionDataPolicy,
     realtimeTalkActive: props.realtimeTalkActive === true,
     onCommit: (transcript: string, late?: true, preservePreview?: true) => {
       const target = state.composerTextarea;

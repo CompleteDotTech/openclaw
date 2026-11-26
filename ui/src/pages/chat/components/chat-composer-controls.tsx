@@ -3,6 +3,7 @@ import { Show, createSignal, createUniqueId, lazy, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Kbd, KeyboardShortcut, ShortcutHint } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { speechDataPolicyDescription } from "../../../components/speech-data-policy.tsx";
 import { registerSessionNavigationEnglish } from "../../../i18n/locales/en-session-navigation.ts";
 import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
@@ -13,6 +14,10 @@ import {
 } from "../../../lib/keyboard-shortcut-contract.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
+import {
+  speechDataPolicyRestrictsTalk,
+  type SpeechDataPolicyStatus,
+} from "../../../lib/speech-data-policy.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
 import { ComposerContent } from "./chat-composer-content.tsx";
@@ -157,12 +162,14 @@ type ComposerVoiceButtonProps = {
   microphonePicker?: JSX.Element;
   /** Dictation-only surfaces must not promise Talk. */
   idleLabel?: string;
+  dataPolicy?: SpeechDataPolicyStatus;
   onDictationPointerDown?: (event: PointerEvent) => void;
   onDirectDictationStart?: () => void;
   onToggleVoice?: () => void;
 };
 
 export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) {
+  const policyDescriptionId = createUniqueId();
   const active = () => props.readDictation?.()?.active === true;
   const arming = () => props.readDictation?.()?.arming === true;
   const finalizing = () => props.readDictation?.()?.finalizing === true;
@@ -172,15 +179,33 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
   const label = () =>
     active()
       ? t("chat.composer.dictationStopAndKeep")
-      : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
-  const tooltip = () =>
+      : (props.idleLabel ??
+        t(
+          speechDataPolicyRestrictsTalk(props.dataPolicy)
+            ? props.dataPolicy?.available && props.dataPolicy.permitted
+              ? "chat.speechDataPolicy.dictationOnly"
+              : "chat.speechDataPolicy.dictationUnavailable"
+            : "chat.composer.startVoiceInput",
+        ));
+  const gestureTooltip = () =>
     props.readDictation && !startsDictationDirectly() && !(active() || finalizing())
-      ? [props.submitDisabledReason, t("chat.composer.voiceGestureHint")]
+      ? [
+          props.submitDisabledReason,
+          t(
+            speechDataPolicyRestrictsTalk(props.dataPolicy)
+              ? "chat.speechDataPolicy.dictationOnlyHint"
+              : "chat.composer.voiceGestureHint",
+          ),
+        ]
           .filter(Boolean)
           .join(" · ")
       : active()
         ? label()
         : (props.submitDisabledReason ?? label());
+  const tooltip = () =>
+    [gestureTooltip(), props.dataPolicy && speechDataPolicyDescription(props.dataPolicy)]
+      .filter(Boolean)
+      .join(" ");
   // This shape owns pointer capture. Keep it stable while dictation rerenders,
   // or replacing the button releases capture and cancels the active hold.
   return (
@@ -236,6 +261,7 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
           }
           aria-disabled={finalizing() ? "true" : "false"}
           aria-label={label()}
+          aria-describedby={props.dataPolicy ? policyDescriptionId : undefined}
         >
           {active() ? (
             <Icon name="stop" />
@@ -248,6 +274,13 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
         </button>
       </openclaw-tooltip>
       <ComposerContent>{props.microphonePicker}</ComposerContent>
+      <Show when={props.dataPolicy}>
+        {(policy) => (
+          <span id={policyDescriptionId} class="sr-only">
+            {speechDataPolicyDescription(policy())}
+          </span>
+        )}
+      </Show>
     </span>
   );
 }
@@ -421,7 +454,9 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
       prop:content={
         action.camera
           ? cameraLabel()
-          : (props.submitDisabledReason ?? t("chat.composer.realtimeTalkCapability"))
+          : speechDataPolicyRestrictsTalk(props.dataPolicy)
+            ? t("chat.speechDataPolicy.talkUnavailable")
+            : (props.submitDisabledReason ?? t("chat.composer.realtimeTalkCapability"))
       }
     >
       <button
@@ -446,11 +481,18 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
               props.voiceStatus === "connecting" ||
               props.voiceStatus === "error"
             : !props.connected ||
+              speechDataPolicyRestrictsTalk(props.dataPolicy) ||
               props.sending ||
               props.isBusy ||
               Boolean(props.submitDisabledReason)
         }
-        aria-label={action.camera ? cameraLabel() : t("chat.composer.realtimeTalkCapability")}
+        aria-label={
+          action.camera
+            ? cameraLabel()
+            : speechDataPolicyRestrictsTalk(props.dataPolicy)
+              ? t("chat.speechDataPolicy.talkUnavailable")
+              : t("chat.composer.realtimeTalkCapability")
+        }
         aria-pressed={action.camera ? (props.voiceVideoEnabled ? "true" : "false") : undefined}
       >
         <Icon
@@ -545,6 +587,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
                 connected={props.connected}
                 readDictation={props.readDictation}
                 idleLabel={t("chat.composer.dictationCapability")}
+                dataPolicy={props.dataPolicy}
                 onDirectDictationStart={props.onDirectDictationStart}
               />
             </span>

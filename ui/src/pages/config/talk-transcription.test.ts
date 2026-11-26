@@ -5,6 +5,7 @@ import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { speechDataPolicyFixture } from "../../test-helpers/speech-data-policy.ts";
 import { createTalkMutationHarness } from "./talk.test-support.tsx";
 
 afterEach(() => {
@@ -12,6 +13,39 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+it("explains restricted batch dictation without claiming verified inference or Live readiness", async () => {
+  const { page } = createTalkMutationHarness({
+    navigate: vi.fn(),
+    catalogRequest: (_index, catalog) => ({
+      ...catalog,
+      // Even a ready route cannot make conversational Talk policy-permitted.
+      realtime: { ...catalog.realtime, ready: true },
+      transcription: { ready: true, providers: [], dataPolicy: speechDataPolicyFixture() },
+    }),
+  });
+  await waitForSolid(() =>
+    expect(page.textContent).toContain("Endpoint available · model unverified"),
+  );
+  expect(page.textContent).toContain("Model: synthetic-whisper");
+  expect(page.textContent).toContain("Destination: http://127.0.0.1:8080/v1");
+  expect(page.textContent).toContain("Transcription inference has not been verified.");
+  expect(page.textContent).toContain("Audio is transcribed after recording stops.");
+  expect(page.textContent).toContain(
+    "Live Talk and automatic spoken replies are unavailable under this policy.",
+  );
+  const row = [...page.querySelectorAll<HTMLElement>(".settings-row")].find((entry) =>
+    entry.textContent?.includes("Dictation data policy"),
+  );
+  expect(row?.getAttribute("role")).toBe("status");
+  const voiceNotesModel = [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
+    (picker) => picker.params.label === t("talkPage.transcription.modelTitle"),
+  );
+  expect(voiceNotesModel?.params.disabled).toBe(false);
+  expect(page.textContent).toContain(
+    "After changing this model, review dictation readiness before starting a new recording.",
+  );
 });
 
 it("reports the chosen speech-to-text provider as not ready and links to Models", async () => {
