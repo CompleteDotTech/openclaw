@@ -133,7 +133,7 @@ const catalog = {
       microphoneStopped: "Microphone input stopped. Choose an available input and start again.",
       microphoneFallback: "Microphone {number}",
       microphoneInput: "Microphone input",
-      microphoneAppliesNextSession: "Changes apply when you start your next Talk session.",
+      microphoneAppliesNextSession: "Changes apply when you next start dictation or Talk.",
       microphoneListUnsupported: "This browser cannot list microphone inputs.",
       noCameras: "No additional cameras found",
       noMicrophones: "No additional microphones found",
@@ -141,8 +141,13 @@ const catalog = {
       microphonePageInactive: "Microphone inputs are unavailable while this page is inactive.",
       microphonePermissionBlocked:
         "Microphone access is blocked. Allow it in browser site settings to list inputs.",
-      realtimeTalkCapability: "Tap to talk",
+      realtimeTalkCapability: "Talk",
       dictationCapability: "Dictation",
+      cancelDictation: "Cancel dictation",
+      stopTalk: "Stop Talk",
+      talkStatus: "Talk: {status}",
+      stopDictationBeforeTalk: "Stop and review dictation, or cancel it, before starting Talk.",
+      stopTalkBeforeDictation: "Stop Talk before starting dictation.",
       voiceCommandUnavailable:
         "Voice commands are unavailable until an authorized command executor is connected.",
       voiceCoordinationUnavailable:
@@ -164,10 +169,10 @@ const catalog = {
       dictationInterruptedRecovery:
         "Captured text was inserted. Check your connection and try again.",
       dictationStartRecovery: "Check microphone access and transcription settings, then try again.",
-      dictationFinalizing: "Transcribing…",
-      dictationListening: "Listening…",
-      dictationStarting: "Starting microphone…",
-      dictationStopAndKeep: "Stop and keep text",
+      dictationFinalizing: "Dictation: transcribing…",
+      dictationListening: "Dictation: listening…",
+      dictationStarting: "Dictation: starting microphone…",
+      dictationStopAndKeep: "Stop dictation and keep text",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",
       realtimeTalkRelayUnresponsive:
