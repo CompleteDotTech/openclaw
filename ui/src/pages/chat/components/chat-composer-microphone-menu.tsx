@@ -230,6 +230,16 @@ export function MicrophoneMenu(props: {
           ) : undefined,
         });
       }
+      if (props.picker.showRealtimeCapability !== false) {
+        if (capabilities.length === 0) {
+          separator("capabilities-separator");
+        }
+        notice(
+          "capability:command",
+          "chat-talk-input-picker__note",
+          t("chat.composer.voiceCommandUnavailable"),
+        );
+      }
       return entries;
     },
     { lazy: true },

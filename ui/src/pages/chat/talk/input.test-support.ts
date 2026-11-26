@@ -100,12 +100,20 @@ export function cameraFixture(deviceId?: string) {
   return { track, stream };
 }
 
+export function voiceCaptureLocksFixture() {
+  return {
+    request: vi.fn(async (name: string, _options: LockOptions, callback: LockGrantedCallback) =>
+      callback({ name, mode: "exclusive" }),
+    ),
+  };
+}
+
 export function stubMedia(...streams: MediaStream[]) {
   const getUserMedia = vi.fn();
   for (const stream of streams) {
     getUserMedia.mockResolvedValueOnce(stream);
   }
-  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+  vi.stubGlobal("navigator", { mediaDevices: { getUserMedia }, locks: voiceCaptureLocksFixture() });
   return getUserMedia;
 }
 
@@ -122,6 +130,7 @@ export function useRealtimeTalkMicrophoneFixture(): void {
   beforeEach(() => {
     vi.stubGlobal("navigator", {
       mediaDevices: { getUserMedia: vi.fn(async () => audioFixture().stream) },
+      locks: voiceCaptureLocksFixture(),
     });
   });
   afterEach(() => vi.unstubAllGlobals());

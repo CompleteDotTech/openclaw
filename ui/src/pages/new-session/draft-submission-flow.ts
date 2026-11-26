@@ -93,9 +93,16 @@ export class DraftSubmissionFlow {
     attachmentReadRevision: this.attachmentDraft.reads.revision,
   }));
   private readonly draftChanged = () => {
+    this.draftRevisionValue += 1;
     this.composerDraft.publish();
     this.callbacks.changed();
   };
+  // Explicit Send after dictation is valid only for the draft the user reviewed.
+  private draftRevisionValue = 0;
+
+  get draftRevision(): number {
+    return this.draftRevisionValue;
+  }
   private creationComposerValue: CreationComposer | undefined;
 
   get creationComposer(): CreationComposer | undefined {

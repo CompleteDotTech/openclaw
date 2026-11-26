@@ -214,7 +214,7 @@ describe("renderChatComposer controls", () => {
     if (!commit) {
       throw new Error("expected the composer transcript callback");
     }
-    return { container, active, locked, finishActive, onSend, commit };
+    return { container, props, active, locked, finishActive, onSend, commit };
   }
 
   it("finishes locked dictation before submitting the complete draft with history held", async () => {
@@ -258,6 +258,34 @@ describe("renderChatComposer controls", () => {
     }
   });
 
+  it("does not submit when the original dictation confirmation was canceled", async () => {
+    const { container, finishActive, onSend } = renderDictatingComposer();
+    const confirmation = createDeferred<boolean>();
+    finishActive.mockReturnValue(confirmation.promise);
+    primaryButton(container).click();
+    expect(finishActive).toHaveBeenCalledWith({ forSend: true });
+    confirmation.resolve(false);
+    await confirmation.promise;
+    await Promise.resolve();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("does not publish or send into a replacement session with the same key", async () => {
+    const { container, props, active, locked, finishActive, onSend, commit } = renderDictatingComposer();
+    const confirmation = createDeferred<boolean>();
+    finishActive.mockReturnValue(confirmation.promise);
+    primaryButton(container).click();
+    props.currentSessionId = "replacement-session";
+    active.mockReturnValue(false);
+    locked.mockReturnValue(false);
+    commit("stale dictated text");
+    confirmation.resolve(true);
+    await confirmation.promise;
+    await Promise.resolve();
+    expect(textarea(container).value).toBe("Typed beginning");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("toggles Talk separately from dictation without submitting the draft", async () => {
     const request = vi.fn().mockResolvedValue({
       realtime: { ready: true, providers: [] },
@@ -279,8 +307,27 @@ describe("renderChatComposer controls", () => {
     props.realtimeTalkActive = true;
     renderComposerInto(container, props);
     expect(button(container, t("chat.composer.dictationCapability")).disabled).toBe(true);
-    button(container, t("chat.composer.stopVoiceInput")).click();
+    button(container, t("chat.composer.stopTalk")).click();
     expect(onToggleRealtimeTalk).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores repeated keyboard activation and the second click of a Talk double-click", async () => {
+    const onToggleRealtimeTalk = vi.fn();
+    const { container } = renderComposer({
+      gatewayClient: createTestGatewayClient(async () => ({
+        realtime: { ready: true, providers: [] },
+        transcription: { ready: true, providers: [] },
+      })),
+      onToggleRealtimeTalk,
+    });
+    const talk = await vi.waitFor(() => button(container, t("chat.composer.realtimeTalkCapability")));
+    const repeat = new KeyboardEvent("keydown", { key: "Enter", repeat: true, cancelable: true, bubbles: true });
+    talk.dispatchEvent(repeat);
+    expect(repeat.defaultPrevented).toBe(true);
+    talk.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
+    expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
+    talk.click();
+    expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
   });
 
   it("disables live voice offline", () => {

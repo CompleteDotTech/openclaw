@@ -14,7 +14,7 @@ import {
 } from "./chat-composer.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatQuestionCard } from "./components/chat-question-card.ts";
-import { MockDictationAudioContext } from "./talk/input.test-support.ts";
+import { MockDictationAudioContext, voiceCaptureLocksFixture } from "./talk/input.test-support.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
 
 const discoverRealtimeTalkInputsMock = vi.fn();
@@ -168,6 +168,15 @@ it("labels the send action as Suggest and emits ephemeral typing state", () => {
 });
 
 beforeEach(() => {
+  const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+  Object.defineProperty(navigator, "locks", { configurable: true, value: voiceCaptureLocksFixture() });
+  onTestFinished(() => {
+    if (originalLocks) {
+      Object.defineProperty(navigator, "locks", originalLocks);
+    } else {
+      Reflect.deleteProperty(navigator, "locks");
+    }
+  });
   onTestFinished(installChatComposerPickerDismissal(document));
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => undefined);
@@ -233,7 +242,7 @@ it("shows actionable connecting guidance in a visible status region", () => {
   expect(pending?.textContent).toContain(microphoneGuidance);
   expect(pending?.closest(".sr-only")).toBeNull();
   expect(query('[role="alert"]')).toBeNull();
-  expect(button(container, t("chat.composer.stopVoiceInput")).disabled).toBe(false);
+  expect(button(container, t("chat.composer.stopTalk")).disabled).toBe(false);
 });
 
 it("shows dictation starting at once and microphone guidance only when access is slow", async () => {
@@ -258,12 +267,12 @@ it("shows dictation starting at once and microphone guidance only when access is
   await vi.advanceTimersByTimeAsync(800);
   expect(openMicrophoneMock).toHaveBeenCalledOnce();
   const starting = query('.agent-chat__dictation-status[role="status"]');
-  expect(starting?.textContent).toBe(t("chat.composer.dictationStarting"));
+  expect(starting?.querySelector(".agent-chat__dictation-phase")?.textContent).toBe(t("chat.composer.dictationStarting"));
   expect(
     starting?.querySelector('.agent-chat__voice-activity[data-status="connecting"]'),
   ).not.toBeNull();
   await vi.advanceTimersByTimeAsync(1_000);
-  expect(query('.agent-chat__dictation-status[role="status"]')?.textContent).toBe(
+  expect(query('.agent-chat__dictation-status[role="status"] .agent-chat__dictation-phase')?.textContent).toBe(
     microphoneGuidance,
   );
 });

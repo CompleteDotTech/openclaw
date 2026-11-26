@@ -1,7 +1,9 @@
 // @vitest-environment node
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
+import { voiceCaptureLocksFixture } from "./input.test-support.ts";
 import { RealtimeTalkSession } from "./session.ts";
 
 type TransportRuntime = typeof import("./transport.runtime.ts");
@@ -16,6 +18,7 @@ it.each(["stopped", "failed"] as const)(
   async (outcome) => {
     const moduleReady = createDeferred<TransportRuntime>();
     const importStarted = createDeferred();
+    const firstClose = createDeferred();
     vi.doMock("./transport.runtime.ts", () => {
       importStarted.resolve();
       return moduleReady.promise;
@@ -24,9 +27,9 @@ it.each(["stopped", "failed"] as const)(
       const track = Object.assign(new EventTarget(), { stop: vi.fn() });
       return { getTracks: () => [track], getAudioTracks: () => [track] };
     });
-    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia }, locks: voiceCaptureLocksFixture() });
     let allocations = 0;
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "talk.client.create") {
         return {
           provider: "fixture",
@@ -36,6 +39,9 @@ it.each(["stopped", "failed"] as const)(
         };
       }
       if (method === "talk.client.close") {
+        if (asOptionalRecord(params)?.voiceSessionId === "voice-runtime-1") {
+          await firstClose.promise;
+        }
         return { ok: true };
       }
       throw new Error(`Unexpected request: ${method}`);
@@ -73,19 +79,24 @@ it.each(["stopped", "failed"] as const)(
       expect(createRealtimeTalkTransport).not.toHaveBeenCalled();
       expect(session.getVoiceSessionId()).toBeUndefined();
 
-      // Both supported call slots must remain usable; one retry alone can hide a leaked slot.
+      // Both logical call slots remain usable while physical capture stays exclusive.
+      // A draining stopped call plus a new capture still exposes a leaked startup slot.
       await session.start();
-      await sibling.start();
       expect(session.getVoiceSessionId()).toBe("voice-runtime-1");
+      await expect(sibling.start()).rejects.toThrow(/microphone/i);
+      expect(getUserMedia).toHaveBeenCalledOnce();
+      expect(createRealtimeTalkTransport).toHaveBeenCalledOnce();
+      const closing = session.stop();
+      await sibling.start();
       expect(sibling.getVoiceSessionId()).toBe("voice-runtime-2");
       expect(getUserMedia).toHaveBeenCalledTimes(2);
       expect(createRealtimeTalkTransport).toHaveBeenCalledTimes(2);
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "talk.client.create",
-        "talk.client.create",
-      ]);
+      expect(request.mock.calls.filter(([method]) => method === "talk.client.create")).toHaveLength(2);
+      firstClose.resolve();
+      await closing;
     } finally {
       moduleReady.resolve(runtime);
+      firstClose.resolve();
       await starting.catch(() => undefined);
       await Promise.all([session.stop(), sibling.stop()]);
     }

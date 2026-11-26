@@ -1,7 +1,7 @@
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { patchSettings } from "../../app/settings.ts";
-import { focusComposerInput, selectComposerInput } from "../../lib/composer-input.ts";
+import { selectComposerInput } from "../../lib/composer-input.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
@@ -63,8 +63,12 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
       target.value = insertion.value;
       adjustTextareaHeight(target);
       queueMicrotask(() => {
-        if (target.isConnected) {
-          focusComposerInput(target, { preventScroll: true });
+        if (
+          target === read() &&
+          target.isConnected &&
+          target.value === insertion.value &&
+          target.ownerDocument.activeElement === target
+        ) {
           selectComposerInput(target, insertion.caret, insertion.caret);
         }
       });
@@ -83,6 +87,7 @@ type DirectDictationOptions = {
   getSessionKey?: () => string | undefined;
   isConnected: () => boolean;
   canCommit: () => boolean;
+  readDraftRevision?: () => number;
   onMessage: (message: string) => void;
   onError: (message: string) => void;
   onSubmit: () => void;
@@ -131,7 +136,7 @@ export class DirectDictationControl extends EventTarget {
     return this.session ?? undefined;
   }
 
-  prepare(ownerKey: string, inputDeviceId?: string) {
+  prepare(ownerKey: string, inputDeviceId?: string, presented = true) {
     if (this.owner?.key !== ownerKey) {
       this.owner = { key: ownerKey };
       this.session?.dispose();
@@ -145,8 +150,11 @@ export class DirectDictationControl extends EventTarget {
     const enabled = this.options.canCommit();
     const dictationOptions = {
       client,
+      draftKey: owner.key,
       connected,
+      presented,
       enabled,
+      readDraftRevision: this.options.readDraftRevision,
       prepareSession:
         client?.auth &&
         !roleScopesAllow({
@@ -192,7 +200,7 @@ export class DirectDictationControl extends EventTarget {
     return {
       voice: {
         connected,
-        disabled: !enabled,
+        disabled: !enabled || !presented,
         readDictation: () => dictation,
         microphonePicker: {
           devices: this.devicePicker.devices,
@@ -214,7 +222,7 @@ export class DirectDictationControl extends EventTarget {
         onDirectDictationStart: () => this.options.textarea.captureSelection(),
       },
       onSubmit: () => {
-        if (ownsDraft() && this.options.canCommit()) {
+        if (ownsDraft() && this.options.getClient() === client && this.options.canCommit()) {
           this.options.onSubmit();
         }
       },

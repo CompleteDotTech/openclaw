@@ -6,6 +6,7 @@ import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings, saveSettings } from "../../app/settings.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
+import type { VoiceRouteSession } from "../../lib/voice-route.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   attachChatRealtimeActions,
@@ -15,13 +16,14 @@ import {
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
 import { RealtimeTalkSelectedMicrophoneError } from "./talk/input.ts";
+import { voiceCaptureLocksFixture } from "./talk/input.test-support.ts";
 import { RealtimeTalkSession } from "./talk/session.ts";
 import type { RealtimeTalkCallbacks } from "./talk/shared.ts";
 
 type InspectableRealtimeTalkSession = {
   callbacks: RealtimeTalkCallbacks;
   options: { provider?: string; transport?: string };
-  localOptions: { inputDeviceId?: string; videoDeviceId?: string };
+  localOptions: { inputDeviceId?: string; videoDeviceId?: string; voiceRoute?: VoiceRouteSession };
 };
 
 let state: ChatRealtimeState;
@@ -81,14 +83,22 @@ function preview(nextDeviceId: string, label: string) {
 
 let startSpy: MockInstance<RealtimeTalkSession["start"]>;
 let prepareSpy: MockInstance<GatewaySpeechPlayback["prepare"]>;
+let locks: ReturnType<typeof voiceCaptureLocksFixture>;
+const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
 
 beforeEach(() => {
+  locks = voiceCaptureLocksFixture();
+  Object.defineProperty(navigator, "locks", { configurable: true, value: locks });
   vi.stubGlobal("localStorage", createStorageMock());
   prepareSpy = vi
     .spyOn(GatewaySpeechPlayback.prototype, "prepare")
     .mockImplementation(() => document.createElement("audio"));
   startSpy = vi.spyOn(RealtimeTalkSession.prototype, "start").mockResolvedValue(undefined);
-  vi.spyOn(RealtimeTalkSession.prototype, "stop").mockResolvedValue(undefined);
+  vi.spyOn(RealtimeTalkSession.prototype, "stop").mockImplementation(async function (
+    this: RealtimeTalkSession,
+  ) {
+    (this as unknown as InspectableRealtimeTalkSession).localOptions.voiceRoute?.cancel();
+  });
   vi.spyOn(RealtimeTalkSession.prototype, "switchCamera").mockResolvedValue(undefined);
   state = {
     client: {
@@ -104,10 +114,16 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  stopChatRealtimeTalk(state);
   vi.restoreAllMocks();
   saveSettings(loadSettings());
   localStorage.clear();
   vi.unstubAllGlobals();
+  if (originalLocks) {
+    Object.defineProperty(navigator, "locks", originalLocks);
+  } else {
+    Reflect.deleteProperty(navigator, "locks");
+  }
 });
 
 it.each([false, true])(
@@ -240,9 +256,10 @@ it("requires explicit one-shot consent and preserves the saved microphone for la
   expect(inspectSession().localOptions.inputDeviceId).toBe("usb-mic");
 });
 
-it.each(["dismiss", "route", "disconnect", "reconnect", "replacement"] as const)(
+it.each(["dismiss", "route", "session replacement", "disconnect", "reconnect", "replacement"] as const)(
   "revokes retained microphone recovery after %s",
   async (event) => {
+    state.currentSessionId = "first-incarnation";
     startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());
     await state.toggleRealtimeTalk();
     const retry = read().realtimeTalkUseSystemDefault!;
@@ -250,6 +267,8 @@ it.each(["dismiss", "route", "disconnect", "reconnect", "replacement"] as const)
       dismissRealtimeTalkError(state);
     } else if (event === "route") {
       state.sessionKey = "another-session";
+    } else if (event === "session replacement") {
+      state.currentSessionId = "second-incarnation";
     } else if (event === "disconnect") {
       state.connected = false;
     } else if (event === "reconnect") {
@@ -263,6 +282,7 @@ it.each(["dismiss", "route", "disconnect", "reconnect", "replacement"] as const)
     // A rejected stale activation stays consumed even if the context returns.
     state.connected = true;
     state.sessionKey = "main";
+    state.currentSessionId = "first-incarnation";
     await retry();
     expect(startSpy).toHaveBeenCalledTimes(calls);
   },
@@ -673,9 +693,49 @@ it("retires callback ownership before stopping a session", async () => {
   });
 });
 
-it.each(["stop", "route", "disconnect", "superseded", "replacement"] as const)(
+it("rejects callbacks after the conversation is replaced under the same session key", async () => {
+  state.currentSessionId = "first-incarnation";
+  const { callbacks } = await start();
+  callbacks.onStatus?.("listening");
+  state.currentSessionId = "second-incarnation";
+  callbacks.onTranscript?.({ role: "user", text: "Stale conversation text", final: true });
+  callbacks.onStatus?.("error", "Stale provider error");
+  callbacks.onInputLevel?.(0.9);
+  callbacks.onVideoCapability?.(true);
+  expect(entries()).toEqual([]);
+  expect(read()).toMatchObject({
+    realtimeTalkStatus: "listening",
+    realtimeTalkDetail: null,
+    realtimeTalkVideoCapable: false,
+  });
+  expect(read().realtimeTalkInputLevel.value).toBe(0);
+});
+
+it("does not dispatch a stopped Talk activation when browser capture admission arrives late", async () => {
+  const admission = createDeferred<LockGrantedCallback>();
+  const complete = createDeferred();
+  locks.request.mockImplementation(async (_name, _options, callback) => {
+    admission.resolve(callback);
+    await complete.promise;
+  });
+  const starting = state.toggleRealtimeTalk();
+  try {
+    const callback = await admission.promise;
+    stopChatRealtimeTalk(state);
+    await starting;
+    await callback({ name: "openclaw-voice-capture", mode: "exclusive" });
+    expect(state.client?.request).not.toHaveBeenCalled();
+    expect(startSpy).not.toHaveBeenCalled();
+    expect(read()).toMatchObject({ realtimeTalkActive: false, realtimeTalkStatus: "idle" });
+  } finally {
+    complete.resolve();
+  }
+});
+
+it.each(["stop", "route", "session replacement", "disconnect", "superseded", "replacement"] as const)(
   "prepares gesture audio synchronously and admits only the current startup after %s",
   async (change) => {
+    state.currentSessionId = "first-incarnation";
     type Runtime = typeof import("./talk/chat-actions-runtime.ts");
     const loaded = createDeferred<Runtime>();
     const loading = createDeferred();
@@ -698,10 +758,12 @@ it.each(["stop", "route", "disconnect", "superseded", "replacement"] as const)(
         }
       } else if (change === "route") {
         state.sessionKey = "another-session";
+      } else if (change === "session replacement") {
+        state.currentSessionId = "second-incarnation";
       } else if (change === "disconnect") {
         state.connected = false;
       } else {
-        const superseded = prepareSpy.mock.calls[0]?.[1];
+        const superseded = prepareSpy.mock.calls.find(([, callback]) => callback)?.[1];
         expect(superseded).toBeTypeOf("function");
         superseded?.();
       }

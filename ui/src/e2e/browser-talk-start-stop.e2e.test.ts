@@ -157,7 +157,7 @@ suite.define(() => {
       });
 
       await page.emulateMedia({ reducedMotion: "reduce" });
-      const tapToTalk = page.getByRole("button", { name: "Tap to talk" });
+      const tapToTalk = page.getByRole("button", { name: "Talk" });
       const activity = page.locator(".agent-chat__voice-activity");
       // At rest and in reduced motion CSS draws the meter; its shape shows the phase.
       const stillShape = () =>
@@ -173,10 +173,10 @@ suite.define(() => {
         .toBe(1);
       await expect
         .poll(() =>
-          page.locator('button[aria-label="Stop voice input"] .agent-chat__voice-activity').count(),
+          page.locator('button[aria-label="Stop Talk"] .agent-chat__voice-activity').count(),
         )
         .toBe(1);
-      const pillBox = await page.getByRole("button", { name: "Stop voice input" }).boundingBox();
+      const pillBox = await page.getByRole("button", { name: "Stop Talk" }).boundingBox();
       expect(pillBox?.width ?? 0).toBeGreaterThanOrEqual(60);
       await expect
         .poll(() =>
@@ -213,7 +213,7 @@ suite.define(() => {
       await expect.poll(() => activity.getAttribute("data-status")).toBe("thinking");
       expect(await stillShape()).not.toBe(listeningShape);
 
-      await page.getByRole("button", { name: "Stop voice input" }).click();
+      await page.getByRole("button", { name: "Stop Talk" }).click();
       await expect.poll(() => tapToTalk.isVisible()).toBe(true);
       await expect.poll(() => activity.count()).toBe(0);
     });
@@ -228,10 +228,10 @@ suite.define(() => {
       await installTalkBrowserFixtures(page);
 
       await openTalk(page);
-      await page.getByRole("button", { name: "Tap to talk" }).click();
+      await page.getByRole("button", { name: "Talk" }).click();
       await gateway.waitForRequest("talk.client.create");
       await completeGoogleSetup(page, gateway);
-      const stopVoice = page.getByRole("button", { name: "Stop voice input" });
+      const stopVoice = page.getByRole("button", { name: "Stop Talk" });
       await expect.poll(() => stopVoice.isVisible()).toBe(true);
       await page.mouse.move(0, 0);
       await stopVoice.evaluate(finishElementAnimations);
@@ -280,7 +280,7 @@ suite.define(() => {
 
       await openTalk(page);
 
-      await page.getByRole("button", { name: "Tap to talk" }).click();
+      await page.getByRole("button", { name: "Talk" }).click();
       await expect
         .poll(() =>
           page.evaluate(() =>
@@ -302,7 +302,7 @@ suite.define(() => {
       await captureVideoTalkProof(suite, page, "live-camera-preview.png");
       await expectTalkRequests(gateway);
 
-      await page.getByRole("button", { name: "Stop voice input" }).click();
+      await page.getByRole("button", { name: "Stop Talk" }).click();
       await expect.poll(() => preview.count()).toBe(0);
     });
   });
@@ -356,7 +356,7 @@ suite.define(() => {
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForTalkReady(page);
-      await page.getByRole("button", { name: "Tap to talk" }).click();
+      await page.getByRole("button", { name: "Talk" }).click();
       const request = await gateway.waitForRequest("talk.client.create");
       expect(request.params).toMatchObject({
         sessionKey: "agent:main:main",
@@ -373,7 +373,7 @@ suite.define(() => {
       await expectTalkRequests(gateway);
       await captureVideoTalkProof(suite, page, "05-gemini-live-camera-preview.png");
 
-      await page.getByRole("button", { name: "Stop voice input" }).click();
+      await page.getByRole("button", { name: "Stop Talk" }).click();
       await expect.poll(() => preview.count()).toBe(0);
       expect(await trackStates(page)).toEqual(["ended", "ended"]);
     });
@@ -405,7 +405,7 @@ suite.define(() => {
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForTalkReady(page);
-      await page.getByRole("button", { name: "Tap to talk" }).click();
+      await page.getByRole("button", { name: "Talk" }).click();
       await gateway.waitForRequest("talk.client.create");
       const turnCameraOn = page.getByRole("button", { name: "Turn camera on" });
       await expect.poll(() => turnCameraOn.isEnabled()).toBe(true);
@@ -418,7 +418,7 @@ suite.define(() => {
         .poll(() => page.getByRole("button", { name: "Turn camera on" }).isVisible())
         .toBe(true);
       await captureVideoTalkProof(suite, page, "03-camera-permission-blocked.png");
-      await page.getByRole("button", { name: "Stop voice input" }).click();
+      await page.getByRole("button", { name: "Stop Talk" }).click();
       expect(await trackStates(page)).toEqual(["ended"]);
     });
   });
@@ -436,7 +436,7 @@ suite.define(() => {
       await installTalkBrowserFixtures(page);
 
       await openTalk(page);
-      await page.getByRole("button", { name: "Tap to talk" }).click();
+      await page.getByRole("button", { name: "Talk" }).click();
       await gateway.waitForRequest("talk.client.create");
       await gateway.resolveDeferred("talk.client.create");
       await expect.poll(() => inputReady(page)).toBe(true);
@@ -510,7 +510,7 @@ suite.define(() => {
       for (let index = 0; index < 4; index += 1) {
         await gateway.deferNext("talk.session.appendAudio");
       }
-      await page.getByRole("button", { name: "Tap to talk" }).click();
+      await page.getByRole("button", { name: "Talk" }).click();
       await gateway.waitForRequest("talk.client.create");
       await expect.poll(() => inputReady(page)).toBe(true);
       await gateway.emitGatewayEvent("talk.event", { relaySessionId, type: "ready" });
@@ -547,12 +547,12 @@ suite.define(() => {
       await waitForTalkReady(page);
       await gateway.deferNext("talk.client.create");
 
-      await page.getByRole("button", { name: "Tap to talk" }).click();
+      await page.getByRole("button", { name: "Talk" }).click();
       await expect
         .poll(() => gateway.getRequests("talk.client.create").then((requests) => requests.length))
         .toBe(1);
-      await page.getByRole("button", { name: "Stop voice input" }).click();
-      await page.getByRole("button", { name: "Tap to talk" }).click();
+      await page.getByRole("button", { name: "Stop Talk" }).click();
+      await page.getByRole("button", { name: "Talk" }).click();
       await expect
         .poll(() => gateway.getRequests("talk.client.create").then((requests) => requests.length))
         .toBe(2);
@@ -595,10 +595,10 @@ suite.define(() => {
           }),
         ]);
       await expect
-        .poll(() => page.getByRole("button", { name: "Stop voice input" }).isVisible())
+        .poll(() => page.getByRole("button", { name: "Stop Talk" }).isVisible())
         .toBe(true);
 
-      await page.getByRole("button", { name: "Stop voice input" }).click();
+      await page.getByRole("button", { name: "Stop Talk" }).click();
       await expect
         .poll(() =>
           gateway
@@ -622,14 +622,14 @@ suite.define(() => {
       await page.setViewportSize({ width: 320, height: 720 });
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForTalkReady(page);
-      await page.getByRole("button", { name: "Tap to talk" }).click();
+      await page.getByRole("button", { name: "Talk" }).click();
       await expect
         .poll(() => page.locator(".agent-chat__composer-alert[role=status]").textContent())
         .toBe("Microphone access is blocked. Allow it in browser site settings to list inputs.");
       expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
       expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);
       await expect
-        .poll(() => page.getByRole("button", { name: "Tap to talk" }).isVisible())
+        .poll(() => page.getByRole("button", { name: "Talk" }).isVisible())
         .toBe(true);
     });
   });

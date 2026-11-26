@@ -16,7 +16,7 @@ export function voiceStatusLabel(
   status: RealtimeTalkStatus | undefined,
   detail: string | null | undefined,
 ) {
-  return (
+  const statusLabel = (
     detail?.trim() ||
     t(
       status === "thinking"
@@ -28,6 +28,7 @@ export function voiceStatusLabel(
             : "chat.voice.listening",
     )
   );
+  return t("chat.composer.talkStatus", { status: statusLabel });
 }
 
 // Levels stay with the Talk owner; only status/source changes replace the canvas.
