@@ -1,0 +1,48 @@
+{
+  "leadingSilenceMs": 500,
+  "cases": [
+    {
+      "id": "contractions",
+      "segments": [
+        { "text": "Let's inspect", "pauseAfterMs": 120 },
+        { "text": "reference file src slash auth dot ts end reference", "pauseAfterMs": 120 },
+        { "text": "because it's failing.", "pauseAfterMs": 1400 }
+      ],
+      "expectedTranscript": "Let's inspect reference file src slash auth dot ts end reference because it's failing.",
+      "expectedComposer": "Let's inspect @src/auth.ts because it's failing.",
+      "commandFile": "src/auth.ts",
+      "chooser": { "opens": true, "select": "src/auth.ts", "exitKey": "Enter" }
+    },
+    {
+      "id": "single-quoted-command",
+      "segments": [
+        { "text": "Say, ‘let’s use reference file notes end reference,’ as an example.", "pauseAfterMs": 1400 }
+      ],
+      "expectedTranscript": "Say, ‘let’s use reference file notes end reference,’ as an example.",
+      "expectedComposer": "Say, ‘let’s use reference file notes end reference,’ as an example.",
+      "commandFile": "notes",
+      "requiresSingleQuotes": true,
+      "chooser": { "opens": false, "select": null, "exitKey": null }
+    },
+    {
+      "id": "keyboard-confirm",
+      "segments": [
+        { "text": "Please inspect reference file notes end reference tomorrow.", "pauseAfterMs": 1400 }
+      ],
+      "expectedTranscript": "Please inspect reference file notes end reference tomorrow.",
+      "expectedComposer": "Please inspect @notes tomorrow.",
+      "commandFile": "notes",
+      "chooser": { "opens": true, "select": "notes", "exitKey": "Enter" }
+    },
+    {
+      "id": "keyboard-cancel",
+      "segments": [
+        { "text": "Please inspect reference file checklist end reference before lunch.", "pauseAfterMs": 1400 }
+      ],
+      "expectedTranscript": "Please inspect reference file checklist end reference before lunch.",
+      "expectedComposer": "Please inspect reference file checklist end reference before lunch.",
+      "commandFile": "checklist",
+      "chooser": { "opens": true, "select": "checklist", "exitKey": "Escape" }
+    }
+  ]
+}
