@@ -1,201 +1,47 @@
-# Evidence-only full Stage4 exact source proof with actual, separately built pinned-parent assets.
-name: P06 Stage4 full exact source and actual rollback proof
+# Evidence-only diagnostic. Exact product plus a disclosed failure-only test overlay.
 'on':
   push:
     branches:
     - evidence/p06-voice-routes-20261126
 permissions:
   contents: read
-concurrency:
-  group: p06-stage4-${{ github.workflow_sha }}
-  cancel-in-progress: false
 defaults:
   run:
     shell: bash --noprofile --norc -e -o pipefail {0}
+name: P06 bounded voice-selection diagnostic
+concurrency:
+  group: p06-voice-diagnostic-${{ github.workflow_sha }}
+  cancel-in-progress: false
 jobs:
-  parent-assets:
-    name: Build immutable provisional parent assets
+  diagnostic:
+    name: Diagnose exact a3f1 voice replacement without product edits
     if: github.repository == 'CompleteDotTech/openclaw'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       CI: 'true'
-      SOURCE_REPOSITORY: Marvinthebored/openclaw
-      SOURCE_SHA: 92182120e8baa7ce001f41dec7f0bba1489e6636
-      EXPECTED_SOURCE_TREE: d552dd794421d98780343e789ddc55249cf24646
-      WORKFLOW_SHA: ${{ github.workflow_sha }}
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-      PNPM_CONFIG_FROZEN_LOCKFILE: 'true'
-      GOGC: '30'
-      GOMEMLIMIT: 3GiB
-    steps:
-    - name: Initialize narrow parent build output
-      run: |
-        printf 'P06_PROOF_DIR=%s/p06-rollback-parent\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-        printf 'P06_ASSET_TARGET=%s/p06-rollback-parent/assets\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-        printf 'P06_ASSET_RECEIPT=%s/p06-rollback-parent/build-receipt.json\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-    - name: Checkout the exact provisional parent product
-      id: checkout
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        repository: ${{ env.SOURCE_REPOSITORY }}
-        ref: ${{ env.SOURCE_SHA }}
-        fetch-depth: '1'
-        persist-credentials: 'false'
-    - name: Verify actual parent source identity
-      id: identity
-      run: |
-        mkdir -p "$P06_PROOF_DIR"
-        test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-        test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_SOURCE_TREE"
-        git diff --exit-code
-        git diff --cached --exit-code
-        python3 - <<'PY'
-        import json
-        import os
-        from pathlib import Path
-        receipt = {key.lower(): os.environ[key] for key in ("SOURCE_REPOSITORY", "SOURCE_SHA", "WORKFLOW_SHA")}
-        receipt["source_tree"] = os.environ["EXPECTED_SOURCE_TREE"]
-        receipt["proof_kind"] = "provisional-parent-production-assets"
-        receipt["run_id"] = os.environ["GITHUB_RUN_ID"]
-        Path(os.environ["P06_PROOF_DIR"], "source.json").write_text(json.dumps(receipt, indent=2) + "\n")
-        print(json.dumps(receipt, indent=2))
-        PY
-    - name: Prepare canonical Node and pnpm without shared caches
-      id: toolchain
-      uses: ./.github/actions/setup-node-env
-      with:
-        node-version: 24.22.1
-        install-bun: 'false'
-        install-deps: 'false'
-        semantic-checks: 'true'
-        cache-mode: 'off'
-    - name: Install this checkout's frozen dependencies
-      id: install
-      run: |
-        {
-          node --version
-          pnpm --version
-          pnpm install --frozen-lockfile
-        } 2>&1 | tee "$P06_PROOF_DIR/install.log"
-        git diff --exit-code
-        git diff --cached --exit-code
-    - name: Build the actual pinned parent Control UI
-      id: build
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-      run: |
-        pnpm ui:build 2>&1 | tee "$P06_PROOF_DIR/build.log"
-    - name: Retain pristine parent assets and their complete manifest
-      id: assets
-      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-      run: |
-        python3 - <<'PY'
-        import hashlib
-        import json
-        import os
-        from pathlib import Path
-        import re
-        import shutil
-
-        source = Path("dist/control-ui")
-        assert source.is_dir()
-        html = (source / "index.html").read_text()
-        match = re.search(r"globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(\{.*?\});</script>", html, flags=re.S)
-        assert match, "Built document has no readable identity."
-        build = json.loads(match.group(1))
-        assert build["commit"] == os.environ["SOURCE_SHA"], build
-        assert build["dirty"] is False, build
-        assert isinstance(build["buildId"], str) and build["buildId"], build
-        target = Path(os.environ["P06_ASSET_TARGET"])
-        assert not target.exists(), target
-        shutil.copytree(source, target)
-        assets = {}
-        for path in sorted(target.rglob("*")):
-            assert not path.is_symlink(), path
-            if path.is_file():
-                data = path.read_bytes()
-                assets[path.relative_to(target).as_posix()] = {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
-        receipt = {
-            "source_repository": os.environ["SOURCE_REPOSITORY"],
-            "source_sha": os.environ["SOURCE_SHA"],
-            "source_tree": os.environ["EXPECTED_SOURCE_TREE"],
-            "workflow_sha": os.environ["WORKFLOW_SHA"],
-            "run_id": os.environ["GITHUB_RUN_ID"],
-            "build_command": "pnpm ui:build",
-            "build_info": build,
-            "index_sha256": assets["index.html"]["sha256"],
-            "asset_count": len(assets),
-            "asset_bytes": sum(item["bytes"] for item in assets.values()),
-            "assets": assets,
-        }
-        Path(os.environ["P06_ASSET_RECEIPT"]).write_text(json.dumps(receipt, indent=2) + "\n")
-        print(json.dumps({key: value for key, value in receipt.items() if key != "assets"}, indent=2))
-        PY
-    - name: Confirm tracked source remained unchanged
-      id: source-unchanged
-      if: ${{ !cancelled() && steps.identity.outcome == 'success' }}
-      run: |
-        {
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_SOURCE_TREE"
-          git diff --exit-code
-          git diff --cached --exit-code
-        } 2>&1 | tee "$P06_PROOF_DIR/source-unchanged.log"
-    - name: Retain only the actual parent build and public-source receipts
-      if: always()
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-      with:
-        name: p06-rollback-parent-assets-${{ github.run_id }}-${{ github.run_attempt }}
-        retention-days: '7'
-        if-no-files-found: error
-        include-hidden-files: 'true'
-        path: |
-          ${{ runner.temp }}/p06-rollback-parent/source.json
-          ${{ runner.temp }}/p06-rollback-parent/build-receipt.json
-          ${{ runner.temp }}/p06-rollback-parent/install.log
-          ${{ runner.temp }}/p06-rollback-parent/build.log
-          ${{ runner.temp }}/p06-rollback-parent/source-unchanged.log
-          ${{ runner.temp }}/p06-rollback-parent/assets/**
-  execution:
-    if: ${{ !cancelled() && github.repository == 'CompleteDotTech/openclaw' }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      CI: 'true'
       SOURCE_REPOSITORY: CompleteDotTech/openclaw
-      SOURCE_SHA: ${{ matrix.source_sha }}
-      PROOF_KIND: exact-committed-stage-proof
+      SOURCE_SHA: a3f1ce0731e45a4a3f2c36ae9942cd0ffe4c3892
       WORKFLOW_SHA: ${{ github.workflow_sha }}
+      PROOF_KIND: exact-product-with-failure-only-test-overlay
+      HARNESS_SHA256: 8d4589c761f3110220b58db2026fcd1e3e45b16aac16245e570bebc93fbb2ec7
+      HARNESS_SOURCE_PATH: ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
+      HARNESS_SOURCE_BLOB: 81fcab7b22ec04aeb5f5fc4845834f286927dcef
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
       OPENCLAW_VITEST_RUNTIME: node
       OPENCLAW_VITEST_MAX_WORKERS: '1'
       OPENCLAW_TEST_PROJECTS_PARALLEL: '1'
-      OPENCLAW_TYPECHECKER: tsgo
-      OPENCLAW_LINT_TOOL: oxlint
-      OPENCLAW_FORMAT_TOOL: oxfmt
+      OPENCLAW_CAPTURE_UI_PROOF: '1'
+      OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: '1'
       PNPM_CONFIG_FROZEN_LOCKFILE: 'true'
-      P06_TEST_FILES: ${{ matrix.test_files }}
-      P06_SOURCE_FILES: ${{ matrix.source_files }}
-      EXPECTED_SOURCE_TREE: ${{ matrix.source_tree }}
-      BASE_SHA: ${{ matrix.base_sha }}
-      EXPECTED_BASE_TREE: ${{ matrix.base_tree }}
-      SELECTION_BASE_SHA: ${{ matrix.selection_base_sha }}
-      EXPECTED_SELECTION_BASE_TREE: ${{ matrix.selection_base_tree }}
-      PROOF_LABEL: ${{ matrix.label }}
-      P06_FORMAT_FILES: ${{ matrix.format_files }}
-      P06_BROWSER_FILES: ${{ matrix.browser_files }}
-      GOGC: '30'
-      GOMEMLIMIT: 3GiB
-      P06_ROLLBACK_TEST_FILE: ${{ matrix.rollback_file }}
-      PROOF_LANE: execution
+      EXPECTED_SOURCE_TREE: 11d5f8194eb7bac343093a5b186f63a072c45586
+      EXPECTED_HARNESS_OUTPUT_SHA256: 10fbd5bd199821f3591c8a9f3b636ebc8c20f3a240c4294254691bc46d0677c8
+      EXPECTED_HARNESS_INPUT_SHA256: b7e00f63097a46e38133348fa2d06dcd30aae6f3b5c2af07c02bfdd46565479a
     steps:
-    - name: Initialize proof directory and require immutable identities
+    - name: Initialize narrow diagnostic output
       run: |
-        printf 'P06_PROOF_DIR=%s/p06-voice-proof\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-        for value in "$SOURCE_SHA" "$EXPECTED_SOURCE_TREE" "$BASE_SHA" "$EXPECTED_BASE_TREE" "$SELECTION_BASE_SHA" "$EXPECTED_SELECTION_BASE_TREE"; do
-          [[ "$value" =~ ^[0-9a-f]{40}$ ]]
-        done
-    - name: Checkout the exact committed stage
+        printf 'P06_PROOF_DIR=%s/p06-voice-diagnostic\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+    - name: Checkout the exact product source
       id: checkout
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
@@ -203,74 +49,33 @@ jobs:
         ref: ${{ env.SOURCE_SHA }}
         fetch-depth: '1'
         persist-credentials: 'false'
-    - name: Verify source, review base, and proof selection identities
+    - name: Verify exact product and original test identity
       id: identity
       run: |
         mkdir -p "$P06_PROOF_DIR"
-        test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-        test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_SOURCE_TREE"
-        for ref in "$BASE_SHA" "$SELECTION_BASE_SHA"; do
-          git -c core.hooksPath=/dev/null fetch --no-tags --depth=1 origin "$ref"
-        done
-        test "$(git rev-parse "$BASE_SHA^{tree}")" = "$EXPECTED_BASE_TREE"
-        test "$(git rev-parse "$SELECTION_BASE_SHA^{tree}")" = "$EXPECTED_SELECTION_BASE_TREE"
         git diff --exit-code
         git diff --cached --exit-code
         python3 - <<'PY'
-        import hashlib
-        import json
-        import os
+        import hashlib,json,os,subprocess
         from pathlib import Path
-        import subprocess
-
-        proof = Path(os.environ["P06_PROOF_DIR"])
-        selected = {}
-        for label, variable in (("format", "P06_FORMAT_FILES"), ("source", "P06_SOURCE_FILES"), ("test", "P06_TEST_FILES"), ("browser", "P06_BROWSER_FILES")):
-            files = os.environ[variable].splitlines()
-            assert label == "browser" or files, f"Missing selection: {label}"
-            assert all(files) and len(files) == len(set(files))
-            for name in files:
-                path = Path(name)
-                assert not path.is_absolute() and ".." not in path.parts and path.is_file(), name
-                subprocess.check_call(["git", "ls-files", "--error-unmatch", "--", name], stdout=subprocess.DEVNULL)
-            (proof / f"{label}-files.txt").write_text("\n".join(files) + ("\n" if files else ""))
-            selected[label] = files
-        changed = subprocess.check_output(["git", "diff", "--name-only", "--no-renames", "--diff-filter=ACMRT", os.environ["SELECTION_BASE_SHA"], "HEAD"], text=True).splitlines()
-        assert sorted(selected["format"]) == sorted(changed), "Format selection differs from the pinned source delta."
-        receipt = {
-            "label": os.environ["PROOF_LABEL"],
-            "proof_kind": os.environ["PROOF_KIND"],
-            "proof_lane": os.environ["PROOF_LANE"],
-            "source_repository": os.environ["SOURCE_REPOSITORY"],
-            "source_sha": os.environ["SOURCE_SHA"],
-            "source_tree": os.environ["EXPECTED_SOURCE_TREE"],
-            "review_base_sha": os.environ["BASE_SHA"],
-            "review_base_tree": os.environ["EXPECTED_BASE_TREE"],
-            "selection_base_sha": os.environ["SELECTION_BASE_SHA"],
-            "selection_base_tree": os.environ["EXPECTED_SELECTION_BASE_TREE"],
-            "workflow_repository": os.environ["GITHUB_REPOSITORY"],
-            "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
-            "workflow_sha": os.environ["WORKFLOW_SHA"],
-            "run_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
-            "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-            "selection": selected,
-            "rollback_test_file": os.environ["P06_ROLLBACK_TEST_FILE"],
-            "selected_source_sha256": {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in sorted(set(sum(selected.values(), [])))},
-            "limitations": [
-                "Synthetic Gateway, media, and provider fixtures only; no live credentials or microphone hardware.",
-                "Native/global, stable upgrade, and post-parent-merge qualification are NOT RUN.",
-                "Ratchets compare this exact stage to its actual review base, without synthesizing a PR merge checkout.",
-            ],
+        env=os.environ
+        def git(*args): return subprocess.check_output(["git",*args],text=True).strip()
+        assert git("rev-parse","HEAD")==env["SOURCE_SHA"]
+        assert git("rev-parse","HEAD^{tree}")==env["EXPECTED_SOURCE_TREE"]
+        assert git("rev-parse","HEAD:"+env["HARNESS_SOURCE_PATH"])==env["HARNESS_SOURCE_BLOB"]
+        assert hashlib.sha256(Path(env["HARNESS_SOURCE_PATH"]).read_bytes()).hexdigest()==env["EXPECTED_HARNESS_INPUT_SHA256"]
+        receipt={
+          "source_repository":env["SOURCE_REPOSITORY"],"source_sha":env["SOURCE_SHA"],"source_tree":env["EXPECTED_SOURCE_TREE"],
+          "workflow_sha":env["WORKFLOW_SHA"],"workflow_ref":env["GITHUB_WORKFLOW_REF"],"proof_kind":env["PROOF_KIND"],
+          "run_url":f"{env['GITHUB_SERVER_URL']}/{env['GITHUB_REPOSITORY']}/actions/runs/{env['GITHUB_RUN_ID']}",
+          "test_file":env["HARNESS_SOURCE_PATH"],"original_test_blob":env["HARNESS_SOURCE_BLOB"],
+          "original_test_sha256":env["EXPECTED_HARNESS_INPUT_SHA256"],"instrumented_test_sha256":env["EXPECTED_HARNESS_OUTPUT_SHA256"],
+          "harness_patch_sha256":env["HARNESS_SHA256"],
+          "qualification":"Diagnostic only: exact product with one disclosed failure-only test overlay; original wait/rethrow preserved. Synthetic RPC metadata/alerts/native held lock only; no transcript output.",
         }
-        (proof / "source.json").write_text(json.dumps(receipt, indent=2) + "\n")
-        print(json.dumps(receipt, indent=2))
+        (Path(env["P06_PROOF_DIR"])/"source.json").write_text(json.dumps(receipt,indent=2)+"\n")
+        print(json.dumps(receipt,indent=2))
         PY
-        {
-          uname -a
-          getconf _NPROCESSORS_ONLN
-          free -m
-          df -h .
-        } 2>&1 | tee "$P06_PROOF_DIR/resources.log"
     - name: Prepare canonical Node and pnpm without shared caches
       id: toolchain
       uses: ./.github/actions/setup-node-env
@@ -290,1170 +95,116 @@ jobs:
         } 2>&1 | tee "$P06_PROOF_DIR/install.log"
         git diff --exit-code
         git diff --cached --exit-code
-    - name: Focused stage regressions and unchanged owner coverage
-      id: tests
+    - name: Apply the disclosed failure-only telemetry overlay
+      id: harness
       if: ${{ !cancelled() && steps.install.outcome == 'success' }}
       run: |
-        mapfile -t test_files < "$P06_PROOF_DIR/test-files.txt"
-        pnpm test "${test_files[@]}" --maxWorkers=1 2>&1 | tee "$P06_PROOF_DIR/tests.log"
-    - name: Retain early unit failure diagnostics
-      if: ${{ !cancelled() && steps.tests.outcome == 'failure' }}
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-      with:
-        name: p06-stage4-unit-failure-${{ github.run_id }}-${{ github.run_attempt }}
-        retention-days: 7
-        if-no-files-found: error
-        path: |
-          ${{ runner.temp }}/p06-voice-proof/source.json
-          ${{ runner.temp }}/p06-voice-proof/tests.log
-    - name: Production Control UI typecheck
-      id: types
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-      run: |
-        pnpm tsgo:ui 2>&1 | tee "$P06_PROOF_DIR/types.log"
-    - name: Retain early production-types failure diagnostics
-      if: ${{ !cancelled() && steps.types.outcome == 'failure' }}
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-      with:
-        name: p06-stage4-production-types-failure-${{ github.run_id }}-${{ github.run_attempt }}
-        retention-days: 7
-        if-no-files-found: error
-        path: |
-          ${{ runner.temp }}/p06-voice-proof/source.json
-          ${{ runner.temp }}/p06-voice-proof/types.log
-    - name: Type-aware lint for selected production owners
-      id: lint
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-      run: |
-        mapfile -t source_files < "$P06_PROOF_DIR/source-files.txt"
-        node scripts/run-oxlint.mjs --tsconfig tsconfig.ui.json "${source_files[@]}" 2>&1 | tee "$P06_PROOF_DIR/lint.log"
-    - name: Canonical formatting and parity for the frozen changed files
-      id: format
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-      run: |
-        mapfile -t format_files < "$P06_PROOF_DIR/format-files.txt"
-        pnpm format:check --no-error-on-unmatched-pattern -- "${format_files[@]}" 2>&1 | tee "$P06_PROOF_DIR/format.log"
-    - name: Verify Control UI copy and catalog wiring
-      id: i18n
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-      run: |
-        pnpm ui:i18n:verify 2>&1 | tee "$P06_PROOF_DIR/i18n.log"
-    - name: Build Control UI from this exact committed source
-      id: build
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-      run: |
-        pnpm ui:build 2>&1 | tee "$P06_PROOF_DIR/build.log"
-    - name: Retrieve only this run's actual parent assets
-      id: rollback-parent-assets
-      if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.rollback == 'true' && needs.parent-assets.result == 'success' }}
-      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-      with:
-        name: p06-rollback-parent-assets-${{ github.run_id }}-${{ github.run_attempt }}
-        path: ${{ runner.temp }}/p06-rollback/parent
-    - name: Verify transferred parent assets and freeze exact child assets
-      id: rollback-assets
-      if: ${{ !cancelled() && steps.rollback-parent-assets.outcome == 'success' }}
-      run: |
+        cat > "$P06_PROOF_DIR/voice-selection-diagnostic.patch" <<'P06_VOICE_DIAGNOSTIC_PATCH'
+        --- a/ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
+        +++ b/ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
+        @@ -99,7 +99,22 @@
+                 voice: "alloy",
+                 phase: "requested",
+               });
+        -      const replacement = await gateway.waitForRequest("talk.client.create", { after: 1 });
+        +      const replacement = await gateway
+        +        .waitForRequest("talk.client.create", { after: 1 })
+        +        .catch(async (error) => {
+        +          console.info("[p06-voice-selection-diagnostic]", JSON.stringify({
+        +            requests: (await gateway.getRequests()).filter((request) =>
+        +              ["talk.client.create", "talk.client.close", "talk.voice.complete"].includes(request.method),
+        +            ),
+        +            alerts: await page.getByRole("alert").allTextContents(),
+        +            status: await page.locator(".agent-chat__voice-status").allTextContents(),
+        +            stopTalkCount: await stopVoice.count(),
+        +            heldCapture: await page.evaluate(async () =>
+        +              (await navigator.locks.query()).held?.filter((lock) => lock.name === "openclaw-voice-capture"),
+        +            ),
+        +          }));
+        +          throw error;
+        +        });
+               expect(replacement.params).toMatchObject({
+                 sessionKey: "agent:main:main",
+                 transport: "webrtc",
+        P06_VOICE_DIAGNOSTIC_PATCH
         python3 - <<'PY'
-        import hashlib
-        import json
-        import os
+        import hashlib,json,os,subprocess
         from pathlib import Path
-
-        parent = Path(os.environ["RUNNER_TEMP"], "p06-rollback", "parent")
-        receipt = json.loads((parent / "build-receipt.json").read_text())
-        assert receipt["source_sha"] == "92182120e8baa7ce001f41dec7f0bba1489e6636"
-        assert receipt["source_tree"] == "d552dd794421d98780343e789ddc55249cf24646"
-        assert receipt["workflow_sha"] == os.environ["WORKFLOW_SHA"]
-        assert receipt["run_id"] == os.environ["GITHUB_RUN_ID"]
-        assert receipt["build_info"]["commit"] == receipt["source_sha"]
-        assert receipt["build_info"]["dirty"] is False
-        assets = parent / "assets"
-        actual = {}
-        for path in sorted(assets.rglob("*")):
-            assert not path.is_symlink(), path
-            if path.is_file():
-                data = path.read_bytes()
-                actual[path.relative_to(assets).as_posix()] = {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
-        assert actual and actual == receipt["assets"], "Transferred parent assets differ from the producer manifest."
-        Path(os.environ["P06_PROOF_DIR"], "rollback-parent-build.json").write_text(json.dumps(receipt, indent=2) + "\n")
-        print(f"Verified {len(actual)} exact-parent production assets.")
+        env=os.environ;proof=Path(env["P06_PROOF_DIR"]);patch=proof/"voice-selection-diagnostic.patch"
+        assert hashlib.sha256(patch.read_bytes()).hexdigest()==env["HARNESS_SHA256"]
+        subprocess.check_call(["git","-c","core.hooksPath=/dev/null","apply","--check",str(patch)])
+        subprocess.check_call(["git","-c","core.hooksPath=/dev/null","apply",str(patch)])
+        changed=subprocess.check_output(["git","diff","--name-only"],text=True).splitlines()
+        assert changed==[env["HARNESS_SOURCE_PATH"]],changed
+        assert hashlib.sha256(Path(changed[0]).read_bytes()).hexdigest()==env["EXPECTED_HARNESS_OUTPUT_SHA256"]
+        (proof/"harness.json").write_text(json.dumps({"source_sha":env["SOURCE_SHA"],"patch_sha256":env["HARNESS_SHA256"],"changed_paths":changed,"instrumented_test_sha256":env["EXPECTED_HARNESS_OUTPUT_SHA256"]},indent=2)+"\n")
         PY
-        export P06_ASSET_TARGET="$RUNNER_TEMP/p06-rollback/child-assets"
-        export P06_ASSET_RECEIPT="$P06_PROOF_DIR/rollback-child-build.json"
-        python3 - <<'PY'
-        import hashlib
-        import json
-        import os
-        from pathlib import Path
-        import re
-        import shutil
-
-        source = Path("dist/control-ui")
-        assert source.is_dir()
-        html = (source / "index.html").read_text()
-        match = re.search(r"globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(\{.*?\});</script>", html, flags=re.S)
-        assert match, "Built document has no readable identity."
-        build = json.loads(match.group(1))
-        assert build["commit"] == os.environ["SOURCE_SHA"], build
-        assert build["dirty"] is False, build
-        assert isinstance(build["buildId"], str) and build["buildId"], build
-        target = Path(os.environ["P06_ASSET_TARGET"])
-        assert not target.exists(), target
-        shutil.copytree(source, target)
-        assets = {}
-        for path in sorted(target.rglob("*")):
-            assert not path.is_symlink(), path
-            if path.is_file():
-                data = path.read_bytes()
-                assets[path.relative_to(target).as_posix()] = {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
-        receipt = {
-            "source_repository": os.environ["SOURCE_REPOSITORY"],
-            "source_sha": os.environ["SOURCE_SHA"],
-            "source_tree": os.environ["EXPECTED_SOURCE_TREE"],
-            "workflow_sha": os.environ["WORKFLOW_SHA"],
-            "run_id": os.environ["GITHUB_RUN_ID"],
-            "build_command": "pnpm ui:build",
-            "build_info": build,
-            "index_sha256": assets["index.html"]["sha256"],
-            "asset_count": len(assets),
-            "asset_bytes": sum(item["bytes"] for item in assets.values()),
-            "assets": assets,
-        }
-        Path(os.environ["P06_ASSET_RECEIPT"]).write_text(json.dumps(receipt, indent=2) + "\n")
-        print(json.dumps({key: value for key, value in receipt.items() if key != "assets"}, indent=2))
-        PY
-        python3 - <<'PY'
-        import json
-        import os
-        from pathlib import Path
-
-        proof = Path(os.environ["P06_PROOF_DIR"])
-        parent = json.loads((proof / "rollback-parent-build.json").read_text())
-        child = json.loads((proof / "rollback-child-build.json").read_text())
-        assert child["source_sha"] == os.environ["SOURCE_SHA"]
-        assert child["source_tree"] == os.environ["EXPECTED_SOURCE_TREE"]
-        assert parent["build_info"]["buildId"] != child["build_info"]["buildId"]
-        assert parent["index_sha256"] != child["index_sha256"]
-        inputs = {"parent": {key: value for key, value in parent.items() if key != "assets"}, "child": {key: value for key, value in child.items() if key != "assets"}, "qualification": "Both production asset directories are exact-source builds; the browser test must copy them before swapping and must preserve their original embedded identities."}
-        (proof / "rollback-inputs.json").write_text(json.dumps(inputs, indent=2) + "\n")
-        print(json.dumps(inputs, indent=2))
-        PY
-        printf 'P06_ROLLBACK_PARENT_ASSETS=%s/p06-rollback/parent/assets\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-        printf 'P06_ROLLBACK_CHILD_ASSETS=%s/p06-rollback/child-assets\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-        printf 'P06_ROLLBACK_CHILD_SHA=%s\n' "$SOURCE_SHA" >> "$GITHUB_ENV"
-    - name: Exercise selected voice fixtures in real Chromium
+        git diff --cached --exit-code
+    - name: Run only the original agent-requested voice-change case
       id: browser
-      if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.browser_files != '' }}
+      if: ${{ !cancelled() && steps.harness.outcome == 'success' }}
       env:
-        OPENCLAW_CAPTURE_UI_PROOF: '1'
-        OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: '1'
+        OPENCLAW_UI_E2E_ARTIFACT_DIR: ${{ runner.temp }}/p06-voice-diagnostic/ui-proof
       run: |
-        export OPENCLAW_UI_E2E_ARTIFACT_DIR="$P06_PROOF_DIR/ui-proof"
-        mapfile -t browser_files < "$P06_PROOF_DIR/browser-files.txt"
-        pnpm test:ui:e2e "${browser_files[@]}" --maxWorkers=1 --reporter=default --reporter=json --outputFile.json "$P06_PROOF_DIR/browser-result.json" 2>&1 | tee "$P06_PROOF_DIR/browser.log"
-        python3 - <<'PY'
-        import json
-        import os
-        from pathlib import Path
-
-        proof = Path(os.environ["P06_PROOF_DIR"])
-        report = json.loads((proof / "browser-result.json").read_text())
-        expected = {'ui/src/e2e/browser-dictation-status.e2e.test.ts': 17, 'ui/src/e2e/browser-talk-start-stop.e2e.test.ts': 11, 'ui/src/e2e/browser-talk-webkit-error.e2e.test.ts': 3, 'ui/src/e2e/browser-talk-voice-selection.e2e.test.ts': 3, 'ui/src/e2e/browser-talk-ordering.e2e.test.ts': 2, 'ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts': 2, 'ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts': 2, 'ui/src/e2e/browser-voice-routes.e2e.test.ts': 9}
-        assert report["success"] is True and report["numTotalTests"] == 49 and report["numPassedTests"] == 49
-        for key in ("numFailedTestSuites", "numPendingTestSuites", "numFailedTests", "numPendingTests", "numTodoTests"):
-            assert report[key] == 0, key
-        assert len(report["testResults"]) == len(expected)
-        observed = {}
-        for result in report["testResults"]:
-            name = Path(result["name"]).relative_to(Path.cwd()).as_posix()
-            assert name in expected and result["status"] == "passed"
-            assert len(result["assertionResults"]) == expected[name]
-            assert all(test["status"] == "passed" for test in result["assertionResults"])
-            observed[name] = len(result["assertionResults"])
-        assert observed == expected
-        print("Verified all 49 browser assertions across the 8 selected files passed with zero skipped/pending/todo/failed cases.")
-        PY
-    - name: Exercise actual parent to child to parent compatibility
-      id: rollback
-      if: ${{ !cancelled() && steps.rollback-assets.outcome == 'success' && matrix.rollback == 'true' }}
-      env:
-        P06_ROLLBACK_TEST_FILE: ${{ matrix.rollback_file }}
-        OPENCLAW_CAPTURE_UI_PROOF: '1'
-        OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: '1'
-      run: |
-        export OPENCLAW_UI_E2E_ARTIFACT_DIR="$P06_PROOF_DIR/ui-proof"
-        test -n "$P06_ROLLBACK_TEST_FILE"
-        git ls-files --error-unmatch -- "$P06_ROLLBACK_TEST_FILE"
-        pnpm test:ui:e2e "$P06_ROLLBACK_TEST_FILE" --maxWorkers=1 --reporter=default --reporter=json --outputFile.json "$P06_PROOF_DIR/rollback-result.json" 2>&1 | tee "$P06_PROOF_DIR/rollback.log"
-        python3 - <<'PY'
-        import json
-        import os
-        from pathlib import Path
-
-        report = json.loads(Path(os.environ["P06_PROOF_DIR"], "rollback-result.json").read_text())
-        assert report["success"] is True
-        assert report["numTotalTests"] == 1 and report["numPassedTests"] == 1
-        for key in ("numFailedTestSuites", "numPendingTestSuites", "numFailedTests", "numPendingTests", "numTodoTests"):
-            assert report[key] == 0, key
-        assert len(report["testResults"]) == 1
-        result = report["testResults"][0]
-        assert Path(result["name"]).resolve() == Path(os.environ["P06_ROLLBACK_TEST_FILE"]).resolve()
-        assert result["status"] == "passed"
-        assert len(result["assertionResults"]) == 1
-        assertion = result["assertionResults"][0]
-        assert assertion["status"] == "passed"
-        assert assertion["title"] == "preserves real saved devices and drafts and returns idle after rolling back active dictation"
-        print("Verified exact rollback suite: 1 executed, 1 passed, 0 skipped/pending/todo/failed.")
-        PY
-    - name: Confirm tracked source remained unchanged
+        pnpm test:ui:e2e ui/src/e2e/browser-talk-voice-selection.e2e.test.ts --testNamePattern 'keeps the composer free of voice settings' --maxWorkers=1 --reporter=default --reporter=json --outputFile.json "$P06_PROOF_DIR/browser-result.json" 2>&1 | tee "$P06_PROOF_DIR/browser.log"
+    - name: Verify product unchanged and retain selected-case result
       id: source-unchanged
-      if: ${{ !cancelled() && steps.identity.outcome == 'success' }}
+      if: ${{ !cancelled() && steps.harness.outcome == 'success' }}
       run: |
-        {
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_SOURCE_TREE"
-          git diff --exit-code
-          git diff --cached --exit-code
-        } 2>&1 | tee "$P06_PROOF_DIR/source-unchanged.log"
-    - name: Record every observed lane and unrun qualification
+        python3 - <<'PY' 2>&1 | tee "$P06_PROOF_DIR/source-unchanged.log"
+        import hashlib,json,os,subprocess
+        from pathlib import Path
+        env=os.environ;proof=Path(env["P06_PROOF_DIR"])
+        def git(*args):return subprocess.check_output(["git",*args],text=True).strip()
+        assert git("rev-parse","HEAD")==env["SOURCE_SHA"]
+        assert git("rev-parse","HEAD^{tree}")==env["EXPECTED_SOURCE_TREE"]
+        assert git("diff","--name-only").splitlines()==[env["HARNESS_SOURCE_PATH"]]
+        assert hashlib.sha256(Path(env["HARNESS_SOURCE_PATH"]).read_bytes()).hexdigest()==env["EXPECTED_HARNESS_OUTPUT_SHA256"]
+        subprocess.check_call(["git","diff","--cached","--exit-code"])
+        report=json.loads((proof/"browser-result.json").read_text())
+        selected=[test for result in report["testResults"] for test in result["assertionResults"] if test["status"] in {"passed","failed"}]
+        assert len(selected)==1 and selected[0]["title"]=="keeps the composer free of voice settings while preserving agent-requested voice changes"
+        assert report["numTotalTests"]==3 and report["numPendingTests"]==2 and report["numTodoTests"]==0
+        result={"executed":1,"passed":report["numPassedTests"],"failed":report["numFailedTests"],"filtered":2,"case":selected[0]["title"],"product_unchanged":True,"harness_unchanged":True,"qualification":"Diagnostic with disclosed test-only instrumentation; not final source qualification."}
+        (proof/"diagnostic-result.json").write_text(json.dumps(result,indent=2)+"\n")
+        print(json.dumps(result,indent=2))
+        PY
+    - name: Record narrow diagnostic outcomes
       if: always()
       env:
         CHECKOUT_RESULT: ${{ steps.checkout.outcome }}
         IDENTITY_RESULT: ${{ steps.identity.outcome }}
         TOOLCHAIN_RESULT: ${{ steps.toolchain.outcome }}
         INSTALL_RESULT: ${{ steps.install.outcome }}
-        TESTS_RESULT: ${{ steps.tests.outcome }}
-        TYPES_RESULT: ${{ steps.types.outcome }}
-        LINT_RESULT: ${{ steps.lint.outcome }}
-        FORMAT_RESULT: ${{ steps.format.outcome }}
-        I18N_RESULT: ${{ steps.i18n.outcome }}
-        BUILD_RESULT: ${{ steps.build.outcome }}
+        HARNESS_RESULT: ${{ steps.harness.outcome }}
         BROWSER_RESULT: ${{ steps.browser.outcome }}
         SOURCE_UNCHANGED_RESULT: ${{ steps.source-unchanged.outcome }}
-        ROLLBACK_PARENT_ASSETS_RESULT: ${{ steps.rollback-parent-assets.outcome }}
-        ROLLBACK_ASSETS_RESULT: ${{ steps.rollback-assets.outcome }}
-        ROLLBACK_RESULT: ${{ steps.rollback.outcome }}
       run: |
         mkdir -p "$P06_PROOF_DIR"
         python3 - <<'PY'
-        import json
-        import os
+        import json,os
         from pathlib import Path
-
-        proof = Path(os.environ["P06_PROOF_DIR"])
-        labels = {"success": "PASS", "failure": "FAIL", "skipped": "NOT RUN", "cancelled": "CANCELLED", "": "NOT RUN"}
-        outcomes = {name.lower().removesuffix("_result"): labels[os.environ.get(name, "")] for name in ('CHECKOUT_RESULT', 'IDENTITY_RESULT', 'TOOLCHAIN_RESULT', 'INSTALL_RESULT', 'TESTS_RESULT', 'TYPES_RESULT', 'LINT_RESULT', 'FORMAT_RESULT', 'I18N_RESULT', 'BUILD_RESULT', 'BROWSER_RESULT', 'SOURCE_UNCHANGED_RESULT', 'ROLLBACK_PARENT_ASSETS_RESULT', 'ROLLBACK_ASSETS_RESULT', 'ROLLBACK_RESULT')}
-        for name in ("live_microphone", "live_provider", "native_global", "stable_upgrade", "post_parent_merge"):
-            outcomes[name] = "NOT RUN"
-        receipt = {
-            "label": os.environ["PROOF_LABEL"],
-            "proof_kind": os.environ["PROOF_KIND"],
-            "proof_lane": os.environ["PROOF_LANE"],
-            "source_sha": os.environ["SOURCE_SHA"],
-            "source_tree": os.environ["EXPECTED_SOURCE_TREE"],
-            "review_base_sha": os.environ["BASE_SHA"],
-            "workflow_sha": os.environ["WORKFLOW_SHA"],
-            "outcomes": outcomes,
-        }
-        (proof / "outcomes.json").write_text(json.dumps(receipt, indent=2) + "\n")
-        summary = [f"## P06 {os.environ['PROOF_LABEL']} committed-stage proof", "", f"Source `{os.environ['SOURCE_SHA']}`; review base `{os.environ['BASE_SHA']}`.", "", "| Lane | Observed result |", "| --- | --- |"]
-        summary.extend(f"| {name} | {result} |" for name, result in outcomes.items())
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
-            output.write("\n".join(summary) + "\n")
-        print(json.dumps(receipt, indent=2))
+        status={"success":"PASS","failure":"FAIL","skipped":"NOT RUN","cancelled":"CANCELLED","":"NOT RUN"}
+        outcomes={key.lower().removesuffix("_result"):status[value] for key,value in os.environ.items() if key.endswith("_RESULT")}
+        outcomes.update({"full_tests":"NOT RUN","types":"NOT RUN","lint":"NOT RUN","full_browser_matrix":"NOT RUN","live_microphone":"NOT RUN","live_provider":"NOT RUN"})
+        result={"proof_kind":os.environ["PROOF_KIND"],"source_sha":os.environ["SOURCE_SHA"],"workflow_sha":os.environ["WORKFLOW_SHA"],"outcomes":outcomes,"qualification":"Diagnostic only; original selected assertion failure is preserved."}
+        (Path(os.environ["P06_PROOF_DIR"])/"outcomes.json").write_text(json.dumps(result,indent=2)+"\n")
+        print(json.dumps(result,indent=2))
         PY
-    - name: Retain only task logs and synthetic UI evidence
+    - name: Retain only synthetic diagnostic logs and receipts
       if: always()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
-        name: p06-final-stage4-execution-${{ github.run_id }}-${{ github.run_attempt }}
-        retention-days: 7
+        name: p06-voice-selection-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+        retention-days: '7'
         if-no-files-found: error
         path: |
-          ${{ runner.temp }}/p06-voice-proof/source.json
-          ${{ runner.temp }}/p06-voice-proof/outcomes.json
-          ${{ runner.temp }}/p06-voice-proof/format-files.txt
-          ${{ runner.temp }}/p06-voice-proof/source-files.txt
-          ${{ runner.temp }}/p06-voice-proof/test-files.txt
-          ${{ runner.temp }}/p06-voice-proof/browser-files.txt
-          ${{ runner.temp }}/p06-voice-proof/resources.log
-          ${{ runner.temp }}/p06-voice-proof/install.log
-          ${{ runner.temp }}/p06-voice-proof/browser.log
-          ${{ runner.temp }}/p06-voice-proof/build.log
-          ${{ runner.temp }}/p06-voice-proof/format.log
-          ${{ runner.temp }}/p06-voice-proof/i18n.log
-          ${{ runner.temp }}/p06-voice-proof/lint.log
-          ${{ runner.temp }}/p06-voice-proof/rollback.log
-          ${{ runner.temp }}/p06-voice-proof/source-unchanged.log
-          ${{ runner.temp }}/p06-voice-proof/tests.log
-          ${{ runner.temp }}/p06-voice-proof/types.log
-          ${{ runner.temp }}/p06-voice-proof/browser-result.json
-          ${{ runner.temp }}/p06-voice-proof/rollback-parent-build.json
-          ${{ runner.temp }}/p06-voice-proof/rollback-child-build.json
-          ${{ runner.temp }}/p06-voice-proof/rollback-inputs.json
-          ${{ runner.temp }}/p06-voice-proof/rollback-result.json
-          ${{ runner.temp }}/p06-voice-proof/ui-proof/**/*.png
-          ${{ runner.temp }}/p06-voice-proof/ui-proof/**/*.json
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        include:
-        - label: stage4
-          source_sha: a3f1ce0731e45a4a3f2c36ae9942cd0ffe4c3892
-          source_tree: 11d5f8194eb7bac343093a5b186f63a072c45586
-          base_sha: f38657d5e579f3438f00dbf5c875fbfb81f0ea5f
-          base_tree: 44367e3900994f676a62db8e3d3c6056d1917ac8
-          selection_base_sha: 92182120e8baa7ce001f41dec7f0bba1489e6636
-          selection_base_tree: d552dd794421d98780343e789ddc55249cf24646
-          format_files: |
-            config/test-lines-allocations/p06-explicit-voice-controls.txt
-            config/test-lines-allocations/p06-voice-route-ownership.txt
-            config/test-mock-exports-baseline.txt
-            docs/web/control-ui/chat.md
-            ui/src/e2e/browser-dictation-status.e2e.test.ts
-            ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
-            ui/src/e2e/browser-talk-ordering.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
-            ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
-            ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
-            ui/src/e2e/browser-voice-rollback.e2e.test.ts
-            ui/src/e2e/browser-voice-routes.e2e.test.ts
-            ui/src/i18n/locales/en-chat-composer.ts
-            ui/src/lib/voice-route.test.ts
-            ui/src/lib/voice-route.ts
-            ui/src/pages/chat/chat-composer-actions.test.ts
-            ui/src/pages/chat/chat-composer-microphone.test.ts
-            ui/src/pages/chat/chat-composer.test.ts
-            ui/src/pages/chat/chat-pane-history.ts
-            ui/src/pages/chat/chat-pane-retained-presentation.ts
-            ui/src/pages/chat/chat-realtime-handoff.test.ts
-            ui/src/pages/chat/chat-realtime.test.ts
-            ui/src/pages/chat/chat-realtime.ts
-            ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/chat-view.test.ts
-            ui/src/pages/chat/components/chat-composer-controls.tsx
-            ui/src/pages/chat/components/chat-composer-dictation-options.ts
-            ui/src/pages/chat/components/chat-composer-frame.ts
-            ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
-            ui/src/pages/chat/components/chat-session-rail-composer.tsx
-            ui/src/pages/chat/components/chat-session-rail.tsx
-            ui/src/pages/chat/components/chat-voice-activity.tsx
-            ui/src/pages/chat/components/composer-dictation-status.tsx
-            ui/src/pages/chat/components/direct-dictation-view.tsx
-            ui/src/pages/chat/composer-dictation-session.ts
-            ui/src/pages/chat/composer-dictation.test.ts
-            ui/src/pages/chat/composer-dictation.ts
-            ui/src/pages/chat/composer-direct-dictation.test.tsx
-            ui/src/pages/chat/composer-direct-dictation.ts
-            ui/src/pages/chat/talk/chat-actions-runtime.ts
-            ui/src/pages/chat/talk/consult.test.ts
-            ui/src/pages/chat/talk/input.test-support.ts
-            ui/src/pages/chat/talk/input.test.ts
-            ui/src/pages/chat/talk/input.ts
-            ui/src/pages/chat/talk/lifecycle.test.ts
-            ui/src/pages/chat/talk/session-runtime-loading.test.ts
-            ui/src/pages/chat/talk/session.test.ts
-            ui/src/pages/chat/talk/session.ts
-            ui/src/pages/chat/talk/shared.ts
-            ui/src/pages/chat/talk/split.test.ts
-            ui/src/pages/chat/talk/split.ts
-            ui/src/pages/chat/talk/transcript-queue.test.ts
-            ui/src/pages/new-session/draft-persistence.ts
-            ui/src/pages/new-session/new-session-page-owner.ts
-          source_files: |
-            ui/src/i18n/locales/en-chat-composer.ts
-            ui/src/lib/voice-route.ts
-            ui/src/pages/chat/chat-pane-history.ts
-            ui/src/pages/chat/chat-pane-retained-presentation.ts
-            ui/src/pages/chat/chat-realtime.ts
-            ui/src/pages/chat/components/chat-composer-controls.tsx
-            ui/src/pages/chat/components/chat-composer-dictation-options.ts
-            ui/src/pages/chat/components/chat-composer-frame.ts
-            ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
-            ui/src/pages/chat/components/chat-session-rail-composer.tsx
-            ui/src/pages/chat/components/chat-session-rail.tsx
-            ui/src/pages/chat/components/chat-voice-activity.tsx
-            ui/src/pages/chat/components/composer-dictation-status.tsx
-            ui/src/pages/chat/components/direct-dictation-view.tsx
-            ui/src/pages/chat/composer-dictation-session.ts
-            ui/src/pages/chat/composer-dictation.ts
-            ui/src/pages/chat/composer-direct-dictation.ts
-            ui/src/pages/chat/talk/chat-actions-runtime.ts
-            ui/src/pages/chat/talk/input.ts
-            ui/src/pages/chat/talk/session.ts
-            ui/src/pages/chat/talk/shared.ts
-            ui/src/pages/chat/talk/split.ts
-            ui/src/pages/new-session/draft-persistence.ts
-            ui/src/pages/new-session/new-session-page-owner.ts
-          test_files: |
-            ui/src/pages/chat/composer-dictation.test.ts
-            ui/src/pages/chat/composer-direct-dictation.test.tsx
-            ui/src/pages/chat/chat-composer-actions.test.ts
-            ui/src/pages/chat/chat-composer-microphone.test.ts
-            ui/src/pages/chat/composer-microphone-picker.test.ts
-            ui/src/pages/chat/chat-realtime.test.ts
-            ui/src/pages/chat/chat-realtime-handoff.test.ts
-            ui/src/pages/chat/talk/microphone-meter.test.ts
-            ui/src/pages/new-session/draft-dictation-session.test.ts
-            ui/src/app/settings.node.test.ts
-            ui/src/lib/voice-route.test.ts
-            ui/src/pages/chat/chat-composer.test.ts
-            ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/chat-view.test.ts
-            ui/src/pages/chat/talk/input.test.ts
-            ui/src/pages/chat/talk/session-runtime-loading.test.ts
-            ui/src/pages/chat/talk/session.test.ts
-            ui/src/pages/chat/talk/split.test.ts
-            ui/src/pages/chat/talk/transcript-queue.test.ts
-            ui/src/pages/chat/talk/consult.test.ts
-            ui/src/pages/chat/talk/lifecycle.test.ts
-            ui/src/pages/chat/talk/webrtc.test.ts
-            ui/src/pages/chat/talk/gateway-relay-lifecycle.test.ts
-            ui/src/pages/chat/components/chat-session-rail-composer-lifetime.test.tsx
-            ui/src/pages/new-session/draft-persistence.test.ts
-            ui/src/pages/chat/chat-pane-retained-presentation.test.ts
-            ui/src/pages/new-session/creation-composer.test.ts
-            ui/src/pages/new-session/composer.test.tsx
-          browser_files: |
-            ui/src/e2e/browser-dictation-status.e2e.test.ts
-            ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
-            ui/src/e2e/browser-talk-ordering.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
-            ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
-            ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
-            ui/src/e2e/browser-voice-routes.e2e.test.ts
-          rollback: 'true'
-          rollback_file: ui/src/e2e/browser-voice-rollback.e2e.test.ts
-    name: P06 stage4 execution
-    needs:
-    - parent-assets
-  fixture-types:
-    if: github.repository == 'CompleteDotTech/openclaw'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      CI: 'true'
-      SOURCE_REPOSITORY: CompleteDotTech/openclaw
-      SOURCE_SHA: ${{ matrix.source_sha }}
-      PROOF_KIND: exact-committed-stage-proof
-      WORKFLOW_SHA: ${{ github.workflow_sha }}
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-      OPENCLAW_VITEST_RUNTIME: node
-      OPENCLAW_VITEST_MAX_WORKERS: '1'
-      OPENCLAW_TEST_PROJECTS_PARALLEL: '1'
-      OPENCLAW_TYPECHECKER: tsgo
-      OPENCLAW_LINT_TOOL: oxlint
-      OPENCLAW_FORMAT_TOOL: oxfmt
-      PNPM_CONFIG_FROZEN_LOCKFILE: 'true'
-      P06_TEST_FILES: ${{ matrix.test_files }}
-      P06_SOURCE_FILES: ${{ matrix.source_files }}
-      EXPECTED_SOURCE_TREE: ${{ matrix.source_tree }}
-      BASE_SHA: ${{ matrix.base_sha }}
-      EXPECTED_BASE_TREE: ${{ matrix.base_tree }}
-      SELECTION_BASE_SHA: ${{ matrix.selection_base_sha }}
-      EXPECTED_SELECTION_BASE_TREE: ${{ matrix.selection_base_tree }}
-      PROOF_LABEL: ${{ matrix.label }}
-      P06_FORMAT_FILES: ${{ matrix.format_files }}
-      P06_BROWSER_FILES: ${{ matrix.browser_files }}
-      GOGC: '30'
-      GOMEMLIMIT: 3GiB
-      P06_ROLLBACK_TEST_FILE: ${{ matrix.rollback_file }}
-      PROOF_LANE: fixture-types
-    steps:
-    - name: Initialize proof directory and require immutable identities
-      run: |
-        printf 'P06_PROOF_DIR=%s/p06-voice-proof\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-        for value in "$SOURCE_SHA" "$EXPECTED_SOURCE_TREE" "$BASE_SHA" "$EXPECTED_BASE_TREE" "$SELECTION_BASE_SHA" "$EXPECTED_SELECTION_BASE_TREE"; do
-          [[ "$value" =~ ^[0-9a-f]{40}$ ]]
-        done
-    - name: Checkout the exact committed stage
-      id: checkout
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        repository: ${{ env.SOURCE_REPOSITORY }}
-        ref: ${{ env.SOURCE_SHA }}
-        fetch-depth: '1'
-        persist-credentials: 'false'
-    - name: Verify source, review base, and proof selection identities
-      id: identity
-      run: |
-        mkdir -p "$P06_PROOF_DIR"
-        test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-        test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_SOURCE_TREE"
-        for ref in "$BASE_SHA" "$SELECTION_BASE_SHA"; do
-          git -c core.hooksPath=/dev/null fetch --no-tags --depth=1 origin "$ref"
-        done
-        test "$(git rev-parse "$BASE_SHA^{tree}")" = "$EXPECTED_BASE_TREE"
-        test "$(git rev-parse "$SELECTION_BASE_SHA^{tree}")" = "$EXPECTED_SELECTION_BASE_TREE"
-        git diff --exit-code
-        git diff --cached --exit-code
-        python3 - <<'PY'
-        import hashlib
-        import json
-        import os
-        from pathlib import Path
-        import subprocess
-
-        proof = Path(os.environ["P06_PROOF_DIR"])
-        selected = {}
-        for label, variable in (("format", "P06_FORMAT_FILES"), ("source", "P06_SOURCE_FILES"), ("test", "P06_TEST_FILES"), ("browser", "P06_BROWSER_FILES")):
-            files = os.environ[variable].splitlines()
-            assert label == "browser" or files, f"Missing selection: {label}"
-            assert all(files) and len(files) == len(set(files))
-            for name in files:
-                path = Path(name)
-                assert not path.is_absolute() and ".." not in path.parts and path.is_file(), name
-                subprocess.check_call(["git", "ls-files", "--error-unmatch", "--", name], stdout=subprocess.DEVNULL)
-            (proof / f"{label}-files.txt").write_text("\n".join(files) + ("\n" if files else ""))
-            selected[label] = files
-        changed = subprocess.check_output(["git", "diff", "--name-only", "--no-renames", "--diff-filter=ACMRT", os.environ["SELECTION_BASE_SHA"], "HEAD"], text=True).splitlines()
-        assert sorted(selected["format"]) == sorted(changed), "Format selection differs from the pinned source delta."
-        receipt = {
-            "label": os.environ["PROOF_LABEL"],
-            "proof_kind": os.environ["PROOF_KIND"],
-            "proof_lane": os.environ["PROOF_LANE"],
-            "source_repository": os.environ["SOURCE_REPOSITORY"],
-            "source_sha": os.environ["SOURCE_SHA"],
-            "source_tree": os.environ["EXPECTED_SOURCE_TREE"],
-            "review_base_sha": os.environ["BASE_SHA"],
-            "review_base_tree": os.environ["EXPECTED_BASE_TREE"],
-            "selection_base_sha": os.environ["SELECTION_BASE_SHA"],
-            "selection_base_tree": os.environ["EXPECTED_SELECTION_BASE_TREE"],
-            "workflow_repository": os.environ["GITHUB_REPOSITORY"],
-            "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
-            "workflow_sha": os.environ["WORKFLOW_SHA"],
-            "run_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
-            "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-            "selection": selected,
-            "rollback_test_file": os.environ["P06_ROLLBACK_TEST_FILE"],
-            "selected_source_sha256": {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in sorted(set(sum(selected.values(), [])))},
-            "limitations": [
-                "Synthetic Gateway, media, and provider fixtures only; no live credentials or microphone hardware.",
-                "Native/global, stable upgrade, and post-parent-merge qualification are NOT RUN.",
-                "Ratchets compare this exact stage to its actual review base, without synthesizing a PR merge checkout.",
-            ],
-        }
-        (proof / "source.json").write_text(json.dumps(receipt, indent=2) + "\n")
-        print(json.dumps(receipt, indent=2))
-        PY
-        {
-          uname -a
-          getconf _NPROCESSORS_ONLN
-          free -m
-          df -h .
-        } 2>&1 | tee "$P06_PROOF_DIR/resources.log"
-    - name: Prepare canonical Node and pnpm without shared caches
-      id: toolchain
-      uses: ./.github/actions/setup-node-env
-      with:
-        node-version: 24.22.1
-        install-bun: 'false'
-        install-deps: 'false'
-        semantic-checks: 'true'
-        cache-mode: 'off'
-    - name: Install this checkout's frozen dependencies
-      id: install
-      run: |
-        {
-          node --version
-          pnpm --version
-          pnpm install --frozen-lockfile
-        } 2>&1 | tee "$P06_PROOF_DIR/install.log"
-        git diff --exit-code
-        git diff --cached --exit-code
-    - name: Control UI fixture typecheck
-      id: test-types
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-      run: |
-        pnpm tsgo:test:ui 2>&1 | tee "$P06_PROOF_DIR/test-types.log"
-    - name: Confirm tracked source remained unchanged
-      id: source-unchanged
-      if: ${{ !cancelled() && steps.identity.outcome == 'success' }}
-      run: |
-        {
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_SOURCE_TREE"
-          git diff --exit-code
-          git diff --cached --exit-code
-        } 2>&1 | tee "$P06_PROOF_DIR/source-unchanged.log"
-    - name: Record every observed lane and unrun qualification
-      if: always()
-      env:
-        CHECKOUT_RESULT: ${{ steps.checkout.outcome }}
-        IDENTITY_RESULT: ${{ steps.identity.outcome }}
-        TOOLCHAIN_RESULT: ${{ steps.toolchain.outcome }}
-        INSTALL_RESULT: ${{ steps.install.outcome }}
-        TEST_TYPES_RESULT: ${{ steps.test-types.outcome }}
-        SOURCE_UNCHANGED_RESULT: ${{ steps.source-unchanged.outcome }}
-      run: |
-        mkdir -p "$P06_PROOF_DIR"
-        python3 - <<'PY'
-        import json
-        import os
-        from pathlib import Path
-
-        proof = Path(os.environ["P06_PROOF_DIR"])
-        labels = {"success": "PASS", "failure": "FAIL", "skipped": "NOT RUN", "cancelled": "CANCELLED", "": "NOT RUN"}
-        outcomes = {name.lower().removesuffix("_result"): labels[os.environ.get(name, "")] for name in ('CHECKOUT_RESULT', 'IDENTITY_RESULT', 'TOOLCHAIN_RESULT', 'INSTALL_RESULT', 'TEST_TYPES_RESULT', 'SOURCE_UNCHANGED_RESULT')}
-        for name in ("live_microphone", "live_provider", "native_global", "stable_upgrade", "post_parent_merge"):
-            outcomes[name] = "NOT RUN"
-        receipt = {
-            "label": os.environ["PROOF_LABEL"],
-            "proof_kind": os.environ["PROOF_KIND"],
-            "proof_lane": os.environ["PROOF_LANE"],
-            "source_sha": os.environ["SOURCE_SHA"],
-            "source_tree": os.environ["EXPECTED_SOURCE_TREE"],
-            "review_base_sha": os.environ["BASE_SHA"],
-            "workflow_sha": os.environ["WORKFLOW_SHA"],
-            "outcomes": outcomes,
-        }
-        (proof / "outcomes.json").write_text(json.dumps(receipt, indent=2) + "\n")
-        summary = [f"## P06 {os.environ['PROOF_LABEL']} committed-stage proof", "", f"Source `{os.environ['SOURCE_SHA']}`; review base `{os.environ['BASE_SHA']}`.", "", "| Lane | Observed result |", "| --- | --- |"]
-        summary.extend(f"| {name} | {result} |" for name, result in outcomes.items())
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
-            output.write("\n".join(summary) + "\n")
-        print(json.dumps(receipt, indent=2))
-        PY
-    - name: Retain only task logs and synthetic UI evidence
-      if: always()
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-      with:
-        name: p06-final-stage4-fixture-types-${{ github.run_id }}-${{ github.run_attempt }}
-        retention-days: 7
-        if-no-files-found: error
-        path: |
-          ${{ runner.temp }}/p06-voice-proof/source.json
-          ${{ runner.temp }}/p06-voice-proof/outcomes.json
-          ${{ runner.temp }}/p06-voice-proof/format-files.txt
-          ${{ runner.temp }}/p06-voice-proof/source-files.txt
-          ${{ runner.temp }}/p06-voice-proof/test-files.txt
-          ${{ runner.temp }}/p06-voice-proof/browser-files.txt
-          ${{ runner.temp }}/p06-voice-proof/resources.log
-          ${{ runner.temp }}/p06-voice-proof/install.log
-          ${{ runner.temp }}/p06-voice-proof/source-unchanged.log
-          ${{ runner.temp }}/p06-voice-proof/test-types.log
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        include:
-        - label: stage4
-          source_sha: a3f1ce0731e45a4a3f2c36ae9942cd0ffe4c3892
-          source_tree: 11d5f8194eb7bac343093a5b186f63a072c45586
-          base_sha: f38657d5e579f3438f00dbf5c875fbfb81f0ea5f
-          base_tree: 44367e3900994f676a62db8e3d3c6056d1917ac8
-          selection_base_sha: 92182120e8baa7ce001f41dec7f0bba1489e6636
-          selection_base_tree: d552dd794421d98780343e789ddc55249cf24646
-          format_files: |
-            config/test-lines-allocations/p06-explicit-voice-controls.txt
-            config/test-lines-allocations/p06-voice-route-ownership.txt
-            config/test-mock-exports-baseline.txt
-            docs/web/control-ui/chat.md
-            ui/src/e2e/browser-dictation-status.e2e.test.ts
-            ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
-            ui/src/e2e/browser-talk-ordering.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
-            ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
-            ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
-            ui/src/e2e/browser-voice-rollback.e2e.test.ts
-            ui/src/e2e/browser-voice-routes.e2e.test.ts
-            ui/src/i18n/locales/en-chat-composer.ts
-            ui/src/lib/voice-route.test.ts
-            ui/src/lib/voice-route.ts
-            ui/src/pages/chat/chat-composer-actions.test.ts
-            ui/src/pages/chat/chat-composer-microphone.test.ts
-            ui/src/pages/chat/chat-composer.test.ts
-            ui/src/pages/chat/chat-pane-history.ts
-            ui/src/pages/chat/chat-pane-retained-presentation.ts
-            ui/src/pages/chat/chat-realtime-handoff.test.ts
-            ui/src/pages/chat/chat-realtime.test.ts
-            ui/src/pages/chat/chat-realtime.ts
-            ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/chat-view.test.ts
-            ui/src/pages/chat/components/chat-composer-controls.tsx
-            ui/src/pages/chat/components/chat-composer-dictation-options.ts
-            ui/src/pages/chat/components/chat-composer-frame.ts
-            ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
-            ui/src/pages/chat/components/chat-session-rail-composer.tsx
-            ui/src/pages/chat/components/chat-session-rail.tsx
-            ui/src/pages/chat/components/chat-voice-activity.tsx
-            ui/src/pages/chat/components/composer-dictation-status.tsx
-            ui/src/pages/chat/components/direct-dictation-view.tsx
-            ui/src/pages/chat/composer-dictation-session.ts
-            ui/src/pages/chat/composer-dictation.test.ts
-            ui/src/pages/chat/composer-dictation.ts
-            ui/src/pages/chat/composer-direct-dictation.test.tsx
-            ui/src/pages/chat/composer-direct-dictation.ts
-            ui/src/pages/chat/talk/chat-actions-runtime.ts
-            ui/src/pages/chat/talk/consult.test.ts
-            ui/src/pages/chat/talk/input.test-support.ts
-            ui/src/pages/chat/talk/input.test.ts
-            ui/src/pages/chat/talk/input.ts
-            ui/src/pages/chat/talk/lifecycle.test.ts
-            ui/src/pages/chat/talk/session-runtime-loading.test.ts
-            ui/src/pages/chat/talk/session.test.ts
-            ui/src/pages/chat/talk/session.ts
-            ui/src/pages/chat/talk/shared.ts
-            ui/src/pages/chat/talk/split.test.ts
-            ui/src/pages/chat/talk/split.ts
-            ui/src/pages/chat/talk/transcript-queue.test.ts
-            ui/src/pages/new-session/draft-persistence.ts
-            ui/src/pages/new-session/new-session-page-owner.ts
-          source_files: |
-            ui/src/i18n/locales/en-chat-composer.ts
-            ui/src/lib/voice-route.ts
-            ui/src/pages/chat/chat-pane-history.ts
-            ui/src/pages/chat/chat-pane-retained-presentation.ts
-            ui/src/pages/chat/chat-realtime.ts
-            ui/src/pages/chat/components/chat-composer-controls.tsx
-            ui/src/pages/chat/components/chat-composer-dictation-options.ts
-            ui/src/pages/chat/components/chat-composer-frame.ts
-            ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
-            ui/src/pages/chat/components/chat-session-rail-composer.tsx
-            ui/src/pages/chat/components/chat-session-rail.tsx
-            ui/src/pages/chat/components/chat-voice-activity.tsx
-            ui/src/pages/chat/components/composer-dictation-status.tsx
-            ui/src/pages/chat/components/direct-dictation-view.tsx
-            ui/src/pages/chat/composer-dictation-session.ts
-            ui/src/pages/chat/composer-dictation.ts
-            ui/src/pages/chat/composer-direct-dictation.ts
-            ui/src/pages/chat/talk/chat-actions-runtime.ts
-            ui/src/pages/chat/talk/input.ts
-            ui/src/pages/chat/talk/session.ts
-            ui/src/pages/chat/talk/shared.ts
-            ui/src/pages/chat/talk/split.ts
-            ui/src/pages/new-session/draft-persistence.ts
-            ui/src/pages/new-session/new-session-page-owner.ts
-          test_files: |
-            ui/src/pages/chat/composer-dictation.test.ts
-            ui/src/pages/chat/composer-direct-dictation.test.tsx
-            ui/src/pages/chat/chat-composer-actions.test.ts
-            ui/src/pages/chat/chat-composer-microphone.test.ts
-            ui/src/pages/chat/composer-microphone-picker.test.ts
-            ui/src/pages/chat/chat-realtime.test.ts
-            ui/src/pages/chat/chat-realtime-handoff.test.ts
-            ui/src/pages/chat/talk/microphone-meter.test.ts
-            ui/src/pages/new-session/draft-dictation-session.test.ts
-            ui/src/app/settings.node.test.ts
-            ui/src/lib/voice-route.test.ts
-            ui/src/pages/chat/chat-composer.test.ts
-            ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/chat-view.test.ts
-            ui/src/pages/chat/talk/input.test.ts
-            ui/src/pages/chat/talk/session-runtime-loading.test.ts
-            ui/src/pages/chat/talk/session.test.ts
-            ui/src/pages/chat/talk/split.test.ts
-            ui/src/pages/chat/talk/transcript-queue.test.ts
-            ui/src/pages/chat/talk/consult.test.ts
-            ui/src/pages/chat/talk/lifecycle.test.ts
-            ui/src/pages/chat/talk/webrtc.test.ts
-            ui/src/pages/chat/talk/gateway-relay-lifecycle.test.ts
-            ui/src/pages/chat/components/chat-session-rail-composer-lifetime.test.tsx
-            ui/src/pages/new-session/draft-persistence.test.ts
-            ui/src/pages/chat/chat-pane-retained-presentation.test.ts
-            ui/src/pages/new-session/creation-composer.test.ts
-            ui/src/pages/new-session/composer.test.tsx
-          browser_files: |
-            ui/src/e2e/browser-dictation-status.e2e.test.ts
-            ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
-            ui/src/e2e/browser-talk-ordering.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
-            ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
-            ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
-            ui/src/e2e/browser-voice-routes.e2e.test.ts
-          rollback: 'true'
-          rollback_file: ui/src/e2e/browser-voice-rollback.e2e.test.ts
-    name: P06 stage4 fixture-types
-  guards:
-    if: github.repository == 'CompleteDotTech/openclaw'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      CI: 'true'
-      SOURCE_REPOSITORY: CompleteDotTech/openclaw
-      SOURCE_SHA: ${{ matrix.source_sha }}
-      PROOF_KIND: exact-committed-stage-proof
-      WORKFLOW_SHA: ${{ github.workflow_sha }}
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-      OPENCLAW_VITEST_RUNTIME: node
-      OPENCLAW_VITEST_MAX_WORKERS: '1'
-      OPENCLAW_TEST_PROJECTS_PARALLEL: '1'
-      OPENCLAW_TYPECHECKER: tsgo
-      OPENCLAW_LINT_TOOL: oxlint
-      OPENCLAW_FORMAT_TOOL: oxfmt
-      PNPM_CONFIG_FROZEN_LOCKFILE: 'true'
-      P06_TEST_FILES: ${{ matrix.test_files }}
-      P06_SOURCE_FILES: ${{ matrix.source_files }}
-      EXPECTED_SOURCE_TREE: ${{ matrix.source_tree }}
-      BASE_SHA: ${{ matrix.base_sha }}
-      EXPECTED_BASE_TREE: ${{ matrix.base_tree }}
-      SELECTION_BASE_SHA: ${{ matrix.selection_base_sha }}
-      EXPECTED_SELECTION_BASE_TREE: ${{ matrix.selection_base_tree }}
-      PROOF_LABEL: ${{ matrix.label }}
-      P06_FORMAT_FILES: ${{ matrix.format_files }}
-      P06_BROWSER_FILES: ${{ matrix.browser_files }}
-      GOGC: '30'
-      GOMEMLIMIT: 3GiB
-      P06_ROLLBACK_TEST_FILE: ${{ matrix.rollback_file }}
-      PROOF_LANE: guards
-    steps:
-    - name: Initialize proof directory and require immutable identities
-      run: |
-        printf 'P06_PROOF_DIR=%s/p06-voice-proof\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-        for value in "$SOURCE_SHA" "$EXPECTED_SOURCE_TREE" "$BASE_SHA" "$EXPECTED_BASE_TREE" "$SELECTION_BASE_SHA" "$EXPECTED_SELECTION_BASE_TREE"; do
-          [[ "$value" =~ ^[0-9a-f]{40}$ ]]
-        done
-    - name: Install the required system search tool
-      id: prerequisites
-      run: |
-        mkdir -p "$P06_PROOF_DIR"
-        {
-          if ! command -v rg >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends ripgrep
-          fi
-          rg --version
-        } 2>&1 | tee "$P06_PROOF_DIR/prerequisites.log"
-    - name: Checkout the exact committed stage
-      id: checkout
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        repository: ${{ env.SOURCE_REPOSITORY }}
-        ref: ${{ env.SOURCE_SHA }}
-        fetch-depth: '1'
-        persist-credentials: 'false'
-    - name: Verify source, review base, and proof selection identities
-      id: identity
-      run: |
-        mkdir -p "$P06_PROOF_DIR"
-        test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-        test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_SOURCE_TREE"
-        for ref in "$BASE_SHA" "$SELECTION_BASE_SHA"; do
-          git -c core.hooksPath=/dev/null fetch --no-tags --depth=1 origin "$ref"
-        done
-        test "$(git rev-parse "$BASE_SHA^{tree}")" = "$EXPECTED_BASE_TREE"
-        test "$(git rev-parse "$SELECTION_BASE_SHA^{tree}")" = "$EXPECTED_SELECTION_BASE_TREE"
-        git diff --exit-code
-        git diff --cached --exit-code
-        python3 - <<'PY'
-        import hashlib
-        import json
-        import os
-        from pathlib import Path
-        import subprocess
-
-        proof = Path(os.environ["P06_PROOF_DIR"])
-        selected = {}
-        for label, variable in (("format", "P06_FORMAT_FILES"), ("source", "P06_SOURCE_FILES"), ("test", "P06_TEST_FILES"), ("browser", "P06_BROWSER_FILES")):
-            files = os.environ[variable].splitlines()
-            assert label == "browser" or files, f"Missing selection: {label}"
-            assert all(files) and len(files) == len(set(files))
-            for name in files:
-                path = Path(name)
-                assert not path.is_absolute() and ".." not in path.parts and path.is_file(), name
-                subprocess.check_call(["git", "ls-files", "--error-unmatch", "--", name], stdout=subprocess.DEVNULL)
-            (proof / f"{label}-files.txt").write_text("\n".join(files) + ("\n" if files else ""))
-            selected[label] = files
-        changed = subprocess.check_output(["git", "diff", "--name-only", "--no-renames", "--diff-filter=ACMRT", os.environ["SELECTION_BASE_SHA"], "HEAD"], text=True).splitlines()
-        assert sorted(selected["format"]) == sorted(changed), "Format selection differs from the pinned source delta."
-        receipt = {
-            "label": os.environ["PROOF_LABEL"],
-            "proof_kind": os.environ["PROOF_KIND"],
-            "proof_lane": os.environ["PROOF_LANE"],
-            "source_repository": os.environ["SOURCE_REPOSITORY"],
-            "source_sha": os.environ["SOURCE_SHA"],
-            "source_tree": os.environ["EXPECTED_SOURCE_TREE"],
-            "review_base_sha": os.environ["BASE_SHA"],
-            "review_base_tree": os.environ["EXPECTED_BASE_TREE"],
-            "selection_base_sha": os.environ["SELECTION_BASE_SHA"],
-            "selection_base_tree": os.environ["EXPECTED_SELECTION_BASE_TREE"],
-            "workflow_repository": os.environ["GITHUB_REPOSITORY"],
-            "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
-            "workflow_sha": os.environ["WORKFLOW_SHA"],
-            "run_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
-            "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-            "selection": selected,
-            "rollback_test_file": os.environ["P06_ROLLBACK_TEST_FILE"],
-            "selected_source_sha256": {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in sorted(set(sum(selected.values(), [])))},
-            "limitations": [
-                "Synthetic Gateway, media, and provider fixtures only; no live credentials or microphone hardware.",
-                "Native/global, stable upgrade, and post-parent-merge qualification are NOT RUN.",
-                "Ratchets compare this exact stage to its actual review base, without synthesizing a PR merge checkout.",
-            ],
-        }
-        (proof / "source.json").write_text(json.dumps(receipt, indent=2) + "\n")
-        print(json.dumps(receipt, indent=2))
-        PY
-        {
-          uname -a
-          getconf _NPROCESSORS_ONLN
-          free -m
-          df -h .
-        } 2>&1 | tee "$P06_PROOF_DIR/resources.log"
-    - name: Prepare canonical Node and pnpm without shared caches
-      id: toolchain
-      uses: ./.github/actions/setup-node-env
-      with:
-        node-version: 24.22.1
-        install-bun: 'false'
-        install-deps: 'false'
-        semantic-checks: 'true'
-        cache-mode: 'off'
-    - name: Install this checkout's frozen dependencies
-      id: install
-      run: |
-        {
-          node --version
-          pnpm --version
-          pnpm install --frozen-lockfile
-        } 2>&1 | tee "$P06_PROOF_DIR/install.log"
-        git diff --exit-code
-        git diff --cached --exit-code
-    - name: Check conflict markers
-      id: conflict-markers
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-      run: |
-        pnpm check:no-conflict-markers 2>&1 | tee "$P06_PROOF_DIR/conflict-markers.log"
-    - name: Check the canonical UI type graph boundary
-      id: ui-type-graph-boundary
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-      run: |
-        pnpm lint:tmp:tsgo-core-boundary 2>&1 | tee "$P06_PROOF_DIR/ui-type-graph-boundary.log"
-    - name: Check Control UI ownership against the actual review base
-      id: ui-controller-ownership
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-      run: |
-        pnpm check:control-ui-controllers --base "$BASE_SHA" --no-merge-base 2>&1 | tee "$P06_PROOF_DIR/ui-controller-ownership.log"
-    - name: Check line caps against the actual review base
-      id: line-cap
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-      run: |
-        pnpm check:line-cap-ratchet --base "$BASE_SHA" --no-merge-base 2>&1 | tee "$P06_PROOF_DIR/line-cap.log"
-    - name: Check baseline ratchets including per-stage test-line allocations
-      id: baseline-ratchets
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-      run: |
-        pnpm check:baseline-ratchets --base "$BASE_SHA" --no-merge-base 2>&1 | tee "$P06_PROOF_DIR/baseline-ratchets.log"
-    - name: Check canonical architecture owners
-      id: architecture
-      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-      run: |
-        pnpm check:architecture 2>&1 | tee "$P06_PROOF_DIR/architecture.log"
-    - name: Confirm tracked source remained unchanged
-      id: source-unchanged
-      if: ${{ !cancelled() && steps.identity.outcome == 'success' }}
-      run: |
-        {
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_SOURCE_TREE"
-          git diff --exit-code
-          git diff --cached --exit-code
-        } 2>&1 | tee "$P06_PROOF_DIR/source-unchanged.log"
-    - name: Record every observed lane and unrun qualification
-      if: always()
-      env:
-        CHECKOUT_RESULT: ${{ steps.checkout.outcome }}
-        IDENTITY_RESULT: ${{ steps.identity.outcome }}
-        TOOLCHAIN_RESULT: ${{ steps.toolchain.outcome }}
-        INSTALL_RESULT: ${{ steps.install.outcome }}
-        CONFLICT_MARKERS_RESULT: ${{ steps.conflict-markers.outcome }}
-        UI_TYPE_GRAPH_BOUNDARY_RESULT: ${{ steps.ui-type-graph-boundary.outcome }}
-        UI_CONTROLLER_OWNERSHIP_RESULT: ${{ steps.ui-controller-ownership.outcome }}
-        LINE_CAP_RESULT: ${{ steps.line-cap.outcome }}
-        BASELINE_RATCHETS_RESULT: ${{ steps.baseline-ratchets.outcome }}
-        ARCHITECTURE_RESULT: ${{ steps.architecture.outcome }}
-        SOURCE_UNCHANGED_RESULT: ${{ steps.source-unchanged.outcome }}
-        PREREQUISITES_RESULT: ${{ steps.prerequisites.outcome }}
-      run: |
-        mkdir -p "$P06_PROOF_DIR"
-        python3 - <<'PY'
-        import json
-        import os
-        from pathlib import Path
-
-        proof = Path(os.environ["P06_PROOF_DIR"])
-        labels = {"success": "PASS", "failure": "FAIL", "skipped": "NOT RUN", "cancelled": "CANCELLED", "": "NOT RUN"}
-        outcomes = {name.lower().removesuffix("_result"): labels[os.environ.get(name, "")] for name in ('CHECKOUT_RESULT', 'IDENTITY_RESULT', 'TOOLCHAIN_RESULT', 'INSTALL_RESULT', 'CONFLICT_MARKERS_RESULT', 'UI_TYPE_GRAPH_BOUNDARY_RESULT', 'UI_CONTROLLER_OWNERSHIP_RESULT', 'LINE_CAP_RESULT', 'BASELINE_RATCHETS_RESULT', 'ARCHITECTURE_RESULT', 'SOURCE_UNCHANGED_RESULT', 'PREREQUISITES_RESULT')}
-        for name in ("live_microphone", "live_provider", "native_global", "stable_upgrade", "post_parent_merge"):
-            outcomes[name] = "NOT RUN"
-        receipt = {
-            "label": os.environ["PROOF_LABEL"],
-            "proof_kind": os.environ["PROOF_KIND"],
-            "proof_lane": os.environ["PROOF_LANE"],
-            "source_sha": os.environ["SOURCE_SHA"],
-            "source_tree": os.environ["EXPECTED_SOURCE_TREE"],
-            "review_base_sha": os.environ["BASE_SHA"],
-            "workflow_sha": os.environ["WORKFLOW_SHA"],
-            "outcomes": outcomes,
-        }
-        (proof / "outcomes.json").write_text(json.dumps(receipt, indent=2) + "\n")
-        summary = [f"## P06 {os.environ['PROOF_LABEL']} committed-stage proof", "", f"Source `{os.environ['SOURCE_SHA']}`; review base `{os.environ['BASE_SHA']}`.", "", "| Lane | Observed result |", "| --- | --- |"]
-        summary.extend(f"| {name} | {result} |" for name, result in outcomes.items())
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
-            output.write("\n".join(summary) + "\n")
-        print(json.dumps(receipt, indent=2))
-        PY
-    - name: Retain only task logs and synthetic UI evidence
-      if: always()
-      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-      with:
-        name: p06-final-stage4-guards-${{ github.run_id }}-${{ github.run_attempt }}
-        retention-days: 7
-        if-no-files-found: error
-        path: |
-          ${{ runner.temp }}/p06-voice-proof/source.json
-          ${{ runner.temp }}/p06-voice-proof/outcomes.json
-          ${{ runner.temp }}/p06-voice-proof/format-files.txt
-          ${{ runner.temp }}/p06-voice-proof/source-files.txt
-          ${{ runner.temp }}/p06-voice-proof/test-files.txt
-          ${{ runner.temp }}/p06-voice-proof/browser-files.txt
-          ${{ runner.temp }}/p06-voice-proof/resources.log
-          ${{ runner.temp }}/p06-voice-proof/install.log
-          ${{ runner.temp }}/p06-voice-proof/architecture.log
-          ${{ runner.temp }}/p06-voice-proof/baseline-ratchets.log
-          ${{ runner.temp }}/p06-voice-proof/conflict-markers.log
-          ${{ runner.temp }}/p06-voice-proof/line-cap.log
-          ${{ runner.temp }}/p06-voice-proof/prerequisites.log
-          ${{ runner.temp }}/p06-voice-proof/source-unchanged.log
-          ${{ runner.temp }}/p06-voice-proof/ui-controller-ownership.log
-          ${{ runner.temp }}/p06-voice-proof/ui-type-graph-boundary.log
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        include:
-        - label: stage4
-          source_sha: a3f1ce0731e45a4a3f2c36ae9942cd0ffe4c3892
-          source_tree: 11d5f8194eb7bac343093a5b186f63a072c45586
-          base_sha: f38657d5e579f3438f00dbf5c875fbfb81f0ea5f
-          base_tree: 44367e3900994f676a62db8e3d3c6056d1917ac8
-          selection_base_sha: 92182120e8baa7ce001f41dec7f0bba1489e6636
-          selection_base_tree: d552dd794421d98780343e789ddc55249cf24646
-          format_files: |
-            config/test-lines-allocations/p06-explicit-voice-controls.txt
-            config/test-lines-allocations/p06-voice-route-ownership.txt
-            config/test-mock-exports-baseline.txt
-            docs/web/control-ui/chat.md
-            ui/src/e2e/browser-dictation-status.e2e.test.ts
-            ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
-            ui/src/e2e/browser-talk-ordering.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
-            ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
-            ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
-            ui/src/e2e/browser-voice-rollback.e2e.test.ts
-            ui/src/e2e/browser-voice-routes.e2e.test.ts
-            ui/src/i18n/locales/en-chat-composer.ts
-            ui/src/lib/voice-route.test.ts
-            ui/src/lib/voice-route.ts
-            ui/src/pages/chat/chat-composer-actions.test.ts
-            ui/src/pages/chat/chat-composer-microphone.test.ts
-            ui/src/pages/chat/chat-composer.test.ts
-            ui/src/pages/chat/chat-pane-history.ts
-            ui/src/pages/chat/chat-pane-retained-presentation.ts
-            ui/src/pages/chat/chat-realtime-handoff.test.ts
-            ui/src/pages/chat/chat-realtime.test.ts
-            ui/src/pages/chat/chat-realtime.ts
-            ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/chat-view.test.ts
-            ui/src/pages/chat/components/chat-composer-controls.tsx
-            ui/src/pages/chat/components/chat-composer-dictation-options.ts
-            ui/src/pages/chat/components/chat-composer-frame.ts
-            ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
-            ui/src/pages/chat/components/chat-session-rail-composer.tsx
-            ui/src/pages/chat/components/chat-session-rail.tsx
-            ui/src/pages/chat/components/chat-voice-activity.tsx
-            ui/src/pages/chat/components/composer-dictation-status.tsx
-            ui/src/pages/chat/components/direct-dictation-view.tsx
-            ui/src/pages/chat/composer-dictation-session.ts
-            ui/src/pages/chat/composer-dictation.test.ts
-            ui/src/pages/chat/composer-dictation.ts
-            ui/src/pages/chat/composer-direct-dictation.test.tsx
-            ui/src/pages/chat/composer-direct-dictation.ts
-            ui/src/pages/chat/talk/chat-actions-runtime.ts
-            ui/src/pages/chat/talk/consult.test.ts
-            ui/src/pages/chat/talk/input.test-support.ts
-            ui/src/pages/chat/talk/input.test.ts
-            ui/src/pages/chat/talk/input.ts
-            ui/src/pages/chat/talk/lifecycle.test.ts
-            ui/src/pages/chat/talk/session-runtime-loading.test.ts
-            ui/src/pages/chat/talk/session.test.ts
-            ui/src/pages/chat/talk/session.ts
-            ui/src/pages/chat/talk/shared.ts
-            ui/src/pages/chat/talk/split.test.ts
-            ui/src/pages/chat/talk/split.ts
-            ui/src/pages/chat/talk/transcript-queue.test.ts
-            ui/src/pages/new-session/draft-persistence.ts
-            ui/src/pages/new-session/new-session-page-owner.ts
-          source_files: |
-            ui/src/i18n/locales/en-chat-composer.ts
-            ui/src/lib/voice-route.ts
-            ui/src/pages/chat/chat-pane-history.ts
-            ui/src/pages/chat/chat-pane-retained-presentation.ts
-            ui/src/pages/chat/chat-realtime.ts
-            ui/src/pages/chat/components/chat-composer-controls.tsx
-            ui/src/pages/chat/components/chat-composer-dictation-options.ts
-            ui/src/pages/chat/components/chat-composer-frame.ts
-            ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
-            ui/src/pages/chat/components/chat-session-rail-composer.tsx
-            ui/src/pages/chat/components/chat-session-rail.tsx
-            ui/src/pages/chat/components/chat-voice-activity.tsx
-            ui/src/pages/chat/components/composer-dictation-status.tsx
-            ui/src/pages/chat/components/direct-dictation-view.tsx
-            ui/src/pages/chat/composer-dictation-session.ts
-            ui/src/pages/chat/composer-dictation.ts
-            ui/src/pages/chat/composer-direct-dictation.ts
-            ui/src/pages/chat/talk/chat-actions-runtime.ts
-            ui/src/pages/chat/talk/input.ts
-            ui/src/pages/chat/talk/session.ts
-            ui/src/pages/chat/talk/shared.ts
-            ui/src/pages/chat/talk/split.ts
-            ui/src/pages/new-session/draft-persistence.ts
-            ui/src/pages/new-session/new-session-page-owner.ts
-          test_files: |
-            ui/src/pages/chat/composer-dictation.test.ts
-            ui/src/pages/chat/composer-direct-dictation.test.tsx
-            ui/src/pages/chat/chat-composer-actions.test.ts
-            ui/src/pages/chat/chat-composer-microphone.test.ts
-            ui/src/pages/chat/composer-microphone-picker.test.ts
-            ui/src/pages/chat/chat-realtime.test.ts
-            ui/src/pages/chat/chat-realtime-handoff.test.ts
-            ui/src/pages/chat/talk/microphone-meter.test.ts
-            ui/src/pages/new-session/draft-dictation-session.test.ts
-            ui/src/app/settings.node.test.ts
-            ui/src/lib/voice-route.test.ts
-            ui/src/pages/chat/chat-composer.test.ts
-            ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/chat-view.test.ts
-            ui/src/pages/chat/talk/input.test.ts
-            ui/src/pages/chat/talk/session-runtime-loading.test.ts
-            ui/src/pages/chat/talk/session.test.ts
-            ui/src/pages/chat/talk/split.test.ts
-            ui/src/pages/chat/talk/transcript-queue.test.ts
-            ui/src/pages/chat/talk/consult.test.ts
-            ui/src/pages/chat/talk/lifecycle.test.ts
-            ui/src/pages/chat/talk/webrtc.test.ts
-            ui/src/pages/chat/talk/gateway-relay-lifecycle.test.ts
-            ui/src/pages/chat/components/chat-session-rail-composer-lifetime.test.tsx
-            ui/src/pages/new-session/draft-persistence.test.ts
-            ui/src/pages/chat/chat-pane-retained-presentation.test.ts
-            ui/src/pages/new-session/creation-composer.test.ts
-            ui/src/pages/new-session/composer.test.tsx
-          browser_files: |
-            ui/src/e2e/browser-dictation-status.e2e.test.ts
-            ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
-            ui/src/e2e/browser-talk-ordering.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
-            ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
-            ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
-            ui/src/e2e/browser-voice-routes.e2e.test.ts
-          rollback: 'true'
-          rollback_file: ui/src/e2e/browser-voice-rollback.e2e.test.ts
-    name: P06 stage4 guards
+          ${{ runner.temp }}/p06-voice-diagnostic/source.json
+          ${{ runner.temp }}/p06-voice-diagnostic/harness.json
+          ${{ runner.temp }}/p06-voice-diagnostic/outcomes.json
+          ${{ runner.temp }}/p06-voice-diagnostic/install.log
+          ${{ runner.temp }}/p06-voice-diagnostic/browser.log
+          ${{ runner.temp }}/p06-voice-diagnostic/browser-result.json
+          ${{ runner.temp }}/p06-voice-diagnostic/diagnostic-result.json
+          ${{ runner.temp }}/p06-voice-diagnostic/source-unchanged.log
+          ${{ runner.temp }}/p06-voice-diagnostic/voice-selection-diagnostic.patch
