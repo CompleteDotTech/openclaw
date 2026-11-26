@@ -143,6 +143,10 @@ const catalog = {
         "Microphone access is blocked. Allow it in browser site settings to list inputs.",
       realtimeTalkCapability: "Tap to talk",
       dictationCapability: "Dictation",
+      voiceCommandUnavailable:
+        "Voice commands are unavailable until an authorized command executor is connected.",
+      voiceCoordinationUnavailable:
+        "This browser cannot coordinate microphone access across windows. Use a browser with Web Locks support.",
       realtimeTalkProviderUnavailable: "No realtime voice provider is configured.",
       splitTalkProvidersUnavailable: "Talk needs a transcription provider and a speech provider.",
       splitTalkSpeechUnavailable: "No speech provider is configured.",

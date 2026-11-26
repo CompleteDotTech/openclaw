@@ -20,14 +20,23 @@ vi.mock("./webrtc.ts", () => ({
     context: RealtimeTalkTransportContext,
   ) {
     transportMock.context = context;
-    return { start: transportMock.start, stop: transportMock.stop };
+    return {
+      start: transportMock.start,
+      stop: () => {
+        context.input.stop();
+        transportMock.stop();
+      },
+    };
   }),
 }));
 
 import { RealtimeTalkSession } from "./session.ts";
 
+const sessions = new Set<RealtimeTalkSession>();
+
 async function start(request: unknown, callbacks: RealtimeTalkCallbacks) {
   const session = new RealtimeTalkSession({ request } as never, "agent:main:main", callbacks);
+  sessions.add(session);
   await session.start();
   const context = transportMock.context;
   const handleTranscript = context?.callbacks.onTranscript;
@@ -61,7 +70,13 @@ beforeEach(() => {
   transportMock.start.mockClear();
   transportMock.stop.mockClear();
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  for (const session of sessions) {
+    void session.stop().catch(() => undefined);
+  }
+  sessions.clear();
+  vi.useRealTimers();
+});
 
 it("does not admit normalized-empty finals into a stalled transcript queue", async () => {
   const firstTranscript = createDeferred();

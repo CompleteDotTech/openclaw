@@ -31,7 +31,10 @@ vi.mock(import("./talk/transport.runtime.ts"), async (importOriginal) => ({
     return {
       start: async () => "ready",
       activate: () => transports.onActivated?.(),
-      stop: transports.stop,
+      stop: (options) => {
+        context.input.stop();
+        transports.stop(options);
+      },
     };
   },
 }));

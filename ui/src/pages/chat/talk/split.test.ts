@@ -9,6 +9,7 @@ import type { GatewayEventFrame } from "../../../api/gateway.ts";
 import { createRuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
 import { sessionsResult } from "../../../lib/sessions/session-capability.test-support.ts";
 import { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
+import { VoiceRouteSession } from "../../../lib/voice-route.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -17,6 +18,7 @@ import { createStorageMock } from "../../../test-helpers/storage.ts";
 import { stopChatRealtimeTalk, type ChatRealtimeState } from "../chat-realtime.ts";
 import { createChatPageStateContext } from "../chat-state-context.test-support.ts";
 import { createPageState } from "../chat-state-page.ts";
+import { voiceCaptureLocksFixture } from "./input.test-support.ts";
 
 type AudioProcessor = {
   onaudioprocess: ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void) | null;
@@ -82,6 +84,7 @@ beforeEach(() => {
   vi.stubGlobal("AudioContext", FakeAudioContext);
   vi.stubGlobal("Audio", FakeAudio);
   vi.stubGlobal("navigator", {
+    locks: voiceCaptureLocksFixture(),
     mediaDevices: {
       getUserMedia: vi.fn(async () => {
         const track = Object.assign(new EventTarget(), { stop: vi.fn() });
@@ -590,6 +593,17 @@ it("surfaces a rejected chat admission instead of waiting forever for a model re
   expect(h.called("chat.send")).toBe(true);
   expect(h.called("tts.speak")).toBe(false);
   expect(tracks).toHaveLength(1);
+  expect(tracks[0]?.stop).toHaveBeenCalledOnce();
+  const dictation = new VoiceRouteSession({
+    route: "dictation",
+    destination: { kind: "draft", key: sessionKey },
+    owner: {},
+  });
+  try {
+    await expect(dictation.acquireCapture()).resolves.toBeUndefined();
+  } finally {
+    dictation.cancel();
+  }
 });
 
 it("keeps split Talk listening after a successfully completed empty utterance", async () => {

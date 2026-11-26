@@ -3,6 +3,7 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
+import { VoiceRouteSession } from "../../lib/voice-route.ts";
 import type {
   ComposerDictationCommits,
   ComposerDictationSession,
@@ -35,6 +36,7 @@ type ComposerDictationOwnerOptions = {
 };
 
 type DictationCapture = {
+  route: VoiceRouteSession;
   options: ComposerDictationOwnerOptions;
   session?: ComposerDictationSession;
 };
@@ -123,6 +125,11 @@ export class ComposerDictationOwner extends EventTarget {
       return false;
     }
     const capture: DictationCapture = {
+      route: new VoiceRouteSession({
+        route: "dictation",
+        destination: { kind: "draft", key: this.options.draftKey ?? this.options.sessionKey },
+        owner: this,
+      }),
       options: { ...this.options },
     };
     this.continuationGeneration += 1;
@@ -235,8 +242,9 @@ export class ComposerDictationOwner extends EventTarget {
       await this.stop({ commit: false });
       return;
     }
-    const { options } = capture;
+    const { route, options } = capture;
     if (options.dictationAvailable === false && !options.prepareSession) {
+      route.cancel();
       this.capture = undefined;
       this.setPhase("idle");
       options.onDictationUnavailable?.();
@@ -252,7 +260,12 @@ export class ComposerDictationOwner extends EventTarget {
       "start",
     ];
     try {
-      // Preserve Safari playback activation before the lazy capture module loads.
+      // Preserve gesture activation without taking another route's playback before admission.
+      this.playback.prepare();
+      await route.acquireCapture();
+      if (this.capture !== capture || !route.acceptsResults) {
+        return;
+      }
       this.playback.prepare(client, () => {
         if (this.capture === capture) {
           void this.stop({ commit: false });
@@ -263,7 +276,13 @@ export class ComposerDictationOwner extends EventTarget {
         : options.sessionKey;
       const { ComposerDictationSession, ComposerDictationCommits, describeDictationStartError } =
         await import("./composer-dictation-session.ts");
-      if (this.capture !== capture || this.disposed || !this.connecting || !this.canStart()) {
+      if (
+        this.capture !== capture ||
+        !route.acceptsResults ||
+        this.disposed ||
+        !this.connecting ||
+        !this.canStart()
+      ) {
         return;
       }
       describeStartError = describeDictationStartError;
@@ -272,7 +291,7 @@ export class ComposerDictationOwner extends EventTarget {
         client,
         {
           onError: (message, preservesText) => {
-            if (this.capture !== capture && !commits.has(session)) {
+            if (!route.acceptsResults || (this.capture !== capture && !commits.has(session))) {
               return;
             }
             try {
@@ -286,22 +305,22 @@ export class ComposerDictationOwner extends EventTarget {
             }
           },
           onTranscriptChange: () => {
-            if (this.capture === capture) {
+            if (route.acceptsResults && this.capture === capture) {
               this.dispatchEvent(new Event("change"));
             }
           },
           onReady: () => {
-            if (this.capture === capture && this.phase === "connecting") {
+            if (route.acceptsResults && this.capture === capture && this.phase === "connecting") {
               this.setPhase("recording");
             }
           },
         },
-        { sessionKey },
+        { sessionKey, voiceRoute: route },
       );
       capture.session = session;
       await session.start();
     } catch (error) {
-      if (this.capture !== capture || this.disposed || this.finalizing) {
+      if (this.capture !== capture || !route.acceptsResults || this.disposed || this.finalizing) {
         return;
       }
       const [message, kind] = describeStartError(error);
@@ -323,6 +342,7 @@ export class ComposerDictationOwner extends EventTarget {
     const capture = this.capture;
     this.capture = undefined;
     if (!capture?.session) {
+      capture?.route.cancel();
       this.setPhase("idle");
       this.releasePlayback();
       return Promise.resolve(false);
@@ -333,6 +353,7 @@ export class ComposerDictationOwner extends EventTarget {
     this.phase = "stopping";
     if (!options.commit) {
       void session.cancel().catch(() => undefined);
+      capture.route.cancel();
       this.setPhase("idle");
       this.releasePlayback();
       return Promise.resolve(false);
@@ -341,9 +362,16 @@ export class ComposerDictationOwner extends EventTarget {
     // and commit in capture order, even when a later provider finishes first.
     const committed = this.commits!.add(session, (lateTranscript) => {
       try {
-        if (!lateTranscript || !wasActive || this.disposed || !this.options.enabled) {
+        if (
+          !lateTranscript ||
+          !wasActive ||
+          !capture.route.acceptsResults ||
+          this.disposed ||
+          !this.options.enabled
+        ) {
           return false;
         }
+        capture.route.requireRoute("dictation");
         // Read before insertion: the transcript itself changes the draft revision.
         // Later typing is preserved but needs another explicit Send activation.
         const canContinue = options.canContinue?.() ?? true;
@@ -354,11 +382,13 @@ export class ComposerDictationOwner extends EventTarget {
         }
         return canContinue;
       } finally {
+        capture.route.complete();
         this.pendingCommitsChanged();
       }
     });
     // finish() stops capture synchronously. Its pending result keeps the original
-    // draft sink without retaining microphone or playback ownership.
+    // route and draft sink without retaining microphone or playback ownership.
+    capture.route.releaseCapture();
     this.setPhase("idle");
     this.releasePlayback();
     this.pendingCommitsChanged();
