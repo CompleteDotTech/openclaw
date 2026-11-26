@@ -6,6 +6,7 @@ import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictati
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import type { VoiceRouteSession } from "../../lib/voice-route.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -175,6 +176,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 export class ComposerDictationSession {
+  private readonly voiceRoute: VoiceRouteSession;
   private readonly input = new RealtimeTalkInputOwner((detail) => this.reportFailure(detail));
   private context: AudioContext | null = null;
   private readonly inputPump = new RealtimeTalkPcmInputPump();
@@ -202,21 +204,38 @@ export class ComposerDictationSession {
   constructor(
     private readonly client: GatewayBrowserClient,
     private readonly callbacks: ComposerDictationSessionCallbacks,
-    private readonly options?: {
+    private readonly options: {
       sessionKey?: string;
       inputDeviceId?: string;
       silenceTimeoutMs?: number;
+      voiceRoute: VoiceRouteSession;
     },
-  ) {}
+  ) {
+    this.voiceRoute = options.voiceRoute;
+  }
 
   start(): Promise<void> {
-    this.startPromise ??= this.startInternal();
+    this.startPromise ??= this.startInternal().catch(async (error: unknown) => {
+      // Stop owned tracks before making the microphone available to another route.
+      // A split Talk turn leaves the conversation reservation to its parent.
+      await this.stopCapture();
+      throw error;
+    });
     return this.startPromise;
   }
 
   private async startInternal(): Promise<void> {
+    // Split Talk also uses this transcription-only transport. Its parent keeps
+    // the Talk identity; a transcript must never choose the product route.
+    this.voiceRoute.requireRoute(
+      this.voiceRoute.identity.route === "dictation" ? "dictation" : "talk",
+    );
+    await this.voiceRoute.acquireCapture();
+    if (this.stopped || !this.voiceRoute.acceptsResults) {
+      return;
+    }
     const inputDeviceId =
-      this.options && "inputDeviceId" in this.options
+      "inputDeviceId" in this.options
         ? this.options.inputDeviceId
         : loadSettings().realtimeTalkInputDeviceId?.trim() || undefined;
     // Start the audio graph while the Gateway admits the session instead of after it.
@@ -233,7 +252,7 @@ export class ComposerDictationSession {
       mode: "transcription",
       transport: "gateway-relay",
       brain: "none",
-      ...(this.options?.sessionKey ? { sessionKey: this.options.sessionKey } : {}),
+      ...(this.options.sessionKey ? { sessionKey: this.options.sessionKey } : {}),
     });
     this.sessionId = result.sessionId;
     this.transcriptionSessionId = result.transcriptionSessionId ?? result.sessionId;
@@ -254,7 +273,8 @@ export class ComposerDictationSession {
       if (
         !payload ||
         payload.transcriptionSessionId !== this.transcriptionSessionId ||
-        this.stopped
+        this.stopped ||
+        !this.voiceRoute.acceptsResults
       ) {
         return;
       }
@@ -335,7 +355,11 @@ export class ComposerDictationSession {
   async cancel(): Promise<void> {
     this.discarded = true;
     this.settleLateFinalDrain?.(true);
-    await this.stopAndClose(false);
+    const closed = this.stopAndClose(false);
+    if (this.voiceRoute.identity.route === "dictation") {
+      this.voiceRoute.cancel();
+    }
+    await closed;
   }
 
   private async stopAndClose(reportStartFailure: boolean): Promise<void> {
@@ -384,7 +408,7 @@ export class ComposerDictationSession {
     const audioBase64 = bytesToBase64(floatToG711Ulaw(samples));
     this.appendChain = this.appendChain
       .then(async () => {
-        if (this.discarded) {
+        if (this.discarded || !this.voiceRoute.acceptsResults) {
           return;
         }
         await this.client.request("talk.session.appendAudio", { sessionId, audioBase64 });
@@ -413,6 +437,11 @@ export class ComposerDictationSession {
     }
     this.stopped = true;
     this.input.stop();
+    // Final dictation text may drain after the microphone is available to Talk.
+    // Split Talk owns its reservation across capture, reply, and the next turn.
+    if (this.voiceRoute.identity.route === "dictation") {
+      this.voiceRoute.releaseCapture();
+    }
     this.inputPump.stop();
     this.unsubscribe?.();
     this.unsubscribe = null;
@@ -468,7 +497,11 @@ export class ComposerDictationSession {
       this.resumeFinalDrain();
       unsubscribe = this.client.addEventListener((frame) => {
         const payload = eventPayload(frame);
-        if (!payload || payload.transcriptionSessionId !== this.transcriptionSessionId) {
+        if (
+          !payload ||
+          payload.transcriptionSessionId !== this.transcriptionSessionId ||
+          !this.voiceRoute.acceptsResults
+        ) {
           return;
         }
         if (

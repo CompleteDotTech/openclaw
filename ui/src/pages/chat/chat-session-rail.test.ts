@@ -3,6 +3,7 @@
 import { createMemo, createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../app/theme-branding.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -294,6 +295,7 @@ describe("ChatSessionRailElement", () => {
     element.running = true;
     element.activeRunId = "run-1";
     element.connected = true;
+    element.presented = true;
     Object.assign(element, overrides);
     document.body.append(element);
     await element.updateComplete;
@@ -542,7 +544,60 @@ describe("ChatSessionRailElement", () => {
       expect(onSubmit).toHaveBeenCalledExactlyOnceWith("Summarize the spoken part"),
     );
     expect(finishActive).toHaveBeenCalledOnce();
+    expect(finishActive).toHaveBeenCalledWith({ forSend: true });
   });
+
+  it("does not send a Side chat question after dictation confirmation was canceled", async () => {
+    const onSubmit = vi.fn();
+    const element = await mount({
+      onSubmit,
+      companion: { turns: [], loading: false, draft: "Keep for review" },
+    });
+    const finishActive = vi.fn(async () => false);
+    vi.spyOn(DirectDictationControl.prototype, "dictation", "get").mockReturnValue({
+      active: true,
+      finalizing: false,
+      finishActive,
+    } as never);
+    element
+      .querySelector("textarea")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await finishActive.mock.results[0]?.value;
+    await Promise.resolve();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it.each(["scope", "session ID"] as const)(
+    "keeps the typed Side chat draft when its conversation %s changes during Send",
+    async (changed) => {
+      let scope = { owner: {}, sessionId: "original" };
+      const onSubmit = vi.fn();
+      const element = await mount({
+        onSubmit,
+        readConversationScope: () => scope,
+        companion: { turns: [], loading: false, draft: "Keep for review" },
+      });
+      const finishing = createDeferred<boolean>();
+      const finishActive = vi.fn(() => finishing.promise);
+      vi.spyOn(DirectDictationControl.prototype, "dictation", "get").mockReturnValue({
+        active: true,
+        finalizing: false,
+        finishActive,
+      } as never);
+      element
+        .querySelector("textarea")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(finishActive).toHaveBeenCalledWith({ forSend: true });
+
+      scope =
+        changed === "scope" ? { ...scope, owner: {} } : { ...scope, sessionId: "replacement" };
+      finishing.resolve(true);
+      await finishing.promise;
+      await Promise.resolve();
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(element.companion.draft).toBe("Keep for review");
+    },
+  );
 
   it.each([false, true])(
     "submits attachments without a written question (image: %s)",

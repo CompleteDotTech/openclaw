@@ -132,7 +132,7 @@ const catalog = {
       microphoneStopped: "Microphone input stopped. Choose an available input and start again.",
       microphoneFallback: "Microphone {number}",
       microphoneInput: "Microphone input",
-      microphoneAppliesNextSession: "Changes apply when you start your next Talk session.",
+      microphoneAppliesNextSession: "Changes apply when you next start dictation or Talk.",
       microphoneListUnsupported: "This browser cannot list microphone inputs.",
       noCameras: "No additional cameras found",
       noMicrophones: "No additional microphones found",
@@ -140,15 +140,25 @@ const catalog = {
       microphonePageInactive: "Microphone inputs are unavailable while this page is inactive.",
       microphonePermissionBlocked:
         "Microphone access is blocked. Allow it in browser site settings to list inputs.",
-      realtimeTalkCapability: "Tap to talk",
+      realtimeTalkCapability: "Talk",
       dictationCapability: "Dictation",
+      cancelDictation: "Cancel dictation",
+      stopTalk: "Stop Talk",
+      talkStatus: "Talk: {status}",
+      stopDictationBeforeTalk: "Stop and review dictation, or cancel it, before starting Talk.",
+      stopTalkBeforeDictation: "Stop Talk before starting dictation.",
+      voiceCommandUnavailable:
+        "Voice commands are unavailable until an authorized command executor is connected.",
+      voiceCoordinationUnavailable:
+        "This browser cannot coordinate microphone access across windows. Use a browser with Web Locks support.",
       realtimeTalkProviderUnavailable: "No realtime voice provider is configured.",
+      splitTalkProvidersUnavailable: "Talk needs a transcription provider and a speech provider.",
+      splitTalkSpeechUnavailable: "No speech provider is configured.",
       dictationProviderUnavailableShort: "No transcription provider is configured.",
       talkCapabilityChecking: "Checking provider availability…",
       talkCapabilityUnknown: "Couldn’t check provider availability. Try again.",
       configureCapability: "Configure",
       holdToRecordSetting: "Hold the mic button to dictate",
-      holdToDictate: "Hold to dictate",
       holdToRecordSettingDescription:
         "Hold until dictation starts, then release and keep speaking. Tap Stop to insert the transcript.",
       dictationAudioUnsupported: "The Gateway returned an unsupported dictation audio format.",
@@ -158,10 +168,10 @@ const catalog = {
       dictationInterruptedRecovery:
         "Captured text was inserted. Check your connection and try again.",
       dictationStartRecovery: "Check microphone access and transcription settings, then try again.",
-      dictationFinalizing: "Transcribing…",
-      dictationListening: "Listening…",
-      dictationStarting: "Starting microphone…",
-      dictationStopAndKeep: "Stop and keep text",
+      dictationFinalizing: "Dictation: transcribing…",
+      dictationListening: "Dictation: listening…",
+      dictationStarting: "Dictation: starting microphone…",
+      dictationStopAndKeep: "Stop dictation and keep text",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",
       realtimeTalkRelayUnresponsive:
@@ -172,7 +182,6 @@ const catalog = {
       selectedCameraUnavailable:
         "The selected camera is unavailable. Choose another camera or System default.",
       startVoiceInput: "Start voice input",
-      voiceGestureHint: "Tap for voice chat · Hold to dictate",
       stillListening: "Still listening",
       stopVoiceInput: "Stop voice input",
       systemDefaultMicrophone: "System default",
@@ -262,6 +271,7 @@ const catalog = {
     },
     permissions: {},
     voice: {
+      speaking: "Speaking…",
       asking: "Asking the agent…",
       replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
       replyTimedOut:

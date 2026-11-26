@@ -14,7 +14,10 @@ import {
 } from "./chat-composer.test-support.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import type { ChatQuestionCard } from "./components/chat-question-card.ts";
-import { MockDictationAudioContext } from "./talk/input.test-support.ts";
+import {
+  MockDictationAudioContext,
+  useVoiceCaptureLocksFixture,
+} from "./talk/input.test-support.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
 
 const discoverRealtimeTalkInputsMock = vi.fn();
@@ -37,7 +40,8 @@ function renderComposer(overrides: Parameters<typeof props>[0], attached = false
 
 const microphoneGuidance =
   "Waiting for microphone access. Bring this tab to the foreground and allow access if prompted.";
-const voiceButton = (container: Element) => button(container, t("chat.composer.startVoiceInput"));
+const voiceButton = (container: Element) =>
+  button(container, t("chat.composer.dictationCapability"));
 
 async function mountTalk(
   catalog: { transcription: { ready: boolean }; realtime?: { ready: boolean } },
@@ -78,6 +82,7 @@ async function mountTalk(
   await vi.waitFor(() =>
     expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
   );
+  await vi.advanceTimersByTimeAsync(0);
   return { ...view, request };
 }
 
@@ -165,11 +170,7 @@ it("labels the send action as Suggest and emits ephemeral typing state", () => {
   expect(onTypingChange).toHaveBeenLastCalledWith(false);
 });
 
-function dictationPointer(type: "pointerdown" | "pointerup", pointerId: number): PointerEvent {
-  const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 });
-  Object.defineProperty(event, "pointerId", { value: pointerId });
-  return event as PointerEvent;
-}
+useVoiceCaptureLocksFixture();
 
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
@@ -237,7 +238,7 @@ it("shows actionable connecting guidance in a visible status region", () => {
   expect(pending?.textContent).toContain(microphoneGuidance);
   expect(pending?.closest(".sr-only")).toBeNull();
   expect(query('[role="alert"]')).toBeNull();
-  expect(button(container, t("chat.composer.stopVoiceInput")).disabled).toBe(false);
+  expect(button(container, t("chat.composer.stopTalk")).disabled).toBe(false);
 });
 
 it("shows dictation starting at once and microphone guidance only when access is slow", async () => {
@@ -257,19 +258,21 @@ it("shows dictation starting at once and microphone guidance only when access is
     true,
   );
   await vi.advanceTimersByTimeAsync(0);
-  voiceButton(container).dispatchEvent(dictationPointer("pointerdown", 15));
+  voiceButton(container).click();
   expect(dismissRecovery).toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(800);
   expect(openMicrophoneMock).toHaveBeenCalledOnce();
   const starting = query('.agent-chat__dictation-status[role="status"]');
-  expect(starting?.textContent).toBe(t("chat.composer.dictationStarting"));
+  expect(starting?.querySelector(".agent-chat__dictation-phase")?.textContent).toBe(
+    t("chat.composer.dictationStarting"),
+  );
   expect(
     starting?.querySelector('.agent-chat__voice-activity[data-status="connecting"]'),
   ).not.toBeNull();
   await vi.advanceTimersByTimeAsync(1_000);
-  expect(query('.agent-chat__dictation-status[role="status"]')?.textContent).toBe(
-    microphoneGuidance,
-  );
+  expect(
+    query('.agent-chat__dictation-status[role="status"] .agent-chat__dictation-phase')?.textContent,
+  ).toBe(microphoneGuidance);
 });
 
 it("clears a live whitespace draft when the last rendered draft was already empty", () => {
@@ -432,48 +435,25 @@ it("keeps send and dictation distinct for attachment-only drafts", () => {
   expect(voiceButton(container)).not.toBeNull();
 });
 
-it("keeps the dictation button stable through hold progress and latch", async () => {
+it("keeps the dictation button stable when tapped and blocks Talk while recording", async () => {
   openMicrophoneMock.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
   vi.stubGlobal("AudioContext", MockDictationAudioContext);
-  const { query, request } = await mountTalk(
-    { transcription: { ready: true } },
+  const { container, query, request } = await mountTalk(
+    { realtime: { ready: true }, transcription: { ready: true } },
     { draft: "Keep this text" },
     true,
   );
-  await vi.waitFor(() => expect(query('[data-chat-talk-capability="dictation"]')).toBeNull());
-
-  const capturedButton = query<HTMLButtonElement>(".chat-talk-control > openclaw-tooltip > button");
-  expect(capturedButton).not.toBeNull();
-  const captures = new Set<number>();
-  Object.defineProperties(capturedButton!, {
-    setPointerCapture: { value: (pointerId: number) => captures.add(pointerId) },
-    hasPointerCapture: { value: (pointerId: number) => captures.has(pointerId) },
-    releasePointerCapture: { value: (pointerId: number) => captures.delete(pointerId) },
-  });
-
-  capturedButton!.dispatchEvent(dictationPointer("pointerdown", 9));
-  expect(capturedButton!.hasPointerCapture(9)).toBe(true);
-  await vi.advanceTimersByTimeAsync(300);
-  expect(capturedButton?.matches(".chat-send-btn--dictation-arming")).toBe(true);
-  const holdingControl = capturedButton?.closest(".chat-talk-control");
-  expect(holdingControl?.matches(".chat-talk-control--holding")).toBe(true);
-  expect(holdingControl?.querySelector(".chat-talk-input-picker")).not.toBeNull();
-  expect(capturedButton!.hasPointerCapture(9)).toBe(true);
-  await vi.advanceTimersByTimeAsync(500);
-
-  const rerenderedButton = query<HTMLButtonElement>(
-    ".chat-talk-control > openclaw-tooltip > button",
+  const mic = voiceButton(container);
+  mic.click();
+  await vi.waitFor(() =>
+    expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything()),
   );
-  expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything());
-  expect(rerenderedButton).toBe(capturedButton);
-  expect(rerenderedButton?.matches(".chat-send-btn--dictating")).toBe(true);
-  expect(query(".agent-chat__dictation-phase--listening")?.textContent?.trim()).toBe(
-    t("chat.composer.dictationListening"),
-  );
-  expect(rerenderedButton?.hasPointerCapture(9)).toBe(false);
+  expect(button(container, t("chat.composer.dictationStopAndKeep"))).toBe(mic);
+  expect(button(container, t("chat.composer.realtimeTalkCapability")).disabled).toBe(true);
+  expect(query(".agent-chat__dictation-phase--listening")).not.toBeNull();
 });
 
-it("keeps the microphone picker open without leaking an unavailable hold into Talk", async () => {
+it("keeps the microphone picker open without turning an unavailable dictation tap into Talk", async () => {
   discoverRealtimeTalkInputsMock.mockResolvedValue({ devices: [], issue: "none-found" });
   const onToggleRealtimeTalk = vi.fn();
   const { container, query } = await mountTalk(
@@ -481,8 +461,8 @@ it("keeps the microphone picker open without leaking an unavailable hold into Ta
     { onToggleRealtimeTalk },
   );
   const microphone = voiceButton(container);
-  microphone.dispatchEvent(dictationPointer("pointerdown", 10));
-  await vi.advanceTimersByTimeAsync(801);
+  microphone.click();
+  await vi.advanceTimersByTimeAsync(0);
   const dropdown = query(".chat-talk-input-picker");
   expect(dropdown?.hasAttribute("open")).toBe(true);
   await vi.waitFor(() =>
@@ -491,13 +471,7 @@ it("keeps the microphone picker open without leaking an unavailable hold into Ta
     ).not.toBeNull(),
   );
 
-  document.dispatchEvent(dictationPointer("pointerup", 10));
-  microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-  expect(dropdown?.hasAttribute("open")).toBe(true);
   expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
-
-  microphone.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-  expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
 });
 
 it("shows an actionable error status and returns the microphone to idle on startup failure", async () => {
@@ -510,7 +484,7 @@ it("shows an actionable error status and returns the microphone to idle on start
   );
 
   const microphone = voiceButton(container);
-  microphone.dispatchEvent(dictationPointer("pointerdown", 12));
+  microphone.click();
   await vi.advanceTimersByTimeAsync(800);
   await vi.waitFor(() =>
     expect(query('.agent-chat__composer-status[data-tone="danger"]')).not.toBeNull(),

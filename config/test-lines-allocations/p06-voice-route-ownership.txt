@@ -1,0 +1,4 @@
+# P06 atomic voice capture admission: independent route ownership, cancellation,
+# cross-window native Web Locks, microphone stop ordering, and retained provider
+# lifetime/quota regressions. Physical-conversation sinks and UI proof are separate stages.
+217

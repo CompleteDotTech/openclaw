@@ -3,8 +3,10 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
+import type { VoiceRouteSession } from "../../../lib/voice-route.ts";
 import { isTerminalFailureChatSendAck, type ChatSendAck } from "../chat-send-ack.ts";
 import { ComposerDictationSession } from "../composer-dictation-session.ts";
+import { RealtimeTalkMediaStreamMeter } from "./audio.ts";
 import {
   waitForChatResult,
   type RealtimeTalkCallbacks,
@@ -31,10 +33,16 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     private readonly sessionKey: string,
     private readonly callbacks: RealtimeTalkCallbacks,
     private readonly options: SplitTalkOptions,
-    private readonly inputDeviceId?: string,
+    private readonly inputDeviceId: string | undefined,
+    private readonly voiceRoute: VoiceRouteSession,
   ) {}
 
   async start(): Promise<"ready" | "cancelled"> {
+    this.voiceRoute.requireRoute("talk");
+    await this.voiceRoute.acquireCapture();
+    if (this.closed || !this.voiceRoute.acceptsResults) {
+      return "cancelled";
+    }
     this.callbacks.onVideoCapability?.(false);
     await this.listen();
     return this.closed ? "cancelled" : "ready";
@@ -48,6 +56,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     const capture = this.capture;
     this.capture = null;
     void capture?.cancel().catch(() => undefined);
+    this.voiceRoute.releaseCapture();
     this.options.playback.stop();
     this.chatAbort?.abort();
     if (this.runId && disposition === "abort") {
@@ -58,7 +67,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
   }
 
   private async listen(): Promise<void> {
-    if (this.closed) {
+    if (this.closed || !this.voiceRoute.acceptsResults) {
       return;
     }
     const capture = new ComposerDictationSession(
@@ -74,6 +83,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
         sessionKey: this.sessionKey,
         inputDeviceId: this.inputDeviceId,
         silenceTimeoutMs: this.options.silenceTimeoutMs,
+        voiceRoute: this.voiceRoute,
       },
     );
     this.capture = capture;
@@ -103,6 +113,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
             this.options.speechMethod,
             () => !this.closed,
             this.options.maxTextLength,
+            this.observePlayback,
           );
         }
       }
@@ -112,7 +123,42 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     }
   }
 
+  private readonly observePlayback = (audio: HTMLAudioElement): (() => void) | undefined => {
+    this.callbacks.onStatus?.("speaking");
+    const onLevel = this.callbacks.onPlaybackLevel;
+    if (!onLevel) {
+      return undefined;
+    }
+    // Tap the element's output without routing audible playback through Web Audio.
+    // Browsers without captureStream still play normally and meter the microphone.
+    try {
+      const capture =
+        "captureStream" in audio && typeof audio.captureStream === "function"
+          ? audio.captureStream
+          : "mozCaptureStream" in audio && typeof audio.mozCaptureStream === "function"
+            ? audio.mozCaptureStream
+            : undefined;
+      const stream: unknown = capture?.call(audio);
+      if (!(stream instanceof MediaStream)) {
+        return undefined;
+      }
+      const meter = new RealtimeTalkMediaStreamMeter(onLevel);
+      meter.start(stream);
+      return () => {
+        meter.stop();
+        for (const track of stream.getTracks()) {
+          track.stop();
+        }
+      };
+    } catch {
+      // Decorative feedback must not interrupt speech playback.
+      return undefined;
+    }
+  };
+
   private async send(message: string): Promise<string> {
+    // Only an explicitly selected Talk turn may enter the existing agent path.
+    this.voiceRoute.requireRoute("talk");
     const runId: string = crypto.randomUUID();
     this.runId = runId;
     const controller = new AbortController();
