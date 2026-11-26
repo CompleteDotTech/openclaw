@@ -1,5 +1,5 @@
 # Evidence-only immutable source generation. No tests, static checks, builds or publication run in these jobs.
-name: P06 generation3 canonical formatting
+name: P06 stage3-generation1 canonical formatting
 'on':
   push:
     branches:
@@ -19,96 +19,29 @@ jobs:
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 1
       matrix:
         include:
-        - label: stage2
-          source_sha: d45d2da3f29cf3af486046ec4623141f21f180d0
-          source_tree: 73938204cf3bc3a7116deba8208e72c5ab54aa65
-          selection_base_sha: 8867b88d75f69d0929b6aa879427453f9b634807
-          selection_base_tree: d765c40a16b1c56e11f6800933fa26ea459201ab
+        - label: stage3
+          source_sha: 3fcb901c77f472b5c06b622db74664b443cb325c
+          source_tree: cc1cf3d60e0c199288a8573334207854ccd911c6
+          selection_base_sha: d45d2da3f29cf3af486046ec4623141f21f180d0
+          selection_base_tree: 73938204cf3bc3a7116deba8208e72c5ab54aa65
           format_files: |
-            config/test-lines-allocations/p06-voice-route-ownership.txt
-            ui/src/e2e/browser-voice-routes.e2e.test.ts
-            ui/src/i18n/locales/en-chat-composer.ts
-            ui/src/lib/voice-route.test.ts
-            ui/src/lib/voice-route.ts
-            ui/src/pages/chat/chat-composer.test.ts
-            ui/src/pages/chat/chat-realtime-handoff.test.ts
-            ui/src/pages/chat/chat-realtime.test.ts
-            ui/src/pages/chat/chat-realtime.ts
-            ui/src/pages/chat/composer-dictation-session.ts
-            ui/src/pages/chat/composer-dictation.test.ts
-            ui/src/pages/chat/composer-dictation.ts
-            ui/src/pages/chat/talk/chat-actions-runtime.ts
-            ui/src/pages/chat/talk/input.test-support.ts
-            ui/src/pages/chat/talk/input.test.ts
-            ui/src/pages/chat/talk/input.ts
-            ui/src/pages/chat/talk/lifecycle.test.ts
-            ui/src/pages/chat/talk/session-runtime-loading.test.ts
-            ui/src/pages/chat/talk/session.test.ts
-            ui/src/pages/chat/talk/session.ts
-            ui/src/pages/chat/talk/split.test.ts
-            ui/src/pages/chat/talk/split.ts
-            ui/src/pages/chat/talk/transcript-queue.test.ts
-        - label: combined
-          source_sha: d2dae314be5e7e0b3451ea7fd2b62637f1b735e9
-          source_tree: 5f3260b983b6f16af94b4998b892ff8da9c620bd
-          selection_base_sha: 92182120e8baa7ce001f41dec7f0bba1489e6636
-          selection_base_tree: d552dd794421d98780343e789ddc55249cf24646
-          format_files: |
-            docs/web/control-ui/chat.md
-            ui/src/e2e/browser-dictation-status.e2e.test.ts
-            ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
-            ui/src/e2e/browser-talk-ordering.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
-            ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
-            ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
-            ui/src/e2e/browser-voice-rollback.e2e.test.ts
-            ui/src/e2e/browser-voice-routes.e2e.test.ts
-            ui/src/i18n/locales/en-chat-composer.ts
-            ui/src/lib/voice-route.test.ts
-            ui/src/lib/voice-route.ts
-            ui/src/pages/chat/chat-composer-actions.test.ts
-            ui/src/pages/chat/chat-composer-microphone.test.ts
-            ui/src/pages/chat/chat-composer.test.ts
             ui/src/pages/chat/chat-pane-history.ts
-            ui/src/pages/chat/chat-pane-retained-presentation.ts
-            ui/src/pages/chat/chat-realtime-handoff.test.ts
             ui/src/pages/chat/chat-realtime.test.ts
             ui/src/pages/chat/chat-realtime.ts
             ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/chat-view.test.ts
-            ui/src/pages/chat/components/chat-composer-controls.tsx
-            ui/src/pages/chat/components/chat-composer-dictation-options.ts
-            ui/src/pages/chat/components/chat-composer-frame.ts
-            ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
             ui/src/pages/chat/components/chat-session-rail-composer.tsx
             ui/src/pages/chat/components/chat-session-rail.tsx
-            ui/src/pages/chat/components/chat-voice-activity.tsx
-            ui/src/pages/chat/components/composer-dictation-status.tsx
-            ui/src/pages/chat/components/direct-dictation-view.tsx
-            ui/src/pages/chat/composer-dictation-session.ts
-            ui/src/pages/chat/composer-dictation.test.ts
-            ui/src/pages/chat/composer-dictation.ts
             ui/src/pages/chat/composer-direct-dictation.test.tsx
             ui/src/pages/chat/composer-direct-dictation.ts
             ui/src/pages/chat/talk/chat-actions-runtime.ts
             ui/src/pages/chat/talk/consult.test.ts
-            ui/src/pages/chat/talk/input.test-support.ts
-            ui/src/pages/chat/talk/input.test.ts
-            ui/src/pages/chat/talk/input.ts
-            ui/src/pages/chat/talk/lifecycle.test.ts
-            ui/src/pages/chat/talk/session-runtime-loading.test.ts
-            ui/src/pages/chat/talk/session.test.ts
             ui/src/pages/chat/talk/session.ts
             ui/src/pages/chat/talk/shared.ts
             ui/src/pages/chat/talk/split.test.ts
-            ui/src/pages/chat/talk/split.ts
             ui/src/pages/chat/talk/transcript-queue.test.ts
-            ui/src/pages/new-session/draft-persistence.ts
-            ui/src/pages/new-session/new-session-page-owner.ts
     env:
       CI: 'true'
       SOURCE_REPOSITORY: CompleteDotTech/openclaw
