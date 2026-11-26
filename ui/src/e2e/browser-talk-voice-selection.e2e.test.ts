@@ -44,8 +44,8 @@ suite.define(() => {
       await installOpenAiTalkFixture(page);
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForTalkReady(page);
-      await page.getByRole("button", { name: "Talk" }).click();
-      const stopVoice = page.getByRole("button", { name: "Stop Talk" });
+      await page.getByRole("button", { name: "Talk", exact: true }).click();
+      const stopVoice = page.getByRole("button", { name: "Stop Talk", exact: true });
       const openAudio = () =>
         page.waitForFunction(() => {
           const current = (window as TalkWindow).openclawVideoTalkE2e;

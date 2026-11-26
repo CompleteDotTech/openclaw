@@ -1,6 +1,7 @@
 import { t } from "../i18n/index.ts";
 import { registerChatComposerEnglish } from "../i18n/locales/en-chat-composer.ts";
 import { UserFacingError } from "./connection-error.ts";
+import { generateUUID } from "./uuid.ts";
 
 registerChatComposerEnglish();
 
@@ -36,11 +37,7 @@ export class VoiceRouteSession {
   private readonly abort = new AbortController();
   private capture: CaptureAttempt | null = null;
 
-  constructor(options: {
-    route: VoiceRoute;
-    destination: VoiceDestination;
-    owner: object;
-  }) {
+  constructor(options: { route: VoiceRoute; destination: VoiceDestination; owner: object }) {
     const destinationKind = {
       dictation: "draft",
       talk: "conversation",
@@ -50,7 +47,7 @@ export class VoiceRouteSession {
       throw new Error("Voice destination does not match the activated route.");
     }
     this.identity = Object.freeze({
-      sessionId: crypto.randomUUID(),
+      sessionId: generateUUID(),
       generation: ++nextGeneration,
       route: options.route,
       destination: Object.freeze({ ...options.destination }),
@@ -99,17 +96,21 @@ export class VoiceRouteSession {
       captureOwner = attempt;
       void (async () => {
         try {
-          await locks.request(CAPTURE_LOCK, { mode: "exclusive", ifAvailable: true }, async (lock) => {
-            // A canceled admission must not start later, or retire a newer claim.
-            if (this.capture !== attempt || !this.acceptsResults) {
-              return;
-            }
-            if (!lock) {
-              throw new UserFacingError(t("chat.composer.microphoneBusy"));
-            }
-            attempt.ready.resolve();
-            await attempt.release.promise;
-          });
+          await locks.request(
+            CAPTURE_LOCK,
+            { mode: "exclusive", ifAvailable: true },
+            async (lock) => {
+              // A canceled admission must not start later, or retire a newer claim.
+              if (this.capture !== attempt || !this.acceptsResults) {
+                return;
+              }
+              if (!lock) {
+                throw new UserFacingError(t("chat.composer.microphoneBusy"));
+              }
+              attempt.ready.resolve();
+              await attempt.release.promise;
+            },
+          );
         } catch (error) {
           attempt.ready.reject(
             error instanceof UserFacingError
@@ -129,7 +130,7 @@ export class VoiceRouteSession {
       })();
       return attempt.ready.promise;
     } catch (error) {
-      return Promise.reject(error);
+      return Promise.reject(error instanceof Error ? error : new Error("Voice capture failed.", { cause: error }));
     }
   }
 

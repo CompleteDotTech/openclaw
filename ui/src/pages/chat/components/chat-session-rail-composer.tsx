@@ -17,6 +17,7 @@ import type { ChatSessionCompanionThread } from "../chat-session-companion.ts";
 import {
   createDirectDictationTextarea,
   DirectDictationControl,
+  type DirectDictationScope,
 } from "../composer-direct-dictation.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
@@ -63,6 +64,7 @@ export function sessionRailQuestion(companion: ChatSessionCompanionThread): stri
  */
 export function SessionRailComposer(props: {
   sessionKey: string;
+  readConversationScope?: () => DirectDictationScope;
   agentId?: string | null;
   companion: ChatSessionCompanionThread;
   modelControls?: ChatModelControlsProps;
@@ -88,10 +90,12 @@ export function SessionRailComposer(props: {
   const dictationControl = new DirectDictationControl({
     textarea: createDirectDictationTextarea(() => textarea ?? null),
     getClient: () => props.client,
+    readConversationScope: () => props.readConversationScope?.(),
     isConnected: () => props.connected,
     // Follow-ups stay editable while an answer is pending; submit owns that gate.
     canCommit: () => props.connected,
-    readDraftRevision: () => draftRevision,
+    // Include owner-driven draft replacement as well as local A→B→A typing.
+    readDraftRevision: () => JSON.stringify([draftRevision, props.companion.draft]),
     onMessage: (message) => props.onDraftChange?.(message.slice(0, SIDE_CHAT_QUESTION_MAX_LENGTH)),
     onError: (message) => showToast({ severity: "error", message }),
     onSubmit: () => props.submit(),
@@ -140,7 +144,7 @@ export function SessionRailComposer(props: {
     dictation.revision();
     return dictationControl.previewDraft() ?? props.companion.draft;
   });
-  const draftRef = liveValue<HTMLTextAreaElement>(visibleDraft, scheduleTextareaHeightAdjustment);
+  const draftRef = liveValue<HTMLTextAreaElement>(() => visibleDraft(), scheduleTextareaHeightAdjustment);
   // The dictated preview reaches the draft only on commit, so submission finishes it first.
   const submit = () => {
     const active = dictationControl.dictation;
@@ -153,11 +157,15 @@ export function SessionRailComposer(props: {
     }
     const sessionKey = props.sessionKey;
     const client = props.client;
+    const scope = props.readConversationScope?.();
     void active.finishActive({ forSend: true }).then((confirmed) => {
+      const current = props.readConversationScope?.();
       if (
         confirmed &&
         props.sessionKey === sessionKey &&
         props.client === client &&
+        current?.owner === scope?.owner &&
+        current?.sessionId === scope?.sessionId &&
         props.connected &&
         props.presented
       ) {

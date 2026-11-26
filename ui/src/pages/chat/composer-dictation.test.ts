@@ -234,7 +234,7 @@ beforeEach(() => {
   Object.defineProperty(globalThis.navigator, "locks", {
     configurable: true,
     value: {
-      request: vi.fn(async (name: string, _options: LockOptions, callback: LockGrantedCallback) =>
+      request: vi.fn(async (name: string, _options: LockOptions, callback: LockGrantedCallback<unknown>) =>
         callback({ name, mode: "exclusive" }),
       ),
     },
@@ -329,43 +329,46 @@ describe("ComposerDictationOwner", () => {
     await waitForFast(() => expectClosed("dictation-1", true));
   });
 
-  it.each([false, true])("Read aloud preserves stopped dictation (finalizing: %s)", async (finalizing) => {
-    const stopTrack = captureStop();
-    const { controller, onCommit, options } = createHarness();
-    const previous = new GatewaySpeechPlayback();
-    const next = new GatewaySpeechPlayback();
-    const reading = previous.speak(options.client, "First message");
-    try {
-      await speechStarted.promise;
-      const firstAudio = latestAudio();
-      await startDirect(controller);
-      expect(firstAudio.pause).toHaveBeenCalledTimes(2);
-      await reading;
-      expect(controller.active).toBe(true);
-      const finished = finalizing ? controller.finishActive() : null;
-      speechStarted = createDeferred();
-      const replacement = next.speak(options.client, "Second message");
-      expect(controller.active).toBe(false);
-      expect(stopTrack).toHaveBeenCalledOnce();
-      await speechStarted.promise;
-      await waitForFast(() => expectClosed("dictation-1", !finalizing));
-      transcript("Owned dictation text");
-      emit({ type: "close", reason: "completed" });
-      if (finished) {
-        await expect(finished).resolves.toBe(true);
-        expect(onCommit).toHaveBeenCalledExactlyOnceWith("Owned dictation text", true);
-      } else {
-        expect(onCommit).not.toHaveBeenCalled();
+  it.each([false, true])(
+    "Read aloud preserves stopped dictation (finalizing: %s)",
+    async (finalizing) => {
+      const stopTrack = captureStop();
+      const { controller, onCommit, options } = createHarness();
+      const previous = new GatewaySpeechPlayback();
+      const next = new GatewaySpeechPlayback();
+      const reading = previous.speak(options.client, "First message");
+      try {
+        await speechStarted.promise;
+        const firstAudio = latestAudio();
+        await startDirect(controller);
+        expect(firstAudio.pause).toHaveBeenCalledTimes(2);
+        await reading;
+        expect(controller.active).toBe(true);
+        const finished = finalizing ? controller.finishActive() : null;
+        speechStarted = createDeferred();
+        const replacement = next.speak(options.client, "Second message");
+        expect(controller.active).toBe(false);
+        expect(stopTrack).toHaveBeenCalledOnce();
+        await speechStarted.promise;
+        await waitForFast(() => expectClosed("dictation-1", !finalizing));
+        transcript("Owned dictation text");
+        emit({ type: "close", reason: "completed" });
+        if (finished) {
+          await expect(finished).resolves.toBe(true);
+          expect(onCommit).toHaveBeenCalledExactlyOnceWith("Owned dictation text", true);
+        } else {
+          expect(onCommit).not.toHaveBeenCalled();
+        }
+        const current = latestAudio();
+        expect(current.pause).toHaveBeenCalledOnce();
+        current.dispatchEvent(new Event("ended"));
+        await replacement;
+      } finally {
+        previous.stop();
+        next.stop();
       }
-      const current = latestAudio();
-      expect(current.pause).toHaveBeenCalledOnce();
-      current.dispatchEvent(new Event("ended"));
-      await replacement;
-    } finally {
-      previous.stop();
-      next.stop();
-    }
-  });
+    },
+  );
 
   it.each([false, true])(
     "keeps pending dictation in its original draft while Talk starts (cancel: %s)",
@@ -425,7 +428,12 @@ describe("ComposerDictationOwner", () => {
     await waitForFast(() => expectClosed());
     transcript("Keep this text in the original hidden draft.");
     emit({ type: "close", reason: "completed" });
-    await waitForFast(() => expect(onCommit).toHaveBeenCalledExactlyOnceWith("Keep this text in the original hidden draft.", true));
+    await waitForFast(() =>
+      expect(onCommit).toHaveBeenCalledExactlyOnceWith(
+        "Keep this text in the original hidden draft.",
+        true,
+      ),
+    );
     controller.setPresented(true);
     expect(controller.active).toBe(false);
     expect(getUserMedia).toHaveBeenCalledOnce();

@@ -56,7 +56,7 @@ suite.define(() => {
         .toBe(0);
       // The oversized response completes without navigation; don't wait for one.
       await page
-        .getByRole("button", { name: "Talk" })
+        .getByRole("button", { name: "Talk", exact: true })
         .click({ noWaitAfter: scenario.status === 200 });
       await waitForWebRtcSdpFetch(page);
 

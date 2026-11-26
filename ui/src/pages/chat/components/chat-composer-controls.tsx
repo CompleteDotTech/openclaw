@@ -413,7 +413,9 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
           onDirectDictationStart={props.onDirectDictationStart}
           microphonePicker={microphonePicker}
           disabled={props.voiceActive || !props.readDictation}
-          disabledReason={props.voiceActive ? t("chat.composer.stopTalkBeforeDictation") : undefined}
+          disabledReason={
+            props.voiceActive ? t("chat.composer.stopTalkBeforeDictation") : undefined
+          }
         />
       </Show>
       <Show when={props.onToggleVoice && (props.voiceActive || props.talkReady)}>

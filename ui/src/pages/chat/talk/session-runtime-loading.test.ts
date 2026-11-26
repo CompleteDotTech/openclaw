@@ -27,7 +27,10 @@ it.each(["stopped", "failed"] as const)(
       const track = Object.assign(new EventTarget(), { stop: vi.fn() });
       return { getTracks: () => [track], getAudioTracks: () => [track] };
     });
-    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia }, locks: voiceCaptureLocksFixture() });
+    vi.stubGlobal("navigator", {
+      mediaDevices: { getUserMedia },
+      locks: voiceCaptureLocksFixture(),
+    });
     let allocations = 0;
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "talk.client.create") {
@@ -91,7 +94,9 @@ it.each(["stopped", "failed"] as const)(
       expect(sibling.getVoiceSessionId()).toBe("voice-runtime-2");
       expect(getUserMedia).toHaveBeenCalledTimes(2);
       expect(createRealtimeTalkTransport).toHaveBeenCalledTimes(2);
-      expect(request.mock.calls.filter(([method]) => method === "talk.client.create")).toHaveLength(2);
+      expect(request.mock.calls.filter(([method]) => method === "talk.client.create")).toHaveLength(
+        2,
+      );
       firstClose.resolve();
       await closing;
     } finally {

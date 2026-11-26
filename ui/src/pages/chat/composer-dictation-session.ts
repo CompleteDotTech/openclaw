@@ -6,7 +6,7 @@ import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictati
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { VoiceRouteSession } from "../../lib/voice-route.ts";
+import type { VoiceRouteSession } from "../../lib/voice-route.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -204,18 +204,14 @@ export class ComposerDictationSession {
   constructor(
     private readonly client: GatewayBrowserClient,
     private readonly callbacks: ComposerDictationSessionCallbacks,
-    private readonly options?: {
+    private readonly options: {
       sessionKey?: string;
       inputDeviceId?: string;
       silenceTimeoutMs?: number;
-      voiceRoute?: VoiceRouteSession;
+      voiceRoute: VoiceRouteSession;
     },
   ) {
-    this.voiceRoute = options?.voiceRoute ?? new VoiceRouteSession({
-      route: "dictation",
-      destination: { kind: "draft", key: options?.sessionKey },
-      owner: this,
-    });
+    this.voiceRoute = options.voiceRoute;
   }
 
   start(): Promise<void> {
@@ -233,11 +229,11 @@ export class ComposerDictationSession {
     // the Talk identity; a transcript must never choose the product route.
     this.voiceRoute.requireRoute(this.voiceRoute.identity.route === "dictation" ? "dictation" : "talk");
     await this.voiceRoute.acquireCapture();
-    if (this.stopped) {
+    if (this.stopped || !this.voiceRoute.acceptsResults) {
       return;
     }
     const inputDeviceId =
-      this.options && "inputDeviceId" in this.options
+      "inputDeviceId" in this.options
         ? this.options.inputDeviceId
         : loadSettings().realtimeTalkInputDeviceId?.trim() || undefined;
     // Start the audio graph while the Gateway admits the session instead of after it.
@@ -254,7 +250,7 @@ export class ComposerDictationSession {
       mode: "transcription",
       transport: "gateway-relay",
       brain: "none",
-      ...(this.options?.sessionKey ? { sessionKey: this.options.sessionKey } : {}),
+      ...(this.options.sessionKey ? { sessionKey: this.options.sessionKey } : {}),
     });
     this.sessionId = result.sessionId;
     this.transcriptionSessionId = result.transcriptionSessionId ?? result.sessionId;
@@ -350,9 +346,6 @@ export class ComposerDictationSession {
             : "chat.composer.dictationFailed",
         ),
       );
-    }
-    if (!this.options?.voiceRoute) {
-      this.voiceRoute.complete();
     }
     return text;
   }

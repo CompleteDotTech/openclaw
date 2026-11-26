@@ -177,6 +177,12 @@ export async function startChatRealtimeSession(
     stopRealtimeTalk,
   }: RealtimeTalkStart,
 ): Promise<RealtimeTalkSession | undefined> {
+  const conversationScope = state.realtimeTalk.conversationScope;
+  const isConversationCurrent = () =>
+    state.realtimeTalk.conversationScope === conversationScope &&
+    state.client === client &&
+    state.sessionKey === sessionKey &&
+    state.currentSessionId === currentSessionId;
   let voiceController = initialVoiceController;
   if (!voiceChange) {
     const controller: RealtimeTalkVoiceSelection = new RealtimeTalkVoiceSelection({
@@ -184,8 +190,7 @@ export async function startChatRealtimeSession(
       sessionKey,
       isCurrent: () =>
         state.realtimeTalk.snapshot.realtimeTalkVoiceController === controller &&
-        state.client === client &&
-        state.sessionKey === sessionKey &&
+        isConversationCurrent() &&
         state.connected,
       currentCall: () => state.realtimeTalk.snapshot.realtimeTalkSession,
       restart: (request) => startRealtimeTalk(useSystemDefault, request),
@@ -208,11 +213,16 @@ export async function startChatRealtimeSession(
     (...args: Args) => {
       if (
         state.realtimeTalk.snapshot.realtimeTalkSession === session &&
+        !isConversationCurrent()
+      ) {
+        stopRealtimeTalk(state);
+        return;
+      }
+      if (
+        state.realtimeTalk.snapshot.realtimeTalkSession === session &&
         state.realtimeTalk.snapshot.voiceRoute === voiceRoute &&
         voiceRoute.acceptsResults &&
-        state.client === client &&
-        state.sessionKey === sessionKey &&
-        state.currentSessionId === currentSessionId
+        isConversationCurrent()
       ) {
         callback(...args);
       }
@@ -337,16 +347,25 @@ export async function startChatRealtimeSession(
           transport: replacementTransport,
         }
       : {},
-    { inputDeviceId, videoDeviceId, split, playback, voiceRoute },
+    { inputDeviceId, videoDeviceId, split, playback, voiceRoute, isConversationCurrent },
   );
   state.realtimeTalk.update({
     realtimeTalkSession: session,
   });
   try {
     await session.start();
+    if (!isConversationCurrent()) {
+      if (state.realtimeTalk.snapshot.realtimeTalkSession === session) {
+        stopRealtimeTalk(state);
+      }
+      return undefined;
+    }
     return state.realtimeTalk.snapshot.realtimeTalkSession === session ? session : undefined;
   } catch (error) {
-    if (state.realtimeTalk.snapshot.realtimeTalkSession !== session) {
+    if (state.realtimeTalk.snapshot.realtimeTalkSession !== session || !isConversationCurrent()) {
+      if (state.realtimeTalk.snapshot.realtimeTalkSession === session) {
+        stopRealtimeTalk(state);
+      }
       return undefined;
     }
     if (voiceChange) {

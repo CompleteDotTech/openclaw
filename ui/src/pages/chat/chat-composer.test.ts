@@ -169,7 +169,10 @@ it("labels the send action as Suggest and emits ephemeral typing state", () => {
 
 beforeEach(() => {
   const originalLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
-  Object.defineProperty(navigator, "locks", { configurable: true, value: voiceCaptureLocksFixture() });
+  Object.defineProperty(navigator, "locks", {
+    configurable: true,
+    value: voiceCaptureLocksFixture(),
+  });
   onTestFinished(() => {
     if (originalLocks) {
       Object.defineProperty(navigator, "locks", originalLocks);
@@ -267,14 +270,16 @@ it("shows dictation starting at once and microphone guidance only when access is
   await vi.advanceTimersByTimeAsync(800);
   expect(openMicrophoneMock).toHaveBeenCalledOnce();
   const starting = query('.agent-chat__dictation-status[role="status"]');
-  expect(starting?.querySelector(".agent-chat__dictation-phase")?.textContent).toBe(t("chat.composer.dictationStarting"));
+  expect(starting?.querySelector(".agent-chat__dictation-phase")?.textContent).toBe(
+    t("chat.composer.dictationStarting"),
+  );
   expect(
     starting?.querySelector('.agent-chat__voice-activity[data-status="connecting"]'),
   ).not.toBeNull();
   await vi.advanceTimersByTimeAsync(1_000);
-  expect(query('.agent-chat__dictation-status[role="status"] .agent-chat__dictation-phase')?.textContent).toBe(
-    microphoneGuidance,
-  );
+  expect(
+    query('.agent-chat__dictation-status[role="status"] .agent-chat__dictation-phase')?.textContent,
+  ).toBe(microphoneGuidance);
 });
 
 it("clears a live whitespace draft when the last rendered draft was already empty", () => {

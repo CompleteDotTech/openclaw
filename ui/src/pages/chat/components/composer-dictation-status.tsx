@@ -68,11 +68,7 @@ export function ActiveDictationStatus(props: {
             status={current}
             inputLevel={current === "listening" ? props.readDictation()?.inputLevel : undefined}
           />
-          <button
-            class="btn btn--sm"
-            type="button"
-            onClick={() => props.readDictation()?.cancel()}
-          >
+          <button class="btn btn--sm" type="button" onClick={() => props.readDictation()?.cancel()}>
             {t("chat.composer.cancelDictation")}
           </button>
         </div>

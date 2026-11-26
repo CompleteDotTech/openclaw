@@ -41,6 +41,7 @@ type RealtimeTalkLocalOptions = {
   split?: SplitTalkOptions;
   playback?: GatewaySpeechPlayback;
   voiceRoute?: VoiceRouteSession;
+  isConversationCurrent?: () => boolean;
 };
 
 const activeRealtimeTalkSessions = new Set<RealtimeTalkSession>();
@@ -111,15 +112,21 @@ export class RealtimeTalkSession {
       const lifecycleGeneration = this.lifecycleGeneration;
       this.closed = false;
       this.voiceRoute?.cancel();
-      voiceRoute = this.localOptions.voiceRoute ?? new VoiceRouteSession({
-        route: "talk",
-        destination: { kind: "conversation", key: this.sessionKey },
-        owner: this,
-      });
+      voiceRoute =
+        this.localOptions.voiceRoute ??
+        new VoiceRouteSession({
+          route: "talk",
+          destination: { kind: "conversation", key: this.sessionKey },
+          owner: this,
+        });
       this.voiceRoute = voiceRoute;
       voiceRoute.requireRoute("talk");
       await voiceRoute.acquireCapture();
-      if (this.closed || lifecycleGeneration !== this.lifecycleGeneration || !voiceRoute.acceptsResults) {
+      if (
+        this.closed ||
+        lifecycleGeneration !== this.lifecycleGeneration ||
+        !voiceRoute.acceptsResults
+      ) {
         voiceRoute.cancel();
         return;
       }
@@ -242,7 +249,12 @@ export class RealtimeTalkSession {
       const callbacks =
         transport === "gateway-relay"
           ? routeCallbacks
-          : this.clientOwnedTranscriptCallbacks(voiceSessionId, lifecycleGeneration, owner.signal, routeCallbacks);
+          : this.clientOwnedTranscriptCallbacks(
+              voiceSessionId,
+              lifecycleGeneration,
+              owner.signal,
+              routeCallbacks,
+            );
       const transcriptQueue = this.transcriptQueue;
       let nextTransport: RealtimeTalkTransport | null = null;
       const retireCandidate = () => {
@@ -268,6 +280,7 @@ export class RealtimeTalkSession {
           client: this.client,
           sessionKey: this.sessionKey,
           voiceSessionId,
+          isConversationCurrent: this.localOptions.isConversationCurrent,
           flushTranscriptWrites: async () => await transcriptQueue.flush(),
           callbacks,
           input,
@@ -363,6 +376,9 @@ export class RealtimeTalkSession {
     lifecycleGeneration: number,
   ): Promise<RealtimeTalkSessionResult> {
     this.voiceRoute?.requireRoute("talk");
+    if (this.localOptions.isConversationCurrent?.() === false) {
+      throw new DOMException("The Talk destination changed.", "AbortError");
+    }
     if (options.voiceChangeId && options.transport === "gateway-relay") {
       return this.createRelaySession(options);
     }
@@ -413,6 +429,9 @@ export class RealtimeTalkSession {
 
   private createRelaySession(options: RealtimeTalkLaunchOptions) {
     this.voiceRoute?.requireRoute("talk");
+    if (this.localOptions.isConversationCurrent?.() === false) {
+      throw new DOMException("The Talk destination changed.", "AbortError");
+    }
     return this.client.request<RealtimeTalkSessionResult>(
       "talk.session.create",
       {
@@ -514,8 +533,11 @@ export class RealtimeTalkSession {
       async (entryId, role, text) => {
         await retryVoiceTranscriptPersistence(
           transcriptSignal,
-          () =>
-            this.client.request(
+          () => {
+            if (this.localOptions.isConversationCurrent?.() === false) {
+              throw new DOMException("The Talk destination changed.", "AbortError");
+            }
+            return this.client.request(
               "talk.client.transcript",
               {
                 sessionKey: this.sessionKey,
@@ -529,12 +551,13 @@ export class RealtimeTalkSession {
                 signal: transcriptSignal,
                 timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
               },
-            ),
+            );
+          },
           "voice transcript save failed",
         );
       },
       (error) => {
-        if (transcriptSignal.aborted) {
+        if (transcriptSignal.aborted || this.localOptions.isConversationCurrent?.() === false) {
           return;
         }
         const detail = `Voice transcript could not be saved: ${formatUiError(error)}`;
@@ -546,8 +569,10 @@ export class RealtimeTalkSession {
     );
     this.transcriptItems = transcripts;
     const isCurrent = () =>
+      this.localOptions.isConversationCurrent?.() !== false &&
       this.voiceRoute?.acceptsResults === true &&
-      this.transportGeneration === owningGeneration && this.voiceSessionId === owningVoiceSessionId;
+      this.transportGeneration === owningGeneration &&
+      this.voiceSessionId === owningVoiceSessionId;
     const applyTranscript = <T>(operation: () => T): T | undefined => {
       if (!isCurrent()) {
         return undefined;

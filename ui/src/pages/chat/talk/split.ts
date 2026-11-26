@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
-import { VoiceRouteSession } from "../../../lib/voice-route.ts";
+import type { VoiceRouteSession } from "../../../lib/voice-route.ts";
 import { isTerminalFailureChatSendAck, type ChatSendAck } from "../chat-send-ack.ts";
 import { ComposerDictationSession } from "../composer-dictation-session.ts";
 import { RealtimeTalkMediaStreamMeter } from "./audio.ts";
@@ -23,7 +23,6 @@ export type SplitTalkOptions = {
 
 /** Split Talk uses the same capture, chat, and speech owners as the composer. */
 export class SplitTalkTransport implements RealtimeTalkTransport {
-  private readonly voiceRoute: VoiceRouteSession;
   private capture: ComposerDictationSession | null = null;
   private closed: RealtimeVoiceCloseOptions["disposition"];
   private runId: string | undefined;
@@ -34,15 +33,9 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     private readonly sessionKey: string,
     private readonly callbacks: RealtimeTalkCallbacks,
     private readonly options: SplitTalkOptions,
-    private readonly inputDeviceId?: string,
-    private readonly parentVoiceRoute?: VoiceRouteSession,
-  ) {
-    this.voiceRoute = parentVoiceRoute ?? new VoiceRouteSession({
-      route: "talk",
-      destination: { kind: "conversation", key: sessionKey },
-      owner: client,
-    });
-  }
+    private readonly inputDeviceId: string | undefined,
+    private readonly voiceRoute: VoiceRouteSession,
+  ) {}
 
   async start(): Promise<"ready" | "cancelled"> {
     this.voiceRoute.requireRoute("talk");
@@ -64,10 +57,6 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     this.capture = null;
     void capture?.cancel().catch(() => undefined);
     this.voiceRoute.releaseCapture();
-    // The conversation owner publishes a terminal outcome before retiring its route.
-    if (!this.parentVoiceRoute) {
-      this.voiceRoute.cancel();
-    }
     this.options.playback.stop();
     this.chatAbort?.abort();
     if (this.runId && disposition === "abort") {

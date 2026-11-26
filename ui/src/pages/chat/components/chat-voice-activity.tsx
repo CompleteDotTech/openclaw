@@ -16,7 +16,7 @@ export function voiceStatusLabel(
   status: RealtimeTalkStatus | undefined,
   detail: string | null | undefined,
 ) {
-  const statusLabel = (
+  const statusLabel =
     detail?.trim() ||
     t(
       status === "thinking"
@@ -26,8 +26,7 @@ export function voiceStatusLabel(
           : status === "speaking"
             ? "chat.voice.speaking"
             : "chat.voice.listening",
-    )
-  );
+    );
   return t("chat.composer.talkStatus", { status: statusLabel });
 }
 

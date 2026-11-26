@@ -169,6 +169,51 @@ describe("DirectDictationControl", () => {
     expect(onMessage).not.toHaveBeenCalled();
   });
 
+  it("rejects a delayed result after the connection changes before rendering catches up", () => {
+    let client = createTestGatewayClient(async () => ({}));
+    const { control, insertTranscript, onMessage } = fixture({ getClient: () => client });
+    control.prepare("same-draft");
+    client = createTestGatewayClient(async () => ({}));
+    dictationHarness.options?.onCommit("stale connection transcript");
+    expect(insertTranscript).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+    control.dispose();
+  });
+
+  it.each(["scope", "session ID"] as const)(
+    "retires same-key dictation and Send after the conversation %s changes",
+    async (changed) => {
+      let scope = { owner: {}, sessionId: "original" };
+      const { control, insertTranscript, onMessage, onSubmit } = fixture({
+        readConversationScope: () => scope,
+      });
+      onTestFinished(() => control.dispose());
+      const { container, update } = mountControl(control);
+      const controller = expectDefined(dictationHarness.controllers[0], "dictation controller");
+      controller.active = true;
+      update();
+      const commit = expectDefined(dictationHarness.options, "dictation callbacks").onCommit;
+      const finishing = createDeferred<boolean>();
+      controller.finishActive.mockReturnValueOnce(finishing.promise);
+      container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit")?.click();
+      expect(controller.finishActive).toHaveBeenCalledOnce();
+
+      // Observed replacement invalidates sinks before any render or history reply.
+      scope = changed === "scope" ? { ...scope, owner: {} } : { ...scope, sessionId: "replacement" };
+      commit("old conversation transcript");
+      finishing.resolve(true);
+      await finishing.promise;
+      await Promise.resolve();
+      expect(insertTranscript).not.toHaveBeenCalled();
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(onSubmit).not.toHaveBeenCalled();
+
+      update();
+      expect(controller.active).toBe(false);
+      expect(dictationHarness.controllers).toHaveLength(2);
+    },
+  );
+
   it("starts canonical dictation from a plain microphone click", () => {
     const { control, captureSelection, onError } = fixture();
     const { container } = mountControl(control);

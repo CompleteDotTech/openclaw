@@ -29,7 +29,7 @@ type ComposerDictationOwnerOptions = {
   enabled: boolean;
   dictationAvailable?: boolean;
   realtimeTalkActive: boolean;
-  readDraftRevision?: () => number;
+  readDraftRevision?: () => number | string;
   onCommit: (text: string, late?: true, preservePreview?: true) => void;
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onDictationUnavailable?: () => void;
@@ -155,9 +155,10 @@ export class ComposerDictationOwner extends EventTarget {
     }
     if (this.phase !== "idle" && !this.canStart()) {
       const keepFinal = this.active && (!options.connected || options.presented === false);
-      const preservesText = keepFinal && !options.connected
-        ? (this.capture?.session?.markGatewayDisconnected() ?? false)
-        : false;
+      const preservesText =
+        keepFinal && !options.connected
+          ? (this.capture?.session?.markGatewayDisconnected() ?? false)
+          : false;
       void this.stop({ commit: keepFinal });
       // Empty drains report through the session; retained text still needs this notice.
       if (keepFinal && preservesText && !options.connected) {

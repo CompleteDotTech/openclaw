@@ -36,7 +36,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForTalkReady(page);
-      await page.getByRole("button", { name: "Talk" }).click();
+      await page.getByRole("button", { name: "Talk", exact: true }).click();
       await expect
         .poll(() =>
           page.evaluate(
@@ -66,7 +66,7 @@ suite.define(() => {
         .toBe(1);
       await expect.poll(() => guidance.count()).toBe(0);
       expect(await gateway.getRequests("talk.client.create")).toHaveLength(1);
-      await page.getByRole("button", { name: "Stop Talk" }).click();
+      await page.getByRole("button", { name: "Stop Talk", exact: true }).click();
     });
   });
 
@@ -75,7 +75,7 @@ suite.define(() => {
       const gateway = await installMicrophone(page, "voice-microphone-loss-e2e");
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForTalkReady(page);
-      await page.getByRole("button", { name: "Talk" }).click();
+      await page.getByRole("button", { name: "Talk", exact: true }).click();
       await expect
         .poll(() => page.locator(".agent-chat__voice-activity").getAttribute("data-status"))
         .toBe("listening");

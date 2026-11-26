@@ -126,29 +126,44 @@ describe("RealtimeTalkSession consult handoff", () => {
     expect(submit).toHaveBeenCalledWith("call-1", { result: "Basement lights are off." });
     expect(order).toEqual(["flush", "tool-call"]);
   });
-  it("does not start a consult after aborting during the transcript flush", async () => {
-    const flushPending = createDeferred();
-    const flushTranscriptWrites = vi.fn(async () => await flushPending.promise);
-    const request = vi.fn();
-    const submit = vi.fn();
-    const controller = new AbortController();
+  it.each(["abort", "conversation replacement"] as const)(
+    "does not start a consult after %s during the transcript flush",
+    async (change) => {
+      const flushPending = createDeferred();
+      const flushTranscriptWrites = vi.fn(async () => await flushPending.promise);
+      const request = vi.fn();
+      const submit = vi.fn();
+      const controller = new AbortController();
+      let current = true;
 
-    const consult = submitRealtimeTalkConsult({
-      ctx: consultContext({ request }, { voiceSessionId: "voice-1", flushTranscriptWrites }),
-      callId: "call-1",
-      args: { question: "Check status" },
-      submit,
-      signal: controller.signal,
-    });
-    await vi.waitFor(() => expect(flushTranscriptWrites).toHaveBeenCalledOnce());
+      const consult = submitRealtimeTalkConsult({
+        ctx: consultContext(
+          { request },
+          {
+            voiceSessionId: "voice-1",
+            flushTranscriptWrites,
+            isConversationCurrent: () => current,
+          },
+        ),
+        callId: "call-1",
+        args: { question: "Check status" },
+        submit,
+        signal: controller.signal,
+      });
+      await vi.waitFor(() => expect(flushTranscriptWrites).toHaveBeenCalledOnce());
 
-    controller.abort();
-    flushPending.resolve();
-    await consult;
+      if (change === "abort") {
+        controller.abort();
+      } else {
+        current = false;
+      }
+      flushPending.resolve();
+      await consult;
 
-    expect(request).not.toHaveBeenCalled();
-    expect(submit).toHaveBeenCalledOnce();
-  });
+      expect(request).not.toHaveBeenCalled();
+      expect(submit).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([
     { agentSessionKey: "agent:voice:home", abortFails: false },
@@ -324,6 +339,19 @@ describe("RealtimeTalkSession consult handoff", () => {
       sessionKey: "agent:main:main",
       text: "use the safer path",
     });
+  });
+
+  it("does not steer an agent after its conversation scope is retired", async () => {
+    const request = vi.fn();
+    const speakControlResult = vi.fn();
+    await steerRealtimeTalkActiveConsult({
+      ctx: consultContext({ request }, { isConversationCurrent: () => false }),
+      text: "change the task",
+      speakControlResult,
+    });
+
+    expect(request).not.toHaveBeenCalled();
+    expect(speakControlResult).not.toHaveBeenCalled();
   });
 
   it("can suppress cancel control speech while the original consult submits the cancel result", async () => {

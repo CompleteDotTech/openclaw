@@ -77,6 +77,11 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
   };
 }
 
+export type DirectDictationScope = {
+  owner: object;
+  sessionId?: string;
+};
+
 type DirectDictationOptions = {
   textarea: Pick<
     DirectDictationTextarea,
@@ -85,9 +90,10 @@ type DirectDictationOptions = {
   getClient: () => GatewayBrowserClient | null;
   prepareSession?: () => Promise<string | undefined>;
   getSessionKey?: () => string | undefined;
+  readConversationScope?: () => DirectDictationScope | undefined;
   isConnected: () => boolean;
   canCommit: () => boolean;
-  readDraftRevision?: () => number;
+  readDraftRevision?: () => number | string;
   onMessage: (message: string) => void;
   onError: (message: string) => void;
   onSubmit: () => void;
@@ -100,7 +106,7 @@ type DirectDictationOptions = {
 export class DirectDictationControl extends EventTarget {
   private readonly devicePicker = new ComposerMicrophoneOwner();
   private session: ComposerDictationOwner | null = null;
-  private owner: { key: string } | null = null;
+  private owner: { key: string; scope: DirectDictationScope | undefined } | null = null;
 
   constructor(private readonly options: DirectDictationOptions) {
     super();
@@ -137,13 +143,25 @@ export class DirectDictationControl extends EventTarget {
   }
 
   prepare(ownerKey: string, inputDeviceId?: string, presented = true) {
-    if (this.owner?.key !== ownerKey) {
-      this.owner = { key: ownerKey };
+    const scope = this.options.readConversationScope?.();
+    if (
+      this.owner?.key !== ownerKey ||
+      this.owner.scope?.owner !== scope?.owner ||
+      this.owner.scope?.sessionId !== scope?.sessionId
+    ) {
+      this.owner = { key: ownerKey, scope };
       this.session?.dispose();
       this.session = null;
     }
     const owner = this.owner;
-    const ownsDraft = () => this.owner === owner;
+    const ownsDraft = () => {
+      const current = this.options.readConversationScope?.();
+      return (
+        this.owner === owner &&
+        current?.owner === scope?.owner &&
+        current?.sessionId === scope?.sessionId
+      );
+    };
     const client = this.options.getClient();
     const connected = this.options.isConnected() && client !== null;
     this.devicePicker.syncCatalog(client, connected, this.options.getSessionKey?.());
@@ -151,6 +169,7 @@ export class DirectDictationControl extends EventTarget {
     const dictationOptions = {
       client,
       draftKey: owner.key,
+      sessionId: scope?.sessionId,
       connected,
       presented,
       enabled,
@@ -169,7 +188,7 @@ export class DirectDictationControl extends EventTarget {
       onCommit: (transcript: string, late?: true, preservePreview?: true) => {
         // Owner changes replace draft ownership. Object identity keeps even an
         // A -> B -> A transition from accepting the prior owner's snapshot.
-        if (!ownsDraft() || !this.options.canCommit()) {
+        if (!ownsDraft() || this.options.getClient() !== client || !this.options.canCommit()) {
           return;
         }
         const next = this.options.textarea.insertTranscript(
@@ -183,7 +202,7 @@ export class DirectDictationControl extends EventTarget {
         }
       },
       onError: (message: string) => {
-        if (ownsDraft()) {
+        if (ownsDraft() && this.options.getClient() === client) {
           this.options.onError(message);
         }
       },

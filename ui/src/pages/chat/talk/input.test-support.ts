@@ -102,7 +102,7 @@ export function cameraFixture(deviceId?: string) {
 
 export function voiceCaptureLocksFixture() {
   return {
-    request: vi.fn(async (name: string, _options: LockOptions, callback: LockGrantedCallback) =>
+    request: vi.fn(async (name: string, _options: LockOptions, callback: LockGrantedCallback<unknown>) =>
       callback({ name, mode: "exclusive" }),
     ),
   };

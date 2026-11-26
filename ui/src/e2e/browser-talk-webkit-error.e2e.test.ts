@@ -112,7 +112,7 @@ suite.define(() => {
           expect(await requests()).toEqual([{ audio: selectedAudio }, { audio: defaultAudio }]);
           await expect.poll(() => recovery.count()).toBe(0);
           if (decision === "accept") {
-            await page.getByRole("button", { name: "Stop Talk" }).click();
+            await page.getByRole("button", { name: "Stop Talk", exact: true }).click();
             await gateway.waitForRequest("talk.client.close");
           }
         }

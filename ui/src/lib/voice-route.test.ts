@@ -88,12 +88,13 @@ describe("voice route identity and capture ownership", () => {
     expect(first.identity.sessionId).not.toBe(second.identity.sessionId);
     expect(first.identity.generation).toBeLessThan(second.identity.generation);
     expect(() => first.requireRoute("talk")).toThrow("activated route");
-    expect(() =>
-      new VoiceRouteSession({
-        route: "dictation",
-        destination: { kind: "conversation", key: undefined },
-        owner,
-      }),
+    expect(
+      () =>
+        new VoiceRouteSession({
+          route: "dictation",
+          destination: { kind: "conversation", key: undefined },
+          owner,
+        }),
     ).toThrow("destination");
   });
 

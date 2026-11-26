@@ -271,11 +271,13 @@ describe("renderChatComposer controls", () => {
   });
 
   it("does not publish or send into a replacement session with the same key", async () => {
-    const { container, props, active, locked, finishActive, onSend, commit } = renderDictatingComposer();
+    const { container, props, active, locked, finishActive, onSend, commit } =
+      renderDictatingComposer();
     const confirmation = createDeferred<boolean>();
     finishActive.mockReturnValue(confirmation.promise);
     primaryButton(container).click();
     props.currentSessionId = "replacement-session";
+    renderComposerInto(container, props);
     active.mockReturnValue(false);
     locked.mockReturnValue(false);
     commit("stale dictated text");
@@ -320,8 +322,15 @@ describe("renderChatComposer controls", () => {
       })),
       onToggleRealtimeTalk,
     });
-    const talk = await vi.waitFor(() => button(container, t("chat.composer.realtimeTalkCapability")));
-    const repeat = new KeyboardEvent("keydown", { key: "Enter", repeat: true, cancelable: true, bubbles: true });
+    const talk = await vi.waitFor(() =>
+      button(container, t("chat.composer.realtimeTalkCapability")),
+    );
+    const repeat = new KeyboardEvent("keydown", {
+      key: "Enter",
+      repeat: true,
+      cancelable: true,
+      bubbles: true,
+    });
     talk.dispatchEvent(repeat);
     expect(repeat.defaultPrevented).toBe(true);
     talk.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));

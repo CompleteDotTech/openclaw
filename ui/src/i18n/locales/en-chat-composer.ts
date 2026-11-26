@@ -148,8 +148,10 @@ const catalog = {
       talkStatus: "Talk: {status}",
       stopDictationBeforeTalk: "Stop and review dictation, or cancel it, before starting Talk.",
       stopTalkBeforeDictation: "Stop Talk before starting dictation.",
-      voiceCommandUnavailable: "Voice commands are unavailable until an authorized command executor is connected.",
-      voiceCoordinationUnavailable: "This browser cannot coordinate microphone access across windows. Use a browser with Web Locks support.",
+      voiceCommandUnavailable:
+        "Voice commands are unavailable until an authorized command executor is connected.",
+      voiceCoordinationUnavailable:
+        "This browser cannot coordinate microphone access across windows. Use a browser with Web Locks support.",
       realtimeTalkProviderUnavailable: "No realtime voice provider is configured.",
       splitTalkProvidersUnavailable: "Talk needs a transcription provider and a speech provider.",
       splitTalkSpeechUnavailable: "No speech provider is configured.",
