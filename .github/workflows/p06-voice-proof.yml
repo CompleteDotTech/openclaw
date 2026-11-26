@@ -1,0 +1,283 @@
+name: P06 voice route proof
+
+# This workflow belongs only on the task's evidence branch. It does not ship in
+# the P06 product diff. The first run qualifies the unchanged provisional parent;
+# replace SOURCE_REPOSITORY and SOURCE_SHA explicitly for each later candidate.
+on:
+  push:
+    branches:
+      - evidence/p06-voice-routes-20261126
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p06-voice-routes-20261126
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -e -o pipefail {0}
+
+jobs:
+  parent-baseline:
+    if: github.repository == 'CompleteDotTech/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CI: "true"
+      SOURCE_REPOSITORY: Marvinthebored/openclaw
+      SOURCE_SHA: 92182120e8baa7ce001f41dec7f0bba1489e6636
+      PROOF_KIND: provisional-parent-baseline
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      P06_PROOF_DIR: ${{ runner.temp }}/p06-voice-proof
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      OPENCLAW_VITEST_RUNTIME: node
+      OPENCLAW_VITEST_MAX_WORKERS: "1"
+      OPENCLAW_TEST_PROJECTS_PARALLEL: "1"
+      OPENCLAW_TYPECHECKER: tsgo
+      OPENCLAW_LINT_TOOL: oxlint
+      OPENCLAW_FORMAT_TOOL: oxfmt
+      PNPM_CONFIG_FROZEN_LOCKFILE: "true"
+      P06_TEST_FILES: |
+        ui/src/pages/chat/composer-dictation.test.ts
+        ui/src/pages/chat/composer-direct-dictation.test.tsx
+        ui/src/pages/chat/chat-composer-actions.test.ts
+        ui/src/pages/chat/chat-composer-microphone.test.ts
+        ui/src/pages/chat/composer-microphone-picker.test.ts
+        ui/src/pages/chat/chat-realtime.test.ts
+        ui/src/pages/chat/chat-realtime-handoff.test.ts
+        ui/src/pages/chat/talk/microphone-meter.test.ts
+        ui/src/pages/new-session/draft-dictation-session.test.ts
+        ui/src/app/settings.node.test.ts
+      P06_SOURCE_FILES: |
+        ui/src/pages/chat/composer-dictation.ts
+        ui/src/pages/chat/composer-dictation-session.ts
+        ui/src/pages/chat/composer-direct-dictation.ts
+        ui/src/pages/chat/composer-microphone-picker.ts
+        ui/src/pages/chat/chat-realtime.ts
+        ui/src/pages/chat/talk/microphone-meter.ts
+        ui/src/pages/chat/components/chat-composer-frame.ts
+        ui/src/pages/chat/components/chat-realtime-controls.tsx
+        ui/src/pages/new-session/new-session-page-owner.ts
+        ui/src/app/settings.ts
+    steps:
+      - name: Checkout the exact provisional parent
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.SOURCE_REPOSITORY }}
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Record source, workflow, and selected proof identities
+        id: identity
+        run: |
+          mkdir -p "$P06_PROOF_DIR"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git diff --exit-code
+          git diff --cached --exit-code
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          proof = Path(os.environ["P06_PROOF_DIR"])
+          selected = {}
+          for name, variable in (("test", "P06_TEST_FILES"), ("source", "P06_SOURCE_FILES")):
+              files = os.environ[variable].splitlines()
+              assert files and all(files) and len(files) == len(set(files))
+              for path in files:
+                  assert Path(path).is_file(), path
+              (proof / f"{name}-files.txt").write_text("\n".join(files) + "\n")
+              selected[name] = files
+          manifest = {
+              path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+              for path in sorted(set(selected["test"] + selected["source"]))
+          }
+          receipt = {
+              "proof_kind": os.environ["PROOF_KIND"],
+              "source_repository": os.environ["SOURCE_REPOSITORY"],
+              "source_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "source_tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip(),
+              "workflow_repository": os.environ["GITHUB_REPOSITORY"],
+              "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+              "workflow_sha": os.environ["WORKFLOW_SHA"],
+              "run_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "selection": selected,
+              "selected_source_sha256": manifest,
+              "limitations": [
+                  "Unchanged provisional parent; no P06 implementation qualification.",
+                  "Focused synthetic tests are not live microphone or provider proof.",
+                  "Browser, native/global, stable upgrade, and post-merge proof are NOT RUN.",
+              ],
+          }
+          (proof / "source.json").write_text(json.dumps(receipt, indent=2) + "\n")
+          print(json.dumps(receipt, indent=2))
+          PY
+          {
+            uname -a
+            getconf _NPROCESSORS_ONLN
+            free -m
+            df -h .
+          } 2>&1 | tee "$P06_PROOF_DIR/resources.log"
+
+      - name: Prepare canonical Node and pnpm without shared caches
+        id: toolchain
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "false"
+          install-deps: "false"
+          semantic-checks: "true"
+          cache-mode: "off"
+
+      - name: Install this checkout's frozen dependencies
+        id: install
+        run: |
+          {
+            node --version
+            pnpm --version
+            pnpm install --frozen-lockfile
+          } 2>&1 | tee "$P06_PROOF_DIR/install.log"
+
+      - name: Focused dictation, Talk, draft, and saved-preference tests
+        id: tests
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          mapfile -t test_files < "$P06_PROOF_DIR/test-files.txt"
+          pnpm test "${test_files[@]}" --maxWorkers=1 2>&1 | tee "$P06_PROOF_DIR/tests.log"
+
+      - name: Production Control UI typecheck
+        id: types
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm tsgo:ui 2>&1 | tee "$P06_PROOF_DIR/types.log"
+
+      - name: Control UI fixture typecheck
+        id: test-types
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm tsgo:test:ui 2>&1 | tee "$P06_PROOF_DIR/test-types.log"
+
+      - name: Type-aware lint for the selected voice owners
+        id: lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          mapfile -t source_files < "$P06_PROOF_DIR/source-files.txt"
+          node scripts/run-oxlint.mjs --tsconfig tsconfig.ui.json "${source_files[@]}" 2>&1 | tee "$P06_PROOF_DIR/lint.log"
+
+      - name: Format selected voice owners and their focused tests
+        id: format
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          mapfile -t source_files < "$P06_PROOF_DIR/source-files.txt"
+          mapfile -t test_files < "$P06_PROOF_DIR/test-files.txt"
+          pnpm format:check "${source_files[@]}" "${test_files[@]}" 2>&1 | tee "$P06_PROOF_DIR/format.log"
+
+      - name: Verify Control UI copy and catalog wiring
+        id: i18n
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm ui:i18n:verify 2>&1 | tee "$P06_PROOF_DIR/i18n.log"
+
+      - name: Build the Control UI from this exact source
+        id: build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm ui:build 2>&1 | tee "$P06_PROOF_DIR/build.log"
+
+      - name: Confirm tracked source remained unchanged
+        id: source-unchanged
+        if: ${{ !cancelled() && steps.identity.outcome == 'success' }}
+        run: |
+          {
+            test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+            git diff --exit-code
+            git diff --cached --exit-code
+          } 2>&1 | tee "$P06_PROOF_DIR/source-unchanged.log"
+
+      - name: Record every lane outcome including unrun proof
+        if: always()
+        env:
+          CHECKOUT_RESULT: ${{ steps.checkout.outcome }}
+          IDENTITY_RESULT: ${{ steps.identity.outcome }}
+          TOOLCHAIN_RESULT: ${{ steps.toolchain.outcome }}
+          INSTALL_RESULT: ${{ steps.install.outcome }}
+          TESTS_RESULT: ${{ steps.tests.outcome }}
+          TYPES_RESULT: ${{ steps.types.outcome }}
+          TEST_TYPES_RESULT: ${{ steps.test-types.outcome }}
+          LINT_RESULT: ${{ steps.lint.outcome }}
+          FORMAT_RESULT: ${{ steps.format.outcome }}
+          I18N_RESULT: ${{ steps.i18n.outcome }}
+          BUILD_RESULT: ${{ steps.build.outcome }}
+          SOURCE_UNCHANGED_RESULT: ${{ steps.source-unchanged.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          proof = Path(os.environ["P06_PROOF_DIR"])
+          proof.mkdir(parents=True, exist_ok=True)
+          labels = {
+              "success": "PASS", "failure": "FAIL", "cancelled": "CANCELLED",
+              "skipped": "NOT RUN", "": "NOT RUN",
+          }
+          lanes = (
+              "CHECKOUT", "IDENTITY", "TOOLCHAIN", "INSTALL", "TESTS", "TYPES",
+              "TEST_TYPES", "LINT", "FORMAT", "I18N", "BUILD", "SOURCE_UNCHANGED",
+          )
+          outcomes = {
+              lane.lower(): labels.get(os.environ[lane + "_RESULT"], os.environ[lane + "_RESULT"])
+              for lane in lanes
+          }
+          for name in ("browser", "live_microphone", "live_provider", "native_global", "stable_upgrade", "post_parent_merge"):
+              outcomes[name] = "NOT RUN"
+          result = {
+              "proof_kind": os.environ["PROOF_KIND"],
+              "source_sha": os.environ["SOURCE_SHA"],
+              "workflow_sha": os.environ["WORKFLOW_SHA"],
+              "outcomes": outcomes,
+          }
+          (proof / "outcomes.json").write_text(json.dumps(result, indent=2) + "\n")
+          summary = [
+              "## P06 provisional-parent baseline",
+              "",
+              f"Source: `{os.environ['SOURCE_REPOSITORY']}@{os.environ['SOURCE_SHA']}`.",
+              f"Workflow: `{os.environ['WORKFLOW_SHA']}`.",
+              "",
+              "This is secretless synthetic boundary/build proof, not P06 completion, live-provider evidence, or post-merge evidence.",
+              "",
+              "| Lane | Observed result |", "| --- | --- |",
+              *[f"| {name} | {status} |" for name, status in outcomes.items()],
+              "",
+          ]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+              output.write("\n".join(summary))
+          print(json.dumps(result, indent=2))
+          PY
+
+      - name: Retain only task proof logs and synthetic UI captures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: p06-parent-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/p06-voice-proof/source.json
+            ${{ runner.temp }}/p06-voice-proof/outcomes.json
+            ${{ runner.temp }}/p06-voice-proof/source-files.txt
+            ${{ runner.temp }}/p06-voice-proof/test-files.txt
+            ${{ runner.temp }}/p06-voice-proof/resources.log
+            ${{ runner.temp }}/p06-voice-proof/install.log
+            ${{ runner.temp }}/p06-voice-proof/tests.log
+            ${{ runner.temp }}/p06-voice-proof/types.log
+            ${{ runner.temp }}/p06-voice-proof/test-types.log
+            ${{ runner.temp }}/p06-voice-proof/lint.log
+            ${{ runner.temp }}/p06-voice-proof/format.log
+            ${{ runner.temp }}/p06-voice-proof/i18n.log
+            ${{ runner.temp }}/p06-voice-proof/build.log
+            ${{ runner.temp }}/p06-voice-proof/source-unchanged.log
+            ${{ runner.temp }}/p06-voice-proof/ui-proof/*.png
