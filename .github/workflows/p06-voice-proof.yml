@@ -1,4 +1,4 @@
-# DIAGNOSTIC ONLY: frozen-main composite; no actual upstream merge or full-matrix qualification.
+# NARROW CANDIDATE: causal regression coverage before final stage qualification.
 'on':
   push:
     branches:
@@ -8,12 +8,12 @@ permissions:
 defaults:
   run:
     shell: bash --noprofile --norc -e -o pipefail {0}
-name: P06 frozen-main integration diagnostic
+name: P06 narrow native-release repair validation
 concurrency:
-  group: p06-integration-diagnostic-${{ github.workflow_sha }}
+  group: p06-native-release-${{ github.workflow_sha }}
   cancel-in-progress: false
 jobs:
-  diagnostic:
+  candidate:
     if: github.repository == 'CompleteDotTech/openclaw'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -21,7 +21,7 @@ jobs:
       CI: 'true'
       SOURCE_REPOSITORY: CompleteDotTech/openclaw
       SOURCE_SHA: ${{ matrix.source_sha }}
-      PROOF_KIND: diagnostic-integration-simulation-not-merged
+      PROOF_KIND: narrow-native-release-candidate-validation
       WORKFLOW_SHA: ${{ github.workflow_sha }}
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
       OPENCLAW_VITEST_RUNTIME: node
@@ -43,8 +43,7 @@ jobs:
       P06_BROWSER_FILES: ${{ matrix.browser_files }}
       GOGC: '30'
       GOMEMLIMIT: 3GiB
-      PROOF_LANE: units-types-build-only
-      COMPOSITE_LEAF_SHA: a3f1ce0731e45a4a3f2c36ae9942cd0ffe4c3892
+      PROOF_LANE: causal-unit-types-lint-format-browser
     steps:
     - name: Initialize proof directory and require immutable identities
       run: |
@@ -94,19 +93,14 @@ jobs:
             selected[label] = files
         changed = subprocess.check_output(["git", "diff", "--name-only", "--no-renames", "--diff-filter=ACMRT", os.environ["SELECTION_BASE_SHA"], "HEAD"], text=True).splitlines()
         assert sorted(selected["format"]) == sorted(changed), "Format selection differs from the pinned source delta."
-        parents = [line.removeprefix("parent ") for line in subprocess.check_output(["git", "cat-file", "-p", "HEAD"], text=True).splitlines() if line.startswith("parent ")]
-        assert parents == [os.environ["BASE_SHA"]], parents
         receipt = {
             "label": os.environ["PROOF_LABEL"],
             "proof_kind": os.environ["PROOF_KIND"],
-            "proof_lane": os.environ["PROOF_LANE"],
-            "composite_leaf_sha": os.environ["COMPOSITE_LEAF_SHA"],
-            "not_selected_changed_unit_files": ['ui/src/app/settings.browser.test.ts', 'ui/src/pages/chat/talk/audio.test.ts', 'ui/src/pages/config/view-appearance.browser.test.tsx'],
             "source_repository": os.environ["SOURCE_REPOSITORY"],
             "source_sha": os.environ["SOURCE_SHA"],
             "source_tree": os.environ["EXPECTED_SOURCE_TREE"],
-            "review_base_sha": os.environ["BASE_SHA"],
-            "review_base_tree": os.environ["EXPECTED_BASE_TREE"],
+            "causal_scope_base_sha": os.environ["BASE_SHA"],
+            "causal_scope_base_tree": os.environ["EXPECTED_BASE_TREE"],
             "selection_base_sha": os.environ["SELECTION_BASE_SHA"],
             "selection_base_tree": os.environ["EXPECTED_SELECTION_BASE_TREE"],
             "workflow_repository": os.environ["GITHUB_REPOSITORY"],
@@ -119,7 +113,7 @@ jobs:
             "limitations": [
                 "Synthetic Gateway, media, and provider fixtures only; no live credentials or microphone hardware.",
                 "Native/global, stable upgrade, and post-parent-merge qualification are NOT RUN.",
-                "Diagnostic composite with one frozen-main parent; not an upstream merge, PR, landing, or AC12 completion. No ratchets or full matrix run in this diagnostic.",
+                "Comparison base scopes exactly the three repair files. This is narrow causal validation; no fixture-type/full-guard/rollback qualification.",
             ],
         }
         (proof / "source.json").write_text(json.dumps(receipt, indent=2) + "\n")
@@ -156,11 +150,11 @@ jobs:
       run: |
         mapfile -t test_files < "$P06_PROOF_DIR/test-files.txt"
         pnpm test "${test_files[@]}" --maxWorkers=1 2>&1 | tee "$P06_PROOF_DIR/tests.log"
-    - name: Retain early integration unit failure
+    - name: Retain early native-release unit failure
       if: ${{ !cancelled() && steps.tests.outcome == 'failure' }}
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
-        name: p06-integration-unit-failure-${{ github.run_id }}-${{ github.run_attempt }}
+        name: p06-native-release-unit-failure-${{ github.run_id }}-${{ github.run_attempt }}
         retention-days: 7
         if-no-files-found: error
         path: |
@@ -171,21 +165,58 @@ jobs:
       if: ${{ !cancelled() && steps.install.outcome == 'success' }}
       run: |
         pnpm tsgo:ui 2>&1 | tee "$P06_PROOF_DIR/types.log"
-    - name: Retain early integration production-types failure
+    - name: Retain early native-release production-types failure
       if: ${{ !cancelled() && steps.types.outcome == 'failure' }}
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
-        name: p06-integration-production-types-failure-${{ github.run_id }}-${{ github.run_attempt }}
+        name: p06-native-release-production-types-failure-${{ github.run_id }}-${{ github.run_attempt }}
         retention-days: 7
         if-no-files-found: error
         path: |
           ${{ runner.temp }}/p06-voice-proof/source.json
           ${{ runner.temp }}/p06-voice-proof/types.log
-    - name: Build Control UI from this exact committed source
-      id: build
+    - name: Type-aware lint for selected production owners
+      id: lint
       if: ${{ !cancelled() && steps.install.outcome == 'success' }}
       run: |
-        pnpm ui:build 2>&1 | tee "$P06_PROOF_DIR/build.log"
+        mapfile -t source_files < "$P06_PROOF_DIR/source-files.txt"
+        node scripts/run-oxlint.mjs --tsconfig tsconfig.ui.json "${source_files[@]}" 2>&1 | tee "$P06_PROOF_DIR/lint.log"
+    - name: Canonical formatting and parity for the frozen changed files
+      id: format
+      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+      run: |
+        mapfile -t format_files < "$P06_PROOF_DIR/format-files.txt"
+        pnpm format:check --no-error-on-unmatched-pattern -- "${format_files[@]}" 2>&1 | tee "$P06_PROOF_DIR/format.log"
+    - name: Verify actual voice replacement and all nine explicit route cases
+      id: browser
+      if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.browser_files != '' }}
+      env:
+        OPENCLAW_CAPTURE_UI_PROOF: '1'
+        OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: '1'
+      run: |
+        export OPENCLAW_UI_E2E_ARTIFACT_DIR="$P06_PROOF_DIR/ui-proof"
+        mapfile -t browser_files < "$P06_PROOF_DIR/browser-files.txt"
+        pnpm test:ui:e2e "${browser_files[@]}" --testNamePattern "keeps the composer free of voice settings|Control UI explicit voice routes" --maxWorkers=1 --reporter=default --reporter=json --outputFile.json "$P06_PROOF_DIR/browser-result.json" 2>&1 | tee "$P06_PROOF_DIR/browser.log"
+        python3 - <<'PY'
+        import json,os
+        from pathlib import Path
+        proof=Path(os.environ["P06_PROOF_DIR"])
+        report=json.loads((proof/"browser-result.json").read_text())
+        assert report["success"] is True
+        assert report["numPassedTests"]==10 and report["numTotalTests"]==12
+        assert report["numFailedTests"]==0 and report["numPendingTests"]==2 and report["numTodoTests"]==0
+        observed={}
+        for result in report["testResults"]:
+            name=Path(result["name"]).relative_to(Path.cwd()).as_posix()
+            tests=result["assertionResults"]
+            observed[name]={"passed":sum(t["status"]=="passed" for t in tests),"filtered":sum(t["status"] in {"pending","skipped"} for t in tests)}
+            assert all(t["status"] in {"passed","pending","skipped"} for t in tests)
+        assert observed=={
+            "ui/src/e2e/browser-talk-voice-selection.e2e.test.ts":{"passed":1,"filtered":2},
+            "ui/src/e2e/browser-voice-routes.e2e.test.ts":{"passed":9,"filtered":0},
+        },observed
+        print("Verified voice replacement plus all nine explicit route cases: 10 executed/passed, two unrelated settings cases filtered, zero failed/todo.")
+        PY
     - name: Confirm tracked source remained unchanged
       id: source-unchanged
       if: ${{ !cancelled() && steps.identity.outcome == 'success' }}
@@ -205,7 +236,9 @@ jobs:
         INSTALL_RESULT: ${{ steps.install.outcome }}
         TESTS_RESULT: ${{ steps.tests.outcome }}
         TYPES_RESULT: ${{ steps.types.outcome }}
-        BUILD_RESULT: ${{ steps.build.outcome }}
+        LINT_RESULT: ${{ steps.lint.outcome }}
+        FORMAT_RESULT: ${{ steps.format.outcome }}
+        BROWSER_RESULT: ${{ steps.browser.outcome }}
         SOURCE_UNCHANGED_RESULT: ${{ steps.source-unchanged.outcome }}
       run: |
         mkdir -p "$P06_PROOF_DIR"
@@ -216,14 +249,13 @@ jobs:
 
         proof = Path(os.environ["P06_PROOF_DIR"])
         labels = {"success": "PASS", "failure": "FAIL", "skipped": "NOT RUN", "cancelled": "CANCELLED", "": "NOT RUN"}
-        outcomes = {name.lower().removesuffix("_result"): labels[os.environ.get(name, "")] for name in ('CHECKOUT_RESULT', 'IDENTITY_RESULT', 'TOOLCHAIN_RESULT', 'INSTALL_RESULT', 'TESTS_RESULT', 'TYPES_RESULT', 'BUILD_RESULT', 'SOURCE_UNCHANGED_RESULT')}
-        for name in ("fixture_types", "lint", "format", "i18n", "baseline_ratchets", "architecture", "full_browser_matrix", "rollback", "live_microphone", "live_provider", "native_global", "stable_upgrade", "post_parent_merge"):
+        outcomes = {name.lower().removesuffix("_result"): labels[os.environ.get(name, "")] for name in ('CHECKOUT_RESULT', 'IDENTITY_RESULT', 'TOOLCHAIN_RESULT', 'INSTALL_RESULT', 'TESTS_RESULT', 'TYPES_RESULT', 'LINT_RESULT', 'FORMAT_RESULT', 'BROWSER_RESULT', 'SOURCE_UNCHANGED_RESULT')}
+        for name in ("fixture_types", "baseline_ratchets", "architecture", "full_browser_matrix", "rollback", "live_microphone", "live_provider", "native_global", "stable_upgrade", "post_parent_merge"):
             outcomes[name] = "NOT RUN"
         receipt = {
             "label": os.environ["PROOF_LABEL"],
             "proof_kind": os.environ["PROOF_KIND"],
-            "proof_lane": os.environ["PROOF_LANE"],
-            "qualification": "Scoped integration diagnostic only; not an actual merge, landing, final-current-leaf matrix, or AC12 completion.",
+            "qualification": "Narrow immutable candidate validation only; final review-stage and composite qualification remain separate.",
             "source_sha": os.environ["SOURCE_SHA"],
             "source_tree": os.environ["EXPECTED_SOURCE_TREE"],
             "review_base_sha": os.environ["BASE_SHA"],
@@ -241,7 +273,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
-        name: p06-integration-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+        name: p06-native-release-candidate-${{ github.run_id }}-${{ github.run_attempt }}
         retention-days: '7'
         if-no-files-found: error
         path: |
@@ -255,168 +287,36 @@ jobs:
           ${{ runner.temp }}/p06-voice-proof/install.log
           ${{ runner.temp }}/p06-voice-proof/tests.log
           ${{ runner.temp }}/p06-voice-proof/types.log
-          ${{ runner.temp }}/p06-voice-proof/build.log
+          ${{ runner.temp }}/p06-voice-proof/lint.log
+          ${{ runner.temp }}/p06-voice-proof/format.log
+          ${{ runner.temp }}/p06-voice-proof/browser.log
+          ${{ runner.temp }}/p06-voice-proof/browser-result.json
           ${{ runner.temp }}/p06-voice-proof/source-unchanged.log
+          ${{ runner.temp }}/p06-voice-proof/ui-proof/**/*.png
+          ${{ runner.temp }}/p06-voice-proof/ui-proof/**/*.json
     strategy:
       fail-fast: false
       matrix:
         include:
-        - label: integration-diagnostic
-          source_sha: 3ccf3ed2900f53823052294fc7ba32d9a9d631b9
-          source_tree: 2dbca57652455b5acf43de719cbfd36eb453fc48
-          base_sha: a48488cc6c437dac9b4d34580c9c1436b1a08f1f
-          base_tree: 3e5ea7d1938be96e3919e3f8561c5a90bdb1042a
-          selection_base_sha: a48488cc6c437dac9b4d34580c9c1436b1a08f1f
-          selection_base_tree: 3e5ea7d1938be96e3919e3f8561c5a90bdb1042a
+        - label: native-release-candidate
+          source_sha: 1562ad43059fdd602368118751e0026946c1fea2
+          source_tree: 3b3d8f1d33da903219a70ec6978cf1d0a42fb684
+          base_sha: b53524def896ee3a47c8afe173c4ec40717629de
+          base_tree: f6aa1d37afdd25c1bff8e232280729b87eb647f8
+          selection_base_sha: b53524def896ee3a47c8afe173c4ec40717629de
+          selection_base_tree: f6aa1d37afdd25c1bff8e232280729b87eb647f8
           format_files: |
-            config/stylelint-selector-indexing-baseline.json
-            config/test-lines-allocations/p06-explicit-voice-controls.txt
-            config/test-lines-allocations/p06-voice-route-ownership.txt
-            config/test-mock-exports-baseline.txt
-            docs/web/control-ui/chat.md
-            ui/src/app/settings-contract.ts
-            ui/src/app/settings.browser.test.ts
-            ui/src/app/settings.node.test.ts
-            ui/src/app/settings.ts
-            ui/src/e2e/browser-dictation-status.e2e.test.ts
-            ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
-            ui/src/e2e/browser-talk-ordering.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.e2e.test.ts
-            ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
-            ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
-            ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
-            ui/src/e2e/browser-voice-rollback.e2e.test.ts
-            ui/src/e2e/browser-voice-routes.e2e.test.ts
-            ui/src/e2e/chat-composer-picker-layout.e2e.test.ts
-            ui/src/e2e/chat-composer-redesign.e2e.test.ts
-            ui/src/e2e/composer-control-ink.e2e.test.ts
-            ui/src/i18n/locales/en-chat-composer.ts
-            ui/src/lib/speech-playback.ts
-            ui/src/lib/voice-route.test.ts
             ui/src/lib/voice-route.ts
-            ui/src/pages/chat/chat-composer-actions.test.ts
-            ui/src/pages/chat/chat-composer-microphone.test.ts
-            ui/src/pages/chat/chat-composer.test.ts
-            ui/src/pages/chat/chat-pane-history.ts
-            ui/src/pages/chat/chat-pane-render.ts
-            ui/src/pages/chat/chat-pane-retained-presentation.ts
-            ui/src/pages/chat/chat-realtime-handoff.test.ts
-            ui/src/pages/chat/chat-realtime.test.ts
             ui/src/pages/chat/chat-realtime.ts
-            ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/chat-view.test.ts
-            ui/src/pages/chat/components/chat-composer-controls.tsx
-            ui/src/pages/chat/components/chat-composer-dictation-options.ts
-            ui/src/pages/chat/components/chat-composer-frame.ts
-            ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
-            ui/src/pages/chat/components/chat-composer-types.ts
-            ui/src/pages/chat/components/chat-session-rail-composer.tsx
-            ui/src/pages/chat/components/chat-session-rail.tsx
-            ui/src/pages/chat/components/chat-voice-activity.tsx
-            ui/src/pages/chat/components/composer-dictation-status.tsx
-            ui/src/pages/chat/components/direct-dictation-view.tsx
-            ui/src/pages/chat/composer-dictation-session.ts
-            ui/src/pages/chat/composer-dictation.test.ts
-            ui/src/pages/chat/composer-dictation.ts
-            ui/src/pages/chat/composer-direct-dictation.test.tsx
-            ui/src/pages/chat/composer-direct-dictation.ts
-            ui/src/pages/chat/composer-microphone-picker.ts
-            ui/src/pages/chat/talk/audio.test.ts
-            ui/src/pages/chat/talk/audio.ts
-            ui/src/pages/chat/talk/chat-actions-runtime.ts
-            ui/src/pages/chat/talk/consult.test.ts
-            ui/src/pages/chat/talk/gateway-relay.ts
-            ui/src/pages/chat/talk/google-live.ts
-            ui/src/pages/chat/talk/input.test-support.ts
-            ui/src/pages/chat/talk/input.test.ts
-            ui/src/pages/chat/talk/input.ts
-            ui/src/pages/chat/talk/lifecycle.test.ts
-            ui/src/pages/chat/talk/session-runtime-loading.test.ts
-            ui/src/pages/chat/talk/session.test.ts
-            ui/src/pages/chat/talk/session.ts
-            ui/src/pages/chat/talk/shared.ts
-            ui/src/pages/chat/talk/split.test.ts
-            ui/src/pages/chat/talk/split.ts
-            ui/src/pages/chat/talk/transcript-queue.test.ts
-            ui/src/pages/chat/talk/webrtc.ts
-            ui/src/pages/config/config-page-state.ts
-            ui/src/pages/config/config-view.test-support.tsx
-            ui/src/pages/config/local-toggle-row.tsx
-            ui/src/pages/config/settings-targets.ts
-            ui/src/pages/config/view-appearance-preferences.tsx
-            ui/src/pages/config/view-appearance.browser.test.tsx
-            ui/src/pages/new-session/draft-persistence.ts
-            ui/src/pages/new-session/new-session-page-owner.ts
-            ui/src/styles/chat/composer-surface.css
-            ui/src/styles/chat/composer.css
-            ui/src/styles/chat/layout.css
+            ui/src/pages/chat/chat-realtime.test.ts
           source_files: |
-            ui/src/app/settings-contract.ts
-            ui/src/app/settings.ts
-            ui/src/i18n/locales/en-chat-composer.ts
-            ui/src/lib/speech-playback.ts
             ui/src/lib/voice-route.ts
-            ui/src/pages/chat/chat-pane-history.ts
-            ui/src/pages/chat/chat-pane-render.ts
-            ui/src/pages/chat/chat-pane-retained-presentation.ts
             ui/src/pages/chat/chat-realtime.ts
-            ui/src/pages/chat/components/chat-composer-controls.tsx
-            ui/src/pages/chat/components/chat-composer-dictation-options.ts
-            ui/src/pages/chat/components/chat-composer-frame.ts
-            ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
-            ui/src/pages/chat/components/chat-composer-types.ts
-            ui/src/pages/chat/components/chat-session-rail-composer.tsx
-            ui/src/pages/chat/components/chat-session-rail.tsx
-            ui/src/pages/chat/components/chat-voice-activity.tsx
-            ui/src/pages/chat/components/composer-dictation-status.tsx
-            ui/src/pages/chat/components/direct-dictation-view.tsx
-            ui/src/pages/chat/composer-dictation-session.ts
-            ui/src/pages/chat/composer-dictation.ts
-            ui/src/pages/chat/composer-direct-dictation.ts
-            ui/src/pages/chat/composer-microphone-picker.ts
-            ui/src/pages/chat/talk/audio.ts
-            ui/src/pages/chat/talk/chat-actions-runtime.ts
-            ui/src/pages/chat/talk/gateway-relay.ts
-            ui/src/pages/chat/talk/google-live.ts
-            ui/src/pages/chat/talk/input.ts
-            ui/src/pages/chat/talk/session.ts
-            ui/src/pages/chat/talk/shared.ts
-            ui/src/pages/chat/talk/split.ts
-            ui/src/pages/chat/talk/webrtc.ts
-            ui/src/pages/config/config-page-state.ts
-            ui/src/pages/config/local-toggle-row.tsx
-            ui/src/pages/config/settings-targets.ts
-            ui/src/pages/config/view-appearance-preferences.tsx
-            ui/src/pages/new-session/draft-persistence.ts
-            ui/src/pages/new-session/new-session-page-owner.ts
           test_files: |
-            ui/src/pages/chat/composer-dictation.test.ts
-            ui/src/pages/chat/composer-direct-dictation.test.tsx
-            ui/src/pages/chat/chat-composer-actions.test.ts
-            ui/src/pages/chat/chat-composer-microphone.test.ts
-            ui/src/pages/chat/composer-microphone-picker.test.ts
+            ui/src/lib/voice-route.test.ts
             ui/src/pages/chat/chat-realtime.test.ts
             ui/src/pages/chat/chat-realtime-handoff.test.ts
-            ui/src/pages/chat/talk/microphone-meter.test.ts
-            ui/src/pages/new-session/draft-dictation-session.test.ts
-            ui/src/app/settings.node.test.ts
-            ui/src/lib/voice-route.test.ts
-            ui/src/pages/chat/chat-composer.test.ts
-            ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/chat-view.test.ts
-            ui/src/pages/chat/talk/input.test.ts
-            ui/src/pages/chat/talk/session-runtime-loading.test.ts
-            ui/src/pages/chat/talk/session.test.ts
-            ui/src/pages/chat/talk/split.test.ts
-            ui/src/pages/chat/talk/transcript-queue.test.ts
-            ui/src/pages/chat/talk/consult.test.ts
-            ui/src/pages/chat/talk/lifecycle.test.ts
-            ui/src/pages/chat/talk/webrtc.test.ts
-            ui/src/pages/chat/talk/gateway-relay-lifecycle.test.ts
-            ui/src/pages/chat/components/chat-session-rail-composer-lifetime.test.tsx
-            ui/src/pages/new-session/draft-persistence.test.ts
-            ui/src/pages/chat/chat-pane-retained-presentation.test.ts
-            ui/src/pages/new-session/creation-composer.test.ts
-            ui/src/pages/new-session/composer.test.tsx
-          browser_files: ''
-    name: Diagnose frozen-main plus provisional voice stack
+          browser_files: |
+            ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
+            ui/src/e2e/browser-voice-routes.e2e.test.ts
+    name: Validate causal native capture handoff repair
