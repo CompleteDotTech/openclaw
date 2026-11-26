@@ -309,8 +309,34 @@ describe("renderChatComposer controls", () => {
     props.realtimeTalkActive = true;
     renderComposerInto(container, props);
     expect(button(container, t("chat.composer.dictationCapability")).disabled).toBe(true);
-    button(container, t("chat.composer.stopVoiceInput")).click();
+    button(container, t("chat.composer.stopTalk")).click();
     expect(onToggleRealtimeTalk).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores repeated keyboard activation and the second click of a Talk double-click", async () => {
+    const onToggleRealtimeTalk = vi.fn();
+    const { container } = renderComposer({
+      gatewayClient: createTestGatewayClient(async () => ({
+        realtime: { ready: true, providers: [] },
+        transcription: { ready: true, providers: [] },
+      })),
+      onToggleRealtimeTalk,
+    });
+    const talk = await vi.waitFor(() =>
+      button(container, t("chat.composer.realtimeTalkCapability")),
+    );
+    const repeat = new KeyboardEvent("keydown", {
+      key: "Enter",
+      repeat: true,
+      cancelable: true,
+      bubbles: true,
+    });
+    talk.dispatchEvent(repeat);
+    expect(repeat.defaultPrevented).toBe(true);
+    talk.dispatchEvent(new MouseEvent("click", { detail: 2, bubbles: true }));
+    expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
+    talk.click();
+    expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
   });
 
   it("disables live voice offline", () => {

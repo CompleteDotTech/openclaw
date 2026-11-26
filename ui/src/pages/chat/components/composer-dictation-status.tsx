@@ -41,10 +41,11 @@ export function ActiveDictationStatus(props: {
       {(current) => (
         <div
           class="agent-chat__dictation-status"
+          style={{ "flex-wrap": "wrap" }}
           data-transcribing={current === "thinking" ? "" : undefined}
-          role={current === "listening" ? undefined : "status"}
-          aria-live={current === "listening" ? undefined : "polite"}
-          aria-atomic={current === "listening" ? undefined : "true"}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
         >
           <span
             class={[
@@ -67,6 +68,9 @@ export function ActiveDictationStatus(props: {
             status={current}
             inputLevel={current === "listening" ? props.readDictation()?.inputLevel : undefined}
           />
+          <button class="btn btn--sm" type="button" onClick={() => props.readDictation()?.cancel()}>
+            {t("chat.composer.cancelDictation")}
+          </button>
         </div>
       )}
     </Show>
