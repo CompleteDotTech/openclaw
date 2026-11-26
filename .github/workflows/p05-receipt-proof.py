@@ -47,6 +47,9 @@ SIBLINGS = [
 BASE_RED_NAME = (
     "computer effect receipt after targeted observation retains unverifiable action evidence"
 )
+BASE_RED_FILTER_NAME = (
+    "computer effect receipt after targeted observation > retains unverifiable action evidence"
+)
 RIG = "scripts/dev/computer-use-macos-live-rig.sh"
 TITLE = "OpenClaw Receipt Fixture"
 SENTINEL = "OpenClaw Receipt Sentinel"
@@ -307,9 +310,14 @@ def reports_from_console(text):
 
 
 def run_tests(label, files, expected=None, cwd=ROOT, base_red=False):
-    command = ["pnpm", "test", *files, "--maxWorkers=1", "--reporter=json"]
+    require(len(files) == 1, "report_capture_requires_one_canonical_file")
+    # Vitest 5 defaults JSON to disk. One file keeps the canonical wrapper on
+    # one invocation, avoiding its multi-invocation staging directory. Native
+    # output goes directly to this process's pipe and is redacted before storage.
+    command = ["pnpm", "test", *files, "--maxWorkers=1", "--reporter=json", "--outputFile=/dev/stdout"]
     if base_red:
-        command += ["--testNamePattern", "^" + re.escape(BASE_RED_NAME) + "$"]
+        # Native filtering uses fullTestName with " > "; JSON fullName uses " ".
+        command += ["--testNamePattern", "^" + re.escape(BASE_RED_FILTER_NAME) + "$"]
     code, text = run_command(label, command, cwd=cwd, capture=True)
     reports = reports_from_console(text)
     observed = []
@@ -625,6 +633,7 @@ def native_owned():
     # owner covers the complete native subtree and verifies cgroup extinction;
     # the inner Python receipts describe only individual leaders/process groups.
     owner = r'''
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { runManagedCommand } from "./scripts/lib/managed-child-process.mts";
@@ -634,20 +643,34 @@ const report = {
   source_sha: process.env.SOURCE_SHA,
   owner: "scripts/lib/managed-memory.mts",
   memory_limit_bytes: null,
+  minimum_native_budget_bytes: 4 * 1024 ** 3,
+  capacity_bytes: null,
+  available_bytes: null,
+  admitted_capacity_bytes: null,
+  memory_samples: 0,
+  observed_memory_peak_bytes: null,
+  observed_oom_events: null,
+  observed_oom_kill_events: null,
+  memory_sample_status: "unavailable",
   owned_scope_assigned: false,
   command_exit_code: null,
   owner_returned_after_extinction_check: false,
   error_code: null,
   process_tree_state: null,
 };
+let memorySampler;
+let sampleMemory;
 try {
   const capacity = readProcessMemoryCapacity({});
-  const available = [capacity.limitBytes, capacity.availableBytes]
-    .filter((value) => Number.isSafeInteger(value) && value > 0);
+  report.capacity_bytes = capacity.capacityBytes;
+  report.available_bytes = capacity.availableBytes;
+  report.admitted_capacity_bytes = capacity.limitBytes;
+  const available = [capacity.limitBytes, capacity.availableBytes, capacity.capacityBytes]
+    .filter((value) => Number.isSafeInteger(value) && value >= 0);
   if (available.length === 0) throw Object.assign(new Error(), { code: "MEMORY_CAPACITY_UNKNOWN" });
-  const limit = Math.min(3 * 1024 ** 3, Math.floor(Math.min(...available) * 0.75));
-  if (limit < 512 * 1024 ** 2) throw Object.assign(new Error(), { code: "MEMORY_CAPACITY_INSUFFICIENT" });
+  const limit = Math.min(8 * 1024 ** 3, Math.floor(Math.min(...available) * 0.75));
   report.memory_limit_bytes = limit;
+  if (limit < report.minimum_native_budget_bytes) throw Object.assign(new Error(), { code: "MEMORY_CAPACITY_INSUFFICIENT" });
   report.command_exit_code = await runManagedCommand({
     bin: "dbus-run-session",
     args: ["--", "python3", process.env.P05_PROOF_RUNNER, "native-in-session"],
@@ -659,7 +682,40 @@ try {
     timeoutMs: 15 * 60_000,
     timeoutKillGraceMs: 30_000,
     signalKillGraceMs: 30_000,
-    onMemoryScope: () => { report.owned_scope_assigned = true; },
+    onReady: (child) => { child.once("exit", () => sampleMemory?.()); },
+    onMemoryScope: (unit) => {
+      report.owned_scope_assigned = true;
+      let directory;
+      sampleMemory = () => {
+        try {
+          if (!directory) {
+            const result = spawnSync("systemctl", ["--user", "show", "--property=ControlGroup", "--value", unit], {
+              encoding: "utf8", timeout: 2_000, stdio: ["ignore", "pipe", "ignore"],
+            });
+            if (result.status !== 0) return;
+            const group = result.stdout.trim();
+            if (!group.startsWith("/") || !group.endsWith("/" + unit) || group.split("/").includes("..")) return;
+            directory = path.join("/sys/fs/cgroup", group);
+          }
+          const peak = Number(fs.readFileSync(path.join(directory, "memory.peak"), "utf8").trim());
+          const events = Object.fromEntries(fs.readFileSync(path.join(directory, "memory.events"), "utf8")
+            .trim().split("\n").map((line) => line.split(/\s+/)));
+          const oom = Number(events.oom);
+          const killed = Number(events.oom_kill);
+          if (![peak, oom, killed].every((value) => Number.isSafeInteger(value) && value >= 0)) return;
+          report.memory_samples++;
+          report.observed_memory_peak_bytes = Math.max(report.observed_memory_peak_bytes ?? 0, peak);
+          report.observed_oom_events = Math.max(report.observed_oom_events ?? 0, oom);
+          report.observed_oom_kill_events = Math.max(report.observed_oom_kill_events ?? 0, killed);
+          report.memory_sample_status = "sampled_while_live_not_a_final_counter";
+        } catch {
+          // A short-lived/removed scope can be unsampleable. The canonical owner,
+          // not this optional read-only sampler, verifies final extinction.
+        }
+      };
+      memorySampler = setInterval(sampleMemory, 1_000);
+      memorySampler.unref();
+    },
   });
   // managed-memory.mts returns only after cgroup.events reports populated=0
   // or the manager confirms removal of this invocation's unique owned scope.
@@ -672,6 +728,9 @@ try {
   const state = error && typeof error === "object" && "processTreeState" in error
     ? error.processTreeState : null;
   report.process_tree_state = ["terminated", "indeterminate", "signaled"].includes(state) ? state : null;
+} finally {
+  if (memorySampler) clearInterval(memorySampler);
+  sampleMemory?.();
 }
 fs.writeFileSync(
   path.join(process.env.P05_PROOF_ROOT, "public", "native-cgroup-owner.json"),
@@ -707,7 +766,8 @@ def main():
     elif mode == "regressions":
         run_tests("private-receipts", [PRIVATE_TEST], expected=5)
         run_tests("computer-receipts", [COMPUTER_TEST], expected=32)
-        run_tests("affected-consumers", SIBLINGS)
+        for index, sibling in enumerate(SIBLINGS, 1):
+            run_tests("affected-consumer-" + str(index), [sibling])
     elif mode == "base-red":
         base_red()
     elif mode == "format":

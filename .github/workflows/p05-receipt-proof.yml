@@ -45,7 +45,7 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        lane: [regression, static, native]
+        lane: [regression, native]
     env:
       P05_LANE: ${{ matrix.lane }}
     steps:
@@ -148,7 +148,7 @@ jobs:
 
       - name: Check the actual workflow bytes as a disclosed untracked overlay
         id: workflows
-        if: ${{ !cancelled() && matrix.lane == 'static' && steps.install.outcome == 'success' }}
+        if: ${{ !cancelled() && (matrix.lane == 'static' || matrix.lane == 'regression') && steps.install.outcome == 'success' }}
         run: |
           python3 "$P05_PROOF_RUNNER" overlay-workflow
           python3 "$P05_PROOF_RUNNER" run workflows -- pnpm check:workflows
@@ -204,7 +204,7 @@ jobs:
           steps = json.loads(os.environ["P05_STEP_RESULTS"])
           required = ["initialize", "checkout", "identity", "toolchain", "install", "source-integrity"]
           required += {
-              "regression": ["regressions", "base-red"],
+              "regression": ["regressions", "base-red", "workflows"],
               "static": ["core-types", "fixture-types", "script-types", "lint", "format", "docs", "deadcode", "workflows"],
               "native": ["full-build", "built-identity", "desktop-packages", "native-proof", "built-integrity"],
           }[lane]
