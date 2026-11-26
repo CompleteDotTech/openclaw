@@ -189,12 +189,15 @@ export function attachChatRealtimeActions(
       throw new Error(t("chat.voice.selectionFailed"));
     }
     let closed: Promise<void> | undefined;
+    let captureReleased: Promise<void> | undefined;
     if (voiceChange) {
       const previous = state.realtimeTalk.snapshot.realtimeTalkSession;
+      const previousRoute = state.realtimeTalk.snapshot.voiceRoute;
       state.realtimeTalk.update({
         realtimeTalkSession: null,
       });
       closed = previous?.stop();
+      captureReleased = previousRoute?.captureReleased;
       state.realtimeTalk.update({
         realtimeTalkVideoStream: null,
         realtimeTalkCameraDevices: [],
@@ -242,6 +245,9 @@ export function attachChatRealtimeActions(
     try {
       // Preserve Safari's gesture-bound audio preparation before loading optional code.
       playback.prepare();
+      if (captureReleased) {
+        await captureReleased;
+      }
       await voiceRoute.acquireCapture();
       voiceRoute.requireRoute("talk");
       playback.prepare(client, onSuperseded);

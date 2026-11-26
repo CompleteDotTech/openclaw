@@ -134,6 +134,16 @@ it.each([false, true])(
   "changes only audio while retaining captions and effective microphone (default recovery: %s)",
   async (useSystemDefault) => {
     configure({ realtimeTalkInputDeviceId: "usb-mic" });
+    const nativeRelease = createDeferred<void>();
+    const nativeReleasePending = createDeferred<void>();
+    let delayNativeRelease = false;
+    locks.request.mockImplementation(async (name, _options, callback) => {
+      await callback({ name, mode: "exclusive" });
+      if (delayNativeRelease) {
+        nativeReleasePending.resolve();
+        await nativeRelease.promise;
+      }
+    });
     const listeners = new Set<(event: GatewayEventFrame) => void>();
     const request = vi.fn(async () => ({ ok: true }));
     state.client = {
@@ -163,6 +173,8 @@ it.each([false, true])(
     if (useSystemDefault) {
       await read().realtimeTalkUseSystemDefault!();
     }
+    delayNativeRelease = true;
+    const captureRequests = locks.request.mock.calls.length;
     const oldSession = read().realtimeTalkSession!;
     const old = inspectSession();
     transcript(old.callbacks, "Old speech");
@@ -184,7 +196,15 @@ it.each([false, true])(
         },
       });
     }
+    try {
+      await nativeReleasePending.promise;
+      expect(old.localOptions.voiceRoute?.acceptsResults).toBe(false);
+      expect(locks.request).toHaveBeenCalledTimes(captureRequests);
+    } finally {
+      nativeRelease.resolve();
+    }
     await vi.waitFor(() => expect(creates).toBe(2));
+    expect(locks.request).toHaveBeenCalledTimes(captureRequests + 1);
     expect(state.sessionKey).toBe("main");
     expect(read().realtimeTalkSession).not.toBe(oldSession);
     expect(read()).toMatchObject({
