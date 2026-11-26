@@ -30,7 +30,6 @@ jobs:
       SOURCE_SHA: 92182120e8baa7ce001f41dec7f0bba1489e6636
       PROOF_KIND: provisional-parent-baseline
       WORKFLOW_SHA: ${{ github.workflow_sha }}
-      P06_PROOF_DIR: ${{ runner.temp }}/p06-voice-proof
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       OPENCLAW_VITEST_RUNTIME: node
       OPENCLAW_VITEST_MAX_WORKERS: "1"
@@ -62,6 +61,10 @@ jobs:
         ui/src/pages/new-session/new-session-page-owner.ts
         ui/src/app/settings.ts
     steps:
+      - name: Initialize proof directory
+        run: |
+          printf 'P06_PROOF_DIR=%s/p06-voice-proof\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+
       - name: Checkout the exact provisional parent
         id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
