@@ -312,9 +312,8 @@ it.each([
       return node;
     });
     expect(v.items()).toHaveLength(0);
-    for (const name of ["note", "hint"]) {
-      expect(v.part(name)).toBeNull();
-    }
+    expect(v.part("note")?.textContent).toBe(copy("voiceCommandUnavailable"));
+    expect(v.part("hint")).toBeNull();
     expect(v.all(`.chat-talk-input-picker__${fault ? "alert" : "empty"}`)).toHaveLength(1);
     expect(empty?.getAttribute("role")).toBe("status");
     expect(empty?.classList.contains("warn")).toBe(fault);

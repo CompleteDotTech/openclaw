@@ -255,7 +255,7 @@ describe("DirectDictationControl", () => {
     // The phase view is a lazy chunk that loads with the first dictation.
     await vi.waitFor(() =>
       expect(container.querySelector(".agent-chat__dictation-status")?.textContent).toContain(
-        "Listening",
+        "Dictation: listening",
       ),
     );
     expect(container.querySelector(".agent-chat__dictation-phase--listening")).not.toBeNull();
@@ -287,14 +287,14 @@ describe("DirectDictationControl", () => {
     update();
     await vi.waitFor(() =>
       expect(container.querySelector(".agent-chat__dictation-phase")?.textContent).toContain(
-        "Listening",
+        "Dictation: listening",
       ),
     );
     controller.active = false;
     update();
     await vi.waitFor(() =>
       expect(container.querySelector(".agent-chat__dictation-phase")?.textContent).toMatch(
-        /Finishing|Transcribing/,
+        /transcribing/i,
       ),
     );
     expect(container.querySelector('[data-status="thinking"]')).not.toBeNull();

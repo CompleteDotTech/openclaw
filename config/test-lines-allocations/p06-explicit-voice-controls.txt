@@ -1,0 +1,4 @@
+# P06 explicit voice controls: real browser keyboard, Side replacement, same-origin
+# capture, provider gating, legacy preferences, and pinned parent-child-parent rollback
+# proof. Existing capture/owner allocation remains inherited in the stack.
+440
