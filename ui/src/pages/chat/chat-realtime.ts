@@ -253,7 +253,8 @@ export function attachChatRealtimeActions(
     let runtime: typeof import("./talk/chat-actions-runtime.ts");
     try {
       // Preserve Safari's gesture-bound audio preparation before loading optional code.
-      playback.prepare();
+      // Read aloud may cancel an admitted call while its microphone handoff settles.
+      playback.prepare(voiceChange ? client : undefined, voiceChange ? onSuperseded : undefined);
       if (captureReleased) {
         await captureReleased;
       }
