@@ -36,6 +36,7 @@ export class VoiceRouteSession {
   readonly identity: VoiceRouteIdentity;
   private readonly abort = new AbortController();
   private capture: CaptureAttempt | null = null;
+  private nativeCaptureRelease: Promise<void> = Promise.resolve();
 
   constructor(options: { route: VoiceRoute; destination: VoiceDestination; owner: object }) {
     const destinationKind = {
@@ -61,6 +62,10 @@ export class VoiceRouteSession {
 
   get acceptsResults(): boolean {
     return !this.signal.aborted;
+  }
+
+  get captureReleased(): Promise<void> {
+    return this.nativeCaptureRelease;
   }
 
   requireRoute(route: VoiceRoute): void {
@@ -94,7 +99,7 @@ export class VoiceRouteSession {
       };
       this.capture = attempt;
       captureOwner = attempt;
-      void (async () => {
+      this.nativeCaptureRelease = (async () => {
         try {
           await locks.request(
             CAPTURE_LOCK,
