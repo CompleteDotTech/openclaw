@@ -125,7 +125,7 @@ suite.define(() => {
         .toBeGreaterThan(0);
       await secondPage.bringToFront();
       await secondPage.getByRole("button", { name: "Dictation", exact: true }).click();
-      const alert = secondPage.locator(".agent-chat__composer-alert");
+      const alert = secondPage.locator(".agent-chat__composer-status-band");
       await expect.poll(() => alert.textContent()).toContain("Microphone inputs are busy");
       expect(["status", "alert"]).toContain(await alert.getAttribute("role"));
       expect(await second.gateway.getRequests("talk.session.create")).toHaveLength(0);
