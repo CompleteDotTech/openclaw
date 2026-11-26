@@ -150,6 +150,7 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
 type ComposerVoiceButtonProps = {
   connected: boolean;
   disabled?: boolean;
+  disabledReason?: string;
   readDictation?: () => ComposerDictationOwner;
   microphonePicker?: JSX.Element;
   /** Dictation-only surfaces must not promise Talk. */
@@ -170,12 +171,18 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
       class={["chat-talk-control", { "chat-talk-control--holding": holding() }]}
       style={microphoneHoverStyle}
     >
-      <openclaw-tooltip prop:content={label()} prop:delay={MICROPHONE_HOVER_DELAY_MS}>
+      <openclaw-tooltip
+        prop:content={active() ? label() : (props.disabledReason ?? label())}
+        prop:delay={MICROPHONE_HOVER_DELAY_MS}
+      >
         <button
           class={["chat-send-btn", active() ? "chat-send-btn--dictating" : "chat-send-btn--voice"]}
           type="button"
           onClick={(event: MouseEvent) => {
             event.preventDefault();
+            if (event.detail > 1) {
+              return;
+            }
             if (active()) {
               if (!finalizing()) {
                 void props.readDictation?.()?.finishActive();
@@ -185,9 +192,12 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
               props.readDictation?.()?.startDirect();
             }
           }}
+          onKeyDown={ignoreRepeatedVoiceActivation}
           disabled={!active() && (!props.connected || props.disabled)}
           aria-disabled={finalizing() ? "true" : "false"}
           aria-label={label()}
+          aria-description={!active() ? props.disabledReason : undefined}
+          aria-pressed={active() ? "true" : "false"}
         >
           {active() ? (
             <Icon name="stop" />
@@ -202,6 +212,12 @@ export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) 
       <ComposerContent>{props.microphonePicker}</ComposerContent>
     </span>
   );
+}
+
+function ignoreRepeatedVoiceActivation(event: KeyboardEvent): void {
+  if (event.repeat && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault();
+  }
 }
 
 function primaryPointerDownRef(read: () => ((event: PointerEvent) => void) | undefined) {
@@ -227,13 +243,6 @@ export function ComposerDictationSendAction(props: {
   };
   return (
     <Show when={props.readDictation().active}>
-      {props.readDictation().connecting ? null : (
-        <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
-          {props.readDictation().finalizing
-            ? t("chat.composer.dictationFinalizing")
-            : t("chat.composer.dictationListening")}
-        </span>
-      )}
       <openclaw-tooltip prop:content={t("chat.runControls.send")}>
         <button
           class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
@@ -365,7 +374,9 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
     </openclaw-tooltip>
   );
   const talkLabel = () =>
-    t(props.voiceActive ? "chat.composer.stopVoiceInput" : "chat.composer.realtimeTalkCapability");
+    t(props.voiceActive ? "chat.composer.stopTalk" : "chat.composer.realtimeTalkCapability");
+  const talkTransitionHint = () =>
+    props.readDictation?.()?.locksComposer ? t("chat.composer.stopDictationBeforeTalk") : undefined;
   const talkDisabled = () =>
     !props.voiceActive &&
     (!props.connected ||
@@ -402,12 +413,17 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
           onDirectDictationStart={props.onDirectDictationStart}
           microphonePicker={microphonePicker}
           disabled={props.voiceActive || !props.readDictation}
+          disabledReason={
+            props.voiceActive ? t("chat.composer.stopTalkBeforeDictation") : undefined
+          }
         />
       </Show>
       <Show when={props.onToggleVoice && (props.voiceActive || props.talkReady)}>
         <openclaw-tooltip
           prop:content={
-            props.voiceActive ? talkLabel() : (props.submitDisabledReason ?? talkLabel())
+            props.voiceActive
+              ? talkLabel()
+              : (talkTransitionHint() ?? props.submitDisabledReason ?? talkLabel())
           }
         >
           <button
@@ -419,9 +435,15 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
               { "chat-send-btn--voice-error": voiceErrored() },
             ]}
             type="button"
-            onClick={() => props.onToggleVoice?.()}
+            onClick={(event) => {
+              if (event.detail <= 1) {
+                props.onToggleVoice?.();
+              }
+            }}
+            onKeyDown={ignoreRepeatedVoiceActivation}
             disabled={talkDisabled()}
             aria-label={talkLabel()}
+            aria-description={talkTransitionHint()}
             aria-pressed={props.voiceActive ? "true" : "false"}
           >
             {props.voiceActive ? (
