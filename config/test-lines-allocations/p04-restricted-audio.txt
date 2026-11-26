@@ -1,0 +1,5 @@
+# P04 transport review layer: real guarded transport regression boundaries cover
+# redirect/proxy rejection, pinned destinations, revocation, payload limits,
+# redacted failures, finite probes, and independent socket ownership.
+# Net test growth is 451 lines against proposal/p04-review-base.
+51
