@@ -1,8 +1,7 @@
-name: P06 candidate generation and parent browser proof
+name: P06 short stage formatting
 
-# Authorized candidate1 generation and working-tree discovery. The generated
-# patch must be reviewed and committed before final exact-head qualification.
-# A separate job captures the parent with disclosed test-only instrumentation.
+# Authorized immutable stage inputs and complete format selections. Each row has a fresh
+# secretless runner; no test, typecheck, lint, or build runs in this workflow.
 on:
   push:
     branches:
@@ -23,127 +22,112 @@ jobs:
   generate-patch:
     if: github.repository == 'CompleteDotTech/openclaw'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - label: stage1
+            source_sha: f4f516758de23422d04fe692e3482d6d93633220
+            source_tree: 8d2bd72d046d9246d94d60ed2d2b74aea72b98d4
+            selection_base_sha: 92182120e8baa7ce001f41dec7f0bba1489e6636
+            selection_base_tree: d552dd794421d98780343e789ddc55249cf24646
+            format_files: |
+              ui/src/pages/chat/chat-composer-actions.test.ts
+              ui/src/pages/chat/chat-pane-retained-presentation.ts
+              ui/src/pages/chat/chat-session-rail.test.ts
+              ui/src/pages/chat/components/chat-composer-controls.tsx
+              ui/src/pages/chat/components/chat-composer-dictation-options.ts
+              ui/src/pages/chat/components/chat-composer-frame.ts
+              ui/src/pages/chat/components/chat-session-rail-composer.tsx
+              ui/src/pages/chat/components/direct-dictation-view.tsx
+              ui/src/pages/chat/composer-dictation.test.ts
+              ui/src/pages/chat/composer-dictation.ts
+              ui/src/pages/chat/composer-direct-dictation.test.tsx
+              ui/src/pages/chat/composer-direct-dictation.ts
+              ui/src/pages/new-session/draft-persistence.ts
+              ui/src/pages/new-session/new-session-page-owner.ts
+          - label: combined
+            source_sha: 35dd96ce4f7e2ff7d0ca387aa6fccf286e80d660
+            source_tree: f3e678f7ecf74f1f684a77f53af85a9b16bcfcd6
+            selection_base_sha: 92182120e8baa7ce001f41dec7f0bba1489e6636
+            selection_base_tree: d552dd794421d98780343e789ddc55249cf24646
+            format_files: |
+              docs/web/control-ui/chat.md
+              ui/src/e2e/browser-dictation-status.e2e.test.ts
+              ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
+              ui/src/e2e/browser-talk-ordering.e2e.test.ts
+              ui/src/e2e/browser-talk-start-stop.e2e.test.ts
+              ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
+              ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
+              ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
+              ui/src/e2e/browser-voice-routes.e2e.test.ts
+              ui/src/i18n/locales/en-chat-composer.ts
+              ui/src/lib/voice-route.test.ts
+              ui/src/lib/voice-route.ts
+              ui/src/pages/chat/chat-composer-actions.test.ts
+              ui/src/pages/chat/chat-composer-microphone.test.ts
+              ui/src/pages/chat/chat-composer.test.ts
+              ui/src/pages/chat/chat-pane-history.ts
+              ui/src/pages/chat/chat-pane-retained-presentation.ts
+              ui/src/pages/chat/chat-realtime-handoff.test.ts
+              ui/src/pages/chat/chat-realtime.test.ts
+              ui/src/pages/chat/chat-realtime.ts
+              ui/src/pages/chat/chat-session-rail.test.ts
+              ui/src/pages/chat/chat-view.test.ts
+              ui/src/pages/chat/components/chat-composer-controls.tsx
+              ui/src/pages/chat/components/chat-composer-dictation-options.ts
+              ui/src/pages/chat/components/chat-composer-frame.ts
+              ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
+              ui/src/pages/chat/components/chat-session-rail-composer.tsx
+              ui/src/pages/chat/components/chat-session-rail.tsx
+              ui/src/pages/chat/components/chat-voice-activity.tsx
+              ui/src/pages/chat/components/composer-dictation-status.tsx
+              ui/src/pages/chat/components/direct-dictation-view.tsx
+              ui/src/pages/chat/composer-dictation-session.ts
+              ui/src/pages/chat/composer-dictation.test.ts
+              ui/src/pages/chat/composer-dictation.ts
+              ui/src/pages/chat/composer-direct-dictation.test.tsx
+              ui/src/pages/chat/composer-direct-dictation.ts
+              ui/src/pages/chat/talk/chat-actions-runtime.ts
+              ui/src/pages/chat/talk/consult.test.ts
+              ui/src/pages/chat/talk/input.test-support.ts
+              ui/src/pages/chat/talk/input.test.ts
+              ui/src/pages/chat/talk/input.ts
+              ui/src/pages/chat/talk/session-runtime-loading.test.ts
+              ui/src/pages/chat/talk/session.test.ts
+              ui/src/pages/chat/talk/session.ts
+              ui/src/pages/chat/talk/shared.ts
+              ui/src/pages/chat/talk/split.test.ts
+              ui/src/pages/chat/talk/split.ts
+              ui/src/pages/chat/talk/transcript-queue.test.ts
+              ui/src/pages/new-session/draft-persistence.ts
+              ui/src/pages/new-session/new-session-page-owner.ts
     env:
       CI: "true"
       SOURCE_REPOSITORY: CompleteDotTech/openclaw
-      SOURCE_SHA: 643b1f7f2ae864c2c72a4d49df00be55bf0c2782
-      PROOF_KIND: candidate-generated-working-tree-discovery
-      EXPECTED_SOURCE_TREE: 28eca58c46a205684d6c324c71b64a7e810374e2
+      SOURCE_SHA: ${{ matrix.source_sha }}
+      EXPECTED_SOURCE_TREE: ${{ matrix.source_tree }}
+      SELECTION_BASE_SHA: ${{ matrix.selection_base_sha }}
+      EXPECTED_SELECTION_BASE_TREE: ${{ matrix.selection_base_tree }}
+      PROOF_LABEL: ${{ matrix.label }}
+      PROOF_KIND: child-generated-patch-only
       WORKFLOW_SHA: ${{ github.workflow_sha }}
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      OPENCLAW_VITEST_RUNTIME: node
-      OPENCLAW_VITEST_MAX_WORKERS: "1"
-      OPENCLAW_TEST_PROJECTS_PARALLEL: "1"
-      OPENCLAW_TYPECHECKER: tsgo
-      OPENCLAW_LINT_TOOL: oxlint
       OPENCLAW_FORMAT_TOOL: oxfmt
       PNPM_CONFIG_FROZEN_LOCKFILE: "true"
-      # Freeze this explicit list against the selected child's changed files.
-      P06_FORMAT_FILES: |
-        docs/web/control-ui/chat.md
-        ui/src/e2e/browser-dictation-status.e2e.test.ts
-        ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
-        ui/src/e2e/browser-talk-ordering.e2e.test.ts
-        ui/src/e2e/browser-talk-start-stop.e2e.test.ts
-        ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
-        ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
-        ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
-        ui/src/e2e/browser-voice-routes.e2e.test.ts
-        ui/src/i18n/locales/en-chat-composer.ts
-        ui/src/lib/voice-route.test.ts
-        ui/src/lib/voice-route.ts
-        ui/src/pages/chat/chat-composer-actions.test.ts
-        ui/src/pages/chat/chat-composer.test.ts
-        ui/src/pages/chat/chat-pane-retained-presentation.ts
-        ui/src/pages/chat/chat-realtime-handoff.test.ts
-        ui/src/pages/chat/chat-realtime.test.ts
-        ui/src/pages/chat/chat-realtime.ts
-        ui/src/pages/chat/chat-session-rail.test.ts
-        ui/src/pages/chat/chat-view.test.ts
-        ui/src/pages/chat/components/chat-composer-controls.tsx
-        ui/src/pages/chat/components/chat-composer-dictation-options.ts
-        ui/src/pages/chat/components/chat-composer-frame.ts
-        ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
-        ui/src/pages/chat/components/chat-session-rail-composer.tsx
-        ui/src/pages/chat/components/chat-voice-activity.tsx
-        ui/src/pages/chat/components/composer-dictation-status.tsx
-        ui/src/pages/chat/components/direct-dictation-view.tsx
-        ui/src/pages/chat/composer-dictation-session.ts
-        ui/src/pages/chat/composer-dictation.test.ts
-        ui/src/pages/chat/composer-dictation.ts
-        ui/src/pages/chat/composer-direct-dictation.test.tsx
-        ui/src/pages/chat/composer-direct-dictation.ts
-        ui/src/pages/chat/talk/chat-actions-runtime.ts
-        ui/src/pages/chat/talk/input.test-support.ts
-        ui/src/pages/chat/talk/input.test.ts
-        ui/src/pages/chat/talk/input.ts
-        ui/src/pages/chat/talk/session-runtime-loading.test.ts
-        ui/src/pages/chat/talk/session.test.ts
-        ui/src/pages/chat/talk/session.ts
-        ui/src/pages/chat/talk/split.test.ts
-        ui/src/pages/chat/talk/split.ts
-        ui/src/pages/chat/talk/transcript-queue.test.ts
-        ui/src/pages/new-session/draft-submission-flow.ts
-        ui/src/pages/new-session/new-session-page-owner.ts
+      P06_FORMAT_FILES: ${{ matrix.format_files }}
       P06_GENERATED_FILES: |
         ui/src/i18n/.i18n/raw-copy-baseline.json
-      P06_TEST_FILES: |
-        ui/src/pages/chat/composer-dictation.test.ts
-        ui/src/pages/chat/composer-direct-dictation.test.tsx
-        ui/src/pages/chat/chat-composer-actions.test.ts
-        ui/src/pages/chat/chat-composer-microphone.test.ts
-        ui/src/pages/chat/composer-microphone-picker.test.ts
-        ui/src/pages/chat/chat-realtime.test.ts
-        ui/src/pages/chat/chat-realtime-handoff.test.ts
-        ui/src/pages/chat/talk/microphone-meter.test.ts
-        ui/src/pages/new-session/draft-dictation-session.test.ts
-        ui/src/app/settings.node.test.ts
-        ui/src/lib/voice-route.test.ts
-        ui/src/pages/chat/chat-composer.test.ts
-        ui/src/pages/chat/chat-session-rail.test.ts
-        ui/src/pages/chat/chat-view.test.ts
-        ui/src/pages/chat/talk/input.test.ts
-        ui/src/pages/chat/talk/session-runtime-loading.test.ts
-        ui/src/pages/chat/talk/session.test.ts
-        ui/src/pages/chat/talk/split.test.ts
-        ui/src/pages/chat/talk/transcript-queue.test.ts
-      P06_SOURCE_FILES: |
-        ui/src/i18n/locales/en-chat-composer.ts
-        ui/src/lib/voice-route.ts
-        ui/src/pages/chat/chat-pane-retained-presentation.ts
-        ui/src/pages/chat/chat-realtime.ts
-        ui/src/pages/chat/components/chat-composer-controls.tsx
-        ui/src/pages/chat/components/chat-composer-dictation-options.ts
-        ui/src/pages/chat/components/chat-composer-frame.ts
-        ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
-        ui/src/pages/chat/components/chat-session-rail-composer.tsx
-        ui/src/pages/chat/components/chat-voice-activity.tsx
-        ui/src/pages/chat/components/composer-dictation-status.tsx
-        ui/src/pages/chat/components/direct-dictation-view.tsx
-        ui/src/pages/chat/composer-dictation-session.ts
-        ui/src/pages/chat/composer-dictation.ts
-        ui/src/pages/chat/composer-direct-dictation.ts
-        ui/src/pages/chat/talk/chat-actions-runtime.ts
-        ui/src/pages/chat/talk/input.ts
-        ui/src/pages/chat/talk/session.ts
-        ui/src/pages/chat/talk/split.ts
-        ui/src/pages/new-session/draft-submission-flow.ts
-        ui/src/pages/new-session/new-session-page-owner.ts
-      P06_BROWSER_FILES: |
-        ui/src/e2e/browser-dictation-status.e2e.test.ts
-        ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
-        ui/src/e2e/browser-talk-ordering.e2e.test.ts
-        ui/src/e2e/browser-talk-start-stop.e2e.test.ts
-        ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
-        ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
-        ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
-        ui/src/e2e/browser-voice-routes.e2e.test.ts
     steps:
       - name: Initialize artifact directory and require an exact commit
         run: |
           printf 'P06_PROOF_DIR=%s/p06-voice-generate\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_SOURCE_TREE" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SELECTION_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_SELECTION_BASE_TREE" =~ ^[0-9a-f]{40}$ ]]
 
       - name: Checkout the exact child input
         id: checkout
@@ -160,6 +144,8 @@ jobs:
           mkdir -p "$P06_PROOF_DIR"
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_SOURCE_TREE"
+          git -c core.hooksPath=/dev/null fetch --no-tags --depth=1 origin "$SELECTION_BASE_SHA"
+          test "$(git rev-parse "$SELECTION_BASE_SHA^{tree}")" = "$EXPECTED_SELECTION_BASE_TREE"
           git diff --exit-code
           git diff --cached --exit-code
           python3 - <<'PY'
@@ -171,7 +157,7 @@ jobs:
 
           proof = Path(os.environ["P06_PROOF_DIR"])
           selection = {}
-          for label, variable in (("format", "P06_FORMAT_FILES"), ("generated", "P06_GENERATED_FILES"), ("test", "P06_TEST_FILES"), ("source", "P06_SOURCE_FILES"), ("browser", "P06_BROWSER_FILES")):
+          for label, variable in (("format", "P06_FORMAT_FILES"), ("generated", "P06_GENERATED_FILES")):
               files = os.environ[variable].splitlines()
               assert files and all(files) and len(files) == len(set(files))
               for name in files:
@@ -179,7 +165,13 @@ jobs:
                   subprocess.check_call(["git", "ls-files", "--error-unmatch", "--", name], stdout=subprocess.DEVNULL)
               (proof / f"{label}-files.txt").write_text("\n".join(files) + "\n")
               selection[label] = files
+          changed = subprocess.check_output(["git", "diff", "--name-only", "--no-renames", "--diff-filter=ACMRT", os.environ["SELECTION_BASE_SHA"], "HEAD"], text=True).splitlines()
+          assert sorted(selection["format"]) == sorted(changed), "Format selection differs from pinned source delta."
           receipt = {
+              "label": os.environ["PROOF_LABEL"],
+              "selection_base_sha": os.environ["SELECTION_BASE_SHA"],
+              "selection_base_tree": os.environ["EXPECTED_SELECTION_BASE_TREE"],
+              "selection_base_purpose": "Formatting scope only; final guard base must be each review stage's actual parent.",
               "proof_kind": os.environ["PROOF_KIND"],
               "source_repository": os.environ["SOURCE_REPOSITORY"],
               "source_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
@@ -192,9 +184,9 @@ jobs:
               "selection": selection,
               "input_sha256": {
                   name: hashlib.sha256(Path(name).read_bytes()).hexdigest()
-                  for name in sorted({name for values in selection.values() for name in values})
+                  for name in sorted(set(selection["format"] + selection["generated"]))
               },
-              "qualification": "Discovery checks run against this input plus generated.patch. This is not final committed-head qualification.",
+              "qualification": "Generation only. Tests, static checks, build, and browser proof are NOT RUN.",
           }
           (proof / "source.json").write_text(json.dumps(receipt, indent=2) + "\n")
           print(json.dumps(receipt, indent=2))
@@ -226,7 +218,7 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: |
           mapfile -t format_files < "$P06_PROOF_DIR/format-files.txt"
-          pnpm format "${format_files[@]}" 2>&1 | tee "$P06_PROOF_DIR/format.log"
+          pnpm format --no-error-on-unmatched-pattern -- "${format_files[@]}" 2>&1 | tee "$P06_PROOF_DIR/format.log"
 
       - name: Generate the canonical Control UI raw-copy baseline
         id: i18n
@@ -259,6 +251,7 @@ jobs:
           patch = subprocess.check_output(["git", "diff", "--binary", "--full-index", "--no-ext-diff"])
           (proof / "generated.patch").write_bytes(patch)
           receipt = {
+              "label": os.environ["PROOF_LABEL"],
               "input_sha": os.environ["SOURCE_SHA"],
               "changed_paths": changed,
               "patch_sha256": hashlib.sha256(patch).hexdigest(),
@@ -271,84 +264,12 @@ jobs:
           }
           (proof / "generated.json").write_text(json.dumps(receipt, indent=2) + "\n")
           print(json.dumps(receipt, indent=2))
+          # Bounded public-source fallback if artifact download loses its local host.
+          if len(patch) <= 200_000:
+              print("P06_GENERATED_PATCH_BEGIN")
+              print(patch.decode("utf-8"), end="")
+              print("P06_GENERATED_PATCH_END")
           PY
-
-      - name: Discover focused test failures on the generated working tree
-        id: discovery-tests
-        if: ${{ !cancelled() && steps.patch.outcome == 'success' }}
-        run: |
-          mapfile -t test_files < "$P06_PROOF_DIR/test-files.txt"
-          pnpm test "${test_files[@]}" --maxWorkers=1 2>&1 | tee "$P06_PROOF_DIR/tests.log"
-
-      - name: Discover production Control UI type errors
-        id: discovery-types
-        if: ${{ !cancelled() && steps.patch.outcome == 'success' }}
-        run: pnpm tsgo:ui 2>&1 | tee "$P06_PROOF_DIR/types.log"
-
-      - name: Discover Control UI fixture type errors
-        id: discovery-test-types
-        if: ${{ !cancelled() && steps.patch.outcome == 'success' }}
-        run: pnpm tsgo:test:ui 2>&1 | tee "$P06_PROOF_DIR/test-types.log"
-
-      - name: Discover lint failures for the changed production owners
-        id: discovery-lint
-        if: ${{ !cancelled() && steps.patch.outcome == 'success' }}
-        run: |
-          mapfile -t source_files < "$P06_PROOF_DIR/source-files.txt"
-          node scripts/run-oxlint.mjs --tsconfig tsconfig.ui.json "${source_files[@]}" 2>&1 | tee "$P06_PROOF_DIR/lint.log"
-
-      - name: Check canonical generated formatting
-        id: discovery-format
-        if: ${{ !cancelled() && steps.patch.outcome == 'success' }}
-        run: |
-          mapfile -t format_files < "$P06_PROOF_DIR/format-files.txt"
-          mapfile -t generated_files < "$P06_PROOF_DIR/generated-files.txt"
-          pnpm format:check "${format_files[@]}" "${generated_files[@]}" 2>&1 | tee "$P06_PROOF_DIR/format-check.log"
-
-      - name: Check generated Control UI copy and catalog wiring
-        id: discovery-i18n
-        if: ${{ !cancelled() && steps.patch.outcome == 'success' }}
-        run: pnpm ui:i18n:verify 2>&1 | tee "$P06_PROOF_DIR/i18n-check.log"
-
-      - name: Discover build failures on the generated working tree
-        id: discovery-build
-        if: ${{ !cancelled() && steps.patch.outcome == 'success' }}
-        run: pnpm ui:build 2>&1 | tee "$P06_PROOF_DIR/build.log"
-
-      - name: Exercise changed browser voice fixtures in real Chromium
-        id: discovery-browser
-        if: ${{ !cancelled() && steps.patch.outcome == 'success' }}
-        env:
-          OPENCLAW_CAPTURE_UI_PROOF: "1"
-          OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
-        run: |
-          export OPENCLAW_UI_E2E_ARTIFACT_DIR="$P06_PROOF_DIR/ui-proof"
-          mapfile -t browser_files < "$P06_PROOF_DIR/browser-files.txt"
-          pnpm test:ui:e2e "${browser_files[@]}" --maxWorkers=1 2>&1 | tee "$P06_PROOF_DIR/browser.log"
-
-      - name: Verify discovery did not alter generated source
-        id: discovery-integrity
-        if: ${{ !cancelled() && steps.patch.outcome == 'success' }}
-        run: |
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          git diff --cached --exit-code
-          python3 - <<'PYCODE'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-          import subprocess
-
-          proof = Path(os.environ["P06_PROOF_DIR"])
-          generated = json.loads((proof / "generated.json").read_text())
-          changed = subprocess.check_output(["git", "diff", "--name-only"], text=True).splitlines()
-          assert changed == generated["changed_paths"], changed
-          for name, expected in generated["output_sha256"].items():
-              assert hashlib.sha256(Path(name).read_bytes()).hexdigest() == expected, name
-          current_patch = subprocess.check_output(["git", "diff", "--binary", "--full-index", "--no-ext-diff"])
-          assert hashlib.sha256(current_patch).hexdigest() == generated["patch_sha256"]
-          (proof / "integrity.json").write_text(json.dumps({"input_sha": os.environ["SOURCE_SHA"], "generated_patch_unchanged": True}, indent=2) + "\n")
-          PYCODE
 
       - name: Record every generation outcome
         if: always()
@@ -360,15 +281,6 @@ jobs:
           FORMAT_RESULT: ${{ steps.format.outcome }}
           I18N_RESULT: ${{ steps.i18n.outcome }}
           PATCH_RESULT: ${{ steps.patch.outcome }}
-          DISCOVERY_TESTS_RESULT: ${{ steps.discovery-tests.outcome }}
-          DISCOVERY_TYPES_RESULT: ${{ steps.discovery-types.outcome }}
-          DISCOVERY_TEST_TYPES_RESULT: ${{ steps.discovery-test-types.outcome }}
-          DISCOVERY_LINT_RESULT: ${{ steps.discovery-lint.outcome }}
-          DISCOVERY_FORMAT_RESULT: ${{ steps.discovery-format.outcome }}
-          DISCOVERY_I18N_RESULT: ${{ steps.discovery-i18n.outcome }}
-          DISCOVERY_BUILD_RESULT: ${{ steps.discovery-build.outcome }}
-          DISCOVERY_BROWSER_RESULT: ${{ steps.discovery-browser.outcome }}
-          DISCOVERY_INTEGRITY_RESULT: ${{ steps.discovery-integrity.outcome }}
         run: |
           mkdir -p "$P06_PROOF_DIR"
           python3 - <<'PY'
@@ -380,14 +292,14 @@ jobs:
           status = {"success": "PASS", "failure": "FAIL", "skipped": "NOT RUN", "": "NOT RUN", "cancelled": "CANCELLED"}
           outcomes = {
               name.lower().removesuffix("_result"): status[os.environ.get(name, "")]
-              for name in ("CHECKOUT_RESULT", "IDENTITY_RESULT", "TOOLCHAIN_RESULT", "INSTALL_RESULT", "FORMAT_RESULT", "I18N_RESULT", "PATCH_RESULT", "DISCOVERY_TESTS_RESULT", "DISCOVERY_TYPES_RESULT", "DISCOVERY_TEST_TYPES_RESULT", "DISCOVERY_LINT_RESULT", "DISCOVERY_FORMAT_RESULT", "DISCOVERY_I18N_RESULT", "DISCOVERY_BUILD_RESULT", "DISCOVERY_BROWSER_RESULT", "DISCOVERY_INTEGRITY_RESULT")
+              for name in ("CHECKOUT_RESULT", "IDENTITY_RESULT", "TOOLCHAIN_RESULT", "INSTALL_RESULT", "FORMAT_RESULT", "I18N_RESULT", "PATCH_RESULT")
           }
-          for name in ("final_committed_head", "live_microphone", "live_provider", "native_global", "stable_upgrade", "post_parent_merge"):
+          for name in ("tests", "static_checks", "build", "browser", "live_microphone", "live_provider", "native_global", "stable_upgrade", "post_parent_merge"):
               outcomes[name] = "NOT RUN"
           (proof / "outcomes.json").write_text(json.dumps(outcomes, indent=2) + "\n")
-          lines = ["## P06 generation and provisional discovery", "", "| Lane | Outcome |", "| --- | --- |"]
+          lines = ["## P06 generation only", "", "| Lane | Outcome |", "| --- | --- |"]
           lines.extend(f"| {name} | {value} |" for name, value in outcomes.items())
-          lines.extend(["", "Discovery results describe the input commit plus generated.patch. Review the patch and fixes, commit them, then rerun proof against that exact resulting commit."])
+          lines.extend(["", "Apply and commit only a reviewed successful patch, then rerun proof against the resulting exact commit."])
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
               summary.write("\n".join(lines) + "\n")
           PY
@@ -396,7 +308,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: p06-child-generated-${{ github.run_id }}-${{ github.run_attempt }}
+          name: p06-generated-${{ matrix.label }}-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 7
           if-no-files-found: error
           path: |
@@ -409,261 +321,3 @@ jobs:
             ${{ runner.temp }}/p06-voice-generate/i18n.log
             ${{ runner.temp }}/p06-voice-generate/generated.patch
             ${{ runner.temp }}/p06-voice-generate/generated.json
-            ${{ runner.temp }}/p06-voice-generate/test-files.txt
-            ${{ runner.temp }}/p06-voice-generate/source-files.txt
-            ${{ runner.temp }}/p06-voice-generate/browser-files.txt
-            ${{ runner.temp }}/p06-voice-generate/tests.log
-            ${{ runner.temp }}/p06-voice-generate/types.log
-            ${{ runner.temp }}/p06-voice-generate/test-types.log
-            ${{ runner.temp }}/p06-voice-generate/lint.log
-            ${{ runner.temp }}/p06-voice-generate/format-check.log
-            ${{ runner.temp }}/p06-voice-generate/i18n-check.log
-            ${{ runner.temp }}/p06-voice-generate/build.log
-            ${{ runner.temp }}/p06-voice-generate/browser.log
-            ${{ runner.temp }}/p06-voice-generate/integrity.json
-            ${{ runner.temp }}/p06-voice-generate/ui-proof/**/*.png
-            ${{ runner.temp }}/p06-voice-generate/ui-proof/**/*-annotations.json
-
-  parent-browser:
-    if: github.repository == 'CompleteDotTech/openclaw'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      CI: "true"
-      SOURCE_REPOSITORY: Marvinthebored/openclaw
-      SOURCE_SHA: 92182120e8baa7ce001f41dec7f0bba1489e6636
-      WORKFLOW_SHA: ${{ github.workflow_sha }}
-      PROOF_KIND: parent-product-with-explicit-test-instrumentation
-      HARNESS_SHA256: 93c79873b97c25501895c81d605f24ecd9455fa3942a6744b082ed3077b803b6
-      HARNESS_SOURCE_PATH: ui/src/e2e/browser-dictation-status.e2e.test.ts
-      HARNESS_SOURCE_BLOB: b95c845e6917c4c7a5cfa6f7541c38c36f8284e5
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      OPENCLAW_VITEST_RUNTIME: node
-      OPENCLAW_VITEST_MAX_WORKERS: "1"
-      OPENCLAW_TEST_PROJECTS_PARALLEL: "1"
-      OPENCLAW_CAPTURE_UI_PROOF: "1"
-      OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
-      PNPM_CONFIG_FROZEN_LOCKFILE: "true"
-    steps:
-      - name: Initialize proof directory
-        run: |
-          printf 'P06_PROOF_DIR=%s/p06-parent-browser\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
-
-      - name: Checkout the exact parent product
-        id: checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ env.SOURCE_REPOSITORY }}
-          ref: ${{ env.SOURCE_SHA }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Record pristine parent product and test identity
-        id: identity
-        run: |
-          mkdir -p "$P06_PROOF_DIR"
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          test "$(git hash-object "$HARNESS_SOURCE_PATH")" = "$HARNESS_SOURCE_BLOB"
-          git diff --exit-code
-          git diff --cached --exit-code
-          python3 - <<'PYCODE'
-          import json
-          import os
-          from pathlib import Path
-          import subprocess
-
-          receipt = {
-              "proof_kind": os.environ["PROOF_KIND"],
-              "source_repository": os.environ["SOURCE_REPOSITORY"],
-              "source_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-              "source_tree": subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip(),
-              "workflow_repository": os.environ["GITHUB_REPOSITORY"],
-              "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
-              "workflow_sha": os.environ["WORKFLOW_SHA"],
-              "run_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
-              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
-              "harness_original_path": os.environ["HARNESS_SOURCE_PATH"],
-              "harness_original_blob": os.environ["HARNESS_SOURCE_BLOB"],
-              "harness_patch_sha256": os.environ["HARNESS_SHA256"],
-              "limitations": [
-                  "Only one unavailable-provider browser scenario is selected.",
-                  "Product is the exact provisional parent; its test file is instrumented solely for matched screenshot evidence.",
-                  "Microphone, provider and Gateway are synthetic fixtures; no live or native/global proof is claimed.",
-              ],
-          }
-          (Path(os.environ["P06_PROOF_DIR"]) / "source.json").write_text(json.dumps(receipt, indent=2) + "\n")
-          print(json.dumps(receipt, indent=2))
-          PYCODE
-
-      - name: Prepare canonical Node and pnpm without shared caches
-        id: toolchain
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: "24.22.1"
-          install-bun: "false"
-          install-deps: "false"
-          semantic-checks: "true"
-          cache-mode: "off"
-
-      - name: Install this checkout's frozen dependencies
-        id: install
-        run: |
-          {
-            node --version
-            pnpm --version
-            pnpm install --frozen-lockfile
-          } 2>&1 | tee "$P06_PROOF_DIR/install.log"
-          git diff --exit-code
-          git diff --cached --exit-code
-
-      - name: Apply only the disclosed screenshot test instrumentation
-        id: harness
-        run: |
-          cat > "$P06_PROOF_DIR/parent-browser-annotations.patch" <<'P06_PARENT_HARNESS'
-          --- a/ui/src/e2e/browser-dictation-status.e2e.test.ts
-          +++ b/ui/src/e2e/browser-dictation-status.e2e.test.ts
-          @@ -5,6 +5,7 @@
-           import { finishElementAnimations } from "../test-helpers/animations.ts";
-           import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-           import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-          +import { rasterizeProofAnnotations } from "../test-helpers/proof-annotations.ts";
-           import {
-             captureComposerProof,
-             installTalkBrowserFixtures,
-          @@ -654,6 +655,36 @@
-                 await expect.poll(() => picker.getByRole("menuitem", { name: /Configure/ }).count()).toBe(2);
-                 await captureComposer(page, "microphone-picker-capability-gating.png");
-                 await captureFullPage(page, "microphone-picker-capability-gating-full");
-          +      // Evidence-only overlay: product source remains the exact provisional parent.
-          +      const menu = picker.getByRole("menu", { name: "Microphone input", exact: true });
-          +      const frame = await takeControlUiScreenshotFrame(
-          +        page,
-          +        page.locator(".agent-chat__composer-shell"),
-          +        [menu],
-          +        { elements: [menu], animations: "disabled" },
-          +      );
-          +      const measured = {
-          +        viewport: page.viewportSize()!,
-          +        scale: await page.evaluate(() => devicePixelRatio),
-          +        annotations: [
-          +          {
-          +            kind: "outline" as const,
-          +            rect: frame.elements[0]!.bounds,
-          +            text: "Unavailable voice providers",
-          +            labelAt: { x: 700, y: 180 },
-          +            color: "#1d6b6a",
-          +          },
-          +        ],
-          +      };
-          +      await writeFile(path.join(suite.artifactDir, "before-capability-gating-clean.png"), frame.png);
-          +      await writeFile(
-          +        path.join(suite.artifactDir, "before-capability-gating-annotations.json"),
-          +        JSON.stringify(measured, null, 2),
-          +      );
-          +      await writeFile(
-          +        path.join(suite.artifactDir, "before-capability-gating-annotated.png"),
-          +        await rasterizeProofAnnotations(suite.browser, { ...measured, image: frame.png }),
-          +      );
-                 await picker.locator('[data-chat-talk-capability="dictation"]').focus();
-                 await page.keyboard.press("Enter");
-                 await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/talk");
-          P06_PARENT_HARNESS
-          printf '%s  %s\n' "$HARNESS_SHA256" "$P06_PROOF_DIR/parent-browser-annotations.patch" | sha256sum --check
-          git apply --check "$P06_PROOF_DIR/parent-browser-annotations.patch"
-          git apply "$P06_PROOF_DIR/parent-browser-annotations.patch"
-          python3 - <<'PYCODE'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-          import subprocess
-
-          changed = subprocess.check_output(["git", "diff", "--name-only"], text=True).splitlines()
-          assert changed == [os.environ["HARNESS_SOURCE_PATH"]], changed
-          receipt = {
-              "patch_sha256": os.environ["HARNESS_SHA256"],
-              "changed_paths": changed,
-              "instrumented_test_sha256": hashlib.sha256(Path(changed[0]).read_bytes()).hexdigest(),
-          }
-          (Path(os.environ["P06_PROOF_DIR"]) / "harness.json").write_text(json.dumps(receipt, indent=2) + "\n")
-          print(json.dumps(receipt, indent=2))
-          PYCODE
-
-      - name: Capture the matched parent scenario in real Chromium
-        id: browser
-        if: ${{ !cancelled() && steps.harness.outcome == 'success' }}
-        run: |
-          export OPENCLAW_UI_E2E_ARTIFACT_DIR="$P06_PROOF_DIR/ui-proof"
-          pnpm test:ui:e2e "$HARNESS_SOURCE_PATH" --testNamePattern 'gates unavailable voice capabilities in the microphone picker' --maxWorkers=1 2>&1 | tee "$P06_PROOF_DIR/browser.log"
-
-      - name: Confirm product and instrumented test remained unchanged
-        id: source-unchanged
-        if: ${{ !cancelled() && steps.harness.outcome == 'success' }}
-        run: |
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          git diff --cached --exit-code
-          git apply --reverse --check "$P06_PROOF_DIR/parent-browser-annotations.patch"
-          python3 - <<'PYCODE'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-          import subprocess
-
-          proof = Path(os.environ["P06_PROOF_DIR"])
-          receipt = json.loads((proof / "harness.json").read_text())
-          changed = subprocess.check_output(["git", "diff", "--name-only"], text=True).splitlines()
-          assert changed == receipt["changed_paths"]
-          assert hashlib.sha256(Path(changed[0]).read_bytes()).hexdigest() == receipt["instrumented_test_sha256"]
-          (proof / "integrity.json").write_text(json.dumps({"product_unchanged": True, "instrumented_test_unchanged": True}, indent=2) + "\n")
-          PYCODE
-
-      - name: Record baseline browser outcome and limits
-        if: always()
-        env:
-          CHECKOUT_RESULT: ${{ steps.checkout.outcome }}
-          IDENTITY_RESULT: ${{ steps.identity.outcome }}
-          TOOLCHAIN_RESULT: ${{ steps.toolchain.outcome }}
-          INSTALL_RESULT: ${{ steps.install.outcome }}
-          HARNESS_RESULT: ${{ steps.harness.outcome }}
-          BROWSER_RESULT: ${{ steps.browser.outcome }}
-          INTEGRITY_RESULT: ${{ steps.source-unchanged.outcome }}
-        run: |
-          mkdir -p "$P06_PROOF_DIR"
-          python3 - <<'PYCODE'
-          import json
-          import os
-          from pathlib import Path
-
-          status = {"success": "PASS", "failure": "FAIL", "skipped": "NOT RUN", "": "NOT RUN", "cancelled": "CANCELLED"}
-          outcomes = {
-              name.lower().removesuffix("_result"): status[os.environ.get(name, "")]
-              for name in ("CHECKOUT_RESULT", "IDENTITY_RESULT", "TOOLCHAIN_RESULT", "INSTALL_RESULT", "HARNESS_RESULT", "BROWSER_RESULT", "INTEGRITY_RESULT")
-          }
-          for name in ("live_microphone", "live_provider", "native_global", "stable_upgrade", "post_parent_merge"):
-              outcomes[name] = "NOT RUN"
-          (Path(os.environ["P06_PROOF_DIR"]) / "outcomes.json").write_text(json.dumps(outcomes, indent=2) + "\n")
-          lines = ["## P06 matched parent browser scenario", "", "One disclosed test-file instrumentation patch; product source remains exact parent.", "", "| Lane | Outcome |", "| --- | --- |"]
-          lines.extend(f"| {name} | {value} |" for name, value in outcomes.items())
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-              summary.write("\n".join(lines) + "\n")
-          PYCODE
-
-      - name: Retain only parent screenshot evidence and instrumentation receipts
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: p06-parent-browser-${{ github.run_id }}-${{ github.run_attempt }}
-          retention-days: 7
-          if-no-files-found: error
-          path: |
-            ${{ runner.temp }}/p06-parent-browser/source.json
-            ${{ runner.temp }}/p06-parent-browser/outcomes.json
-            ${{ runner.temp }}/p06-parent-browser/harness.json
-            ${{ runner.temp }}/p06-parent-browser/integrity.json
-            ${{ runner.temp }}/p06-parent-browser/parent-browser-annotations.patch
-            ${{ runner.temp }}/p06-parent-browser/install.log
-            ${{ runner.temp }}/p06-parent-browser/browser.log
-            ${{ runner.temp }}/p06-parent-browser/ui-proof/control-ui-browser-dictation-status-*/before-capability-gating-clean.png
-            ${{ runner.temp }}/p06-parent-browser/ui-proof/control-ui-browser-dictation-status-*/before-capability-gating-annotated.png
-            ${{ runner.temp }}/p06-parent-browser/ui-proof/control-ui-browser-dictation-status-*/before-capability-gating-annotations.json
