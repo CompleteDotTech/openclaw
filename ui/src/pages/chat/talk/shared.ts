@@ -97,6 +97,7 @@ export type RealtimeTalkTransportContext = {
   sessionKey: string;
   voiceSessionId?: string;
   flushTranscriptWrites?: () => Promise<void>;
+  isConversationCurrent?: () => boolean;
   callbacks: RealtimeTalkCallbacks;
   input: Pick<RealtimeTalkInputOwner, "stream" | "adopt" | "stop">;
   videoDeviceId?: string;
@@ -268,6 +269,9 @@ function requestRealtimeTalkSteer(
   text: string,
   mode?: RealtimeVoiceAgentControlMode,
 ): Promise<unknown> {
+  if (ctx.isConversationCurrent?.() === false) {
+    return Promise.reject(new DOMException("The Talk destination changed.", "AbortError"));
+  }
   const request = {
     sessionKey: ctx.sessionKey,
     text,
@@ -394,6 +398,9 @@ export async function submitRealtimeTalkConsult(params: {
     const args =
       typeof params.args === "string" ? JSON.parse(params.args || "{}") : (params.args ?? {});
     await ctx.flushTranscriptWrites?.();
+    if (ctx.isConversationCurrent?.() === false) {
+      throw new DOMException("The Talk destination changed.", "AbortError");
+    }
     if (params.signal?.aborted) {
       await submitAbortResult();
       return;
