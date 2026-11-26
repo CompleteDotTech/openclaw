@@ -8,11 +8,18 @@ import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
-class ProofError extends Error {}
+class ProofError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = new.target.name;
+  }
+}
 class InconclusiveSTT extends ProofError {}
+
 function check(ok, message) {
   if (!ok) throw new ProofError(message);
 }
+
 async function until(read, label, timeout = 15_000) {
   const deadline = Date.now() + timeout;
   do {
@@ -28,9 +35,29 @@ const apiKey = process.env.OPENAI_API_KEY?.trim();
 delete process.env.OPENAI_API_KEY;
 
 const REVIEW = ".composer-file-references__review";
-const DRAFT = "textarea[data-composer-file-references]";
 const CHIP = ".chat-composer-file-reference";
 const COMPOSER = ".agent-chat__composer-shell";
+const DRAFT = COMPOSER + ' textarea[aria-label="Chat composer"]';
+const CHAT_MODEL = "openai/gpt-5.4-mini";
+const SEND_METHODS = new Set(["chat.send", "sessions.send", "agent"]);
+
+function redact(text, secrets) {
+  let safe = String(text);
+  for (const secret of secrets) {
+    safe = safe.replaceAll(secret, "[redacted]");
+    safe = safe.replaceAll(encodeURIComponent(secret), "[redacted]");
+  }
+  return safe;
+}
+
+function diagnostic(text, secrets) {
+  return redact(text, secrets)
+    .replace(/\b(?:https?|wss?):\/\/[^\s"'<>]+/gi, "[redacted URL]")
+    .replace(/\b(?:Bearer|Basic)\s+[^\s"',;<>]+/gi, "[redacted authorization]")
+    .replace(/\b(?:authorization|cookie|set-cookie)\s*:\s*[^\r\n]*/gi, "[redacted header]")
+    .replace(/\bsk-[a-z0-9_-]{8,}\b/gi, "[redacted key]")
+    .slice(0, 2400);
+}
 
 function wavDurationMs(b) {
   check(b.toString("ascii", 0, 4) === "RIFF" && b.toString("ascii", 8, 12) === "WAVE",
@@ -57,16 +84,19 @@ function command(text) {
   const matches = [...text.matchAll(/\breference file\s+(.+?)\s+end reference\b/gi)];
   return matches.length === 1 ? matches[0] : null;
 }
+
 function spokenPath(text) {
   return text.trim().replace(/\s+(?:forward\s+)?slash\s+/gi, "/")
     .replace(/\s+dot\s+/gi, ".");
 }
+
 function words(text) {
   const m = command(text);
   if (m) text = text.replace(m[0], `reference file ${spokenPath(m[1])} end reference`);
   return (text.toLowerCase().replaceAll("’", "'")
     .match(/@?[\p{L}\p{N}]+(?:['/.][\p{L}\p{N}]+)*/gu) ?? []).join(" ");
 }
+
 function classifyTranscript(text, c) {
   const m = command(text);
   if (!m || spokenPath(m[1]) !== c.commandFile || words(text) !== words(c.expectedTranscript)) {
@@ -78,9 +108,11 @@ function classifyTranscript(text, c) {
   }
   return m;
 }
+
 function parseFrame(payload) {
   try { return JSON.parse(payload.toString()); } catch { return null; }
 }
+
 async function tabTo(page, target) {
   await target.waitFor({ state: "visible" });
   for (let i = 0; i < 24; i++) {
@@ -94,9 +126,12 @@ async function runCase(c, h) {
   const out = join(h.results, c.id);
   await mkdir(out);
   let stage = "create fixture session";
-  let status = "FAIL", detail = null, screenshot = null, chooserScreenshot = null;
-  let browser, page, draft, createId, closeId, opened, closeOK, firstAudioAt;
-  const events = [], fileActions = [];
+  let status = "FAIL", failure = null, screenshot = null, chooserScreenshot = null;
+  let browser, page, draft, connectId, createId, closeId, opened, closeOK, firstAudioAt;
+  let gatewayMessage;
+  const events = [], fileActions = [], blockedSends = [];
+  const secrets = new Set([apiKey, h.token]);
+  const remember = (value) => { if (typeof value === "string" && value.length >= 8) secrets.add(value); };
   const relayEvents = () => events.filter((e) => e.id === opened?.transcriptionSessionId);
   const finalParts = () => relayEvents()
     .filter((e) => e.type === "transcript" && e.final === true && typeof e.text === "string")
@@ -124,36 +159,68 @@ async function runCase(c, h) {
     page = await context.newPage();
     page.setDefaultTimeout(15_000);
 
-    page.on("websocket", (ws) => {
-      if (new URL(ws.url()).host !== new URL(h.origin).host) return;
-      ws.on("framesent", ({ payload }) => {
-        const f = parseFrame(payload);
-        if (f?.type !== "req") return;
-        if (f.method === "talk.session.create" && f.params?.mode === "transcription") createId = f.id;
-        if (f.method === "talk.session.appendAudio") firstAudioAt ??= Date.now();
-        if (f.method === "talk.session.close" && !f.params?.discard) closeId = f.id;
-        if (f.method === "sessions.files.references") fileActions.push(f.params?.action);
+    // Forward real Gateway traffic unchanged, except never forward a turn submission.
+    await page.routeWebSocket((url) => url.host === new URL(h.origin).host, (socket) => {
+      const server = socket.connectToServer();
+      socket.onMessage((message) => {
+        const f = parseFrame(message);
+        if (f?.type === "req") {
+          if (SEND_METHODS.has(f.method)) {
+            blockedSends.push(f.method);
+            return;
+          }
+          if (f.method === "connect") {
+            connectId = f.id;
+            for (const value of Object.values(f.params?.auth ?? {})) remember(value);
+          }
+          if (f.method === "talk.session.create" && f.params?.mode === "transcription") createId = f.id;
+          if (f.method === "talk.session.appendAudio") firstAudioAt ??= Date.now();
+          if (f.method === "talk.session.close" && !f.params?.discard) closeId = f.id;
+          if (f.method === "sessions.files.references") fileActions.push(f.params?.action);
+        }
+        server.send(message);
       });
-      ws.on("framereceived", ({ payload }) => {
-        const f = parseFrame(payload);
-        if (f?.type === "res" && f.id === createId) opened = f.ok ? f.payload : false;
-        if (f?.type === "res" && f.id === closeId) closeOK = f.ok === true;
+      server.onMessage((message) => {
+        const f = parseFrame(message);
         const p = f?.payload;
+        if (f?.type === "res") {
+          if (f.id === connectId) {
+            remember(p?.auth?.deviceToken);
+            for (const grant of p?.auth?.deviceTokens ?? []) remember(grant.token);
+          }
+          if (f.id === createId) opened = f.ok ? p : false;
+          if (f.id === closeId) closeOK = f.ok === true;
+          if (!f.ok && [connectId, createId, closeId].includes(f.id)) gatewayMessage = f.error?.message;
+        }
         if (f?.type === "event" && f.event === "talk.event" && p?.transcriptionSessionId) {
+          if (p.type === "error") gatewayMessage = p.message;
           events.push({
             id: p.transcriptionSessionId, type: p.type, final: p.final, text: p.text, reason: p.reason,
           });
         }
+        socket.send(message);
       });
     });
 
-    stage = "open real Chat and opt in";
+    stage = "navigate to real Chat";
     await page.goto(`${h.origin}/chat/main/dictation-${c.id}#token=${h.token}`);
+    stage = "mount native composer textarea";
+    draft = page.locator(DRAFT);
+    await draft.waitFor({ state: "attached" });
+    stage = "wait for chat model setup to clear";
+    await page.getByRole("button", { name: "Set up a model", exact: true })
+      .waitFor({ state: "hidden", timeout: 30_000 });
+    stage = "wait for editable composer";
+    await page.waitForFunction((selector) => {
+      const input = document.querySelector(selector);
+      return input instanceof HTMLTextAreaElement && !input.disabled && !input.readOnly;
+    }, DRAFT, { timeout: 30_000 });
+    check(await draft.inputValue() === "", "Expected a fresh empty draft.");
+
+    stage = "opt in to file-reference commands";
     await page.getByRole("checkbox", {
       name: "English file-reference commands for this session's local workspace", exact: true,
     }).check();
-    draft = page.locator(DRAFT);
-    check(await draft.inputValue() === "", "Expected a fresh empty draft.");
     await page.evaluate((selector) => {
       window.__proofChooserSeen = Boolean(document.querySelector(selector));
       new MutationObserver((records) => {
@@ -165,7 +232,7 @@ async function runCase(c, h) {
       }).observe(document.body, { childList: true, subtree: true });
     }, REVIEW);
 
-    stage = "hold mic, play clip, and stop";
+    stage = "hold mic and start live transcription";
     const mic = page.getByRole("button", { name: "Start voice input", exact: true });
     await mic.scrollIntoViewIfNeeded();
     const box = await mic.boundingBox();
@@ -179,6 +246,8 @@ async function runCase(c, h) {
     }
     await until(() => opened !== undefined, "transcription session response");
     check(opened?.provider === "openai", "Gateway did not select OpenAI transcription.");
+
+    stage = "stream the WAV and stop dictation";
     await until(() => firstAudioAt, "first microphone frame");
     await sleep(Math.max(0, firstAudioAt + duration + 200 - Date.now()));
     await page.getByRole("button", { name: "Stop and keep text", exact: true }).click();
@@ -189,26 +258,30 @@ async function runCase(c, h) {
     await until(() => relayEvents().some((e) => e.type === "close"), "provider close event");
     check(relayEvents().some((e) => e.type === "close" && e.reason === "completed") &&
       !relayEvents().some((e) => e.type === "error"), "OpenAI relay did not complete cleanly.");
-    await page.locator(".agent-chat__dictation-status").waitFor({ state: "hidden" });
     const raw = transcript();
     const m = classifyTranscript(raw, c);
+
+    stage = "wait for composer dictation to settle";
+    await page.locator(".agent-chat__dictation-status").waitFor({ state: "hidden" });
 
     const expectDraft = (value) => page.waitForFunction(
       ({ selector, value }) => document.querySelector(selector)?.value === value,
       { selector: DRAFT, value },
       { timeout: 15_000 },
     );
-    stage = "verify chooser and composer";
+    stage = "verify transcript entered the draft";
     await expectDraft(raw);
     const review = page.locator(REVIEW);
     const chip = page.locator(CHIP);
     let expected = raw;
     if (c.chooser.opens) {
+      stage = "wait for the chooser and intended file";
       await review.getByRole("heading", { name: "Choose a file reference", exact: true }).waitFor();
       const radio = review.getByRole("radio", { name: c.chooser.select, exact: true });
       await radio.waitFor();
       await until(() => radio.isEnabled(), "candidate enabled");
       check(!(await radio.isChecked()), "Candidate was already selected.");
+      stage = "select the intended file by keyboard";
       // Anchor focus at the query; all selection and activation are by keyboard.
       await review.getByRole("textbox", { name: "Filename or relative path" }).focus();
       await tabTo(page, radio);
@@ -219,6 +292,7 @@ async function runCase(c, h) {
       }).then(() => "chooser.png", () => null);
 
       if (c.chooser.exitKey === "Enter") {
+        stage = "confirm the bound reference by keyboard";
         await tabTo(page, review.getByRole("button", { name: "Insert bound reference", exact: true }));
         await page.keyboard.press("Enter");
         const label = `@${c.chooser.select}`;
@@ -227,13 +301,17 @@ async function runCase(c, h) {
         check(await chip.textContent() === label, "Bound chip has the wrong label.");
         check(fileActions.includes("revalidate"), "Confirm did not revalidate the selected file.");
       } else {
+        stage = "cancel the chooser by keyboard";
         check(c.chooser.exitKey === "Escape", "Invalid expected chooser exit key.");
         await page.keyboard.press("Escape");
       }
     } else {
+      stage = "verify quoted command never opened the chooser";
       check(!(await page.evaluate(() => window.__proofChooserSeen)), "Quoted command opened the chooser.");
       check(fileActions.length === 0, "Quoted command contacted the file resolver.");
     }
+
+    stage = "verify final unsent draft";
     await review.waitFor({ state: "hidden" });
     await expectDraft(expected);
     const value = await draft.inputValue();
@@ -245,29 +323,46 @@ async function runCase(c, h) {
     status = "PASS";
   } catch (error) {
     status = error instanceof InconclusiveSTT ? "INCONCLUSIVE_STT" : "FAIL";
-    // Playwright errors can include credential-bearing navigation URLs.
-    detail = error instanceof ProofError ? error.message : `Failed during: ${stage}.`;
+    failure = {
+      step: stage,
+      name: diagnostic(error?.name ?? "Error", secrets),
+      message: diagnostic(error?.message ?? error, secrets),
+    };
   } finally {
     const finalComposer = draft ? await draft.inputValue({ timeout: 1_000 }).catch(() => null) : null;
-    if (draft) {
+    if (page) {
       screenshot = await page.locator(COMPOSER).screenshot({
         path: join(out, "final.png"), timeout: 5_000,
       }).then(() => "final.png", () => null);
     }
     await browser?.close().catch(() => {});
+    if (blockedSends.length > 0) {
+      status = "FAIL";
+      failure = {
+        step: stage, name: "UnexpectedSubmission",
+        message: "A chat submission was blocked before reaching the Gateway.",
+      };
+    }
     if (status === "PASS" && (!screenshot || (c.chooser.opens && !chooserScreenshot))) {
       status = "FAIL";
-      detail = "Behavior passed, but a required screenshot is missing.";
+      failure = {
+        step: "capture evidence", name: "MissingScreenshot",
+        message: "A required screenshot is missing.",
+      };
     }
-    await h.save(join(out, "transcript.txt"), transcript());
-    await h.save(join(out, "composer.txt"), finalComposer ?? "");
-    await h.save(join(out, "case.json"), JSON.stringify({
-      head: h.head, status, detail, stage, screenshot, chooserScreenshot,
+    const detail = failure ? `${failure.step}: ${failure.name}` : null;
+    const save = (name, value) => writeFile(join(out, name), redact(value, secrets), { mode: 0o600 });
+    await save("transcript.txt", transcript());
+    await save("composer.txt", finalComposer ?? "");
+    await save("case.json", JSON.stringify({
+      head: h.head, status, detail, stage, error: failure, screenshot, chooserScreenshot,
+      gatewayError: gatewayMessage ? diagnostic(gatewayMessage, secrets) : null,
+      chatModel: CHAT_MODEL, blockedSends,
       provider: opened?.provider === "openai" ? "openai" : null,
       finalTranscriptParts: finalParts(), finalComposer, fileActions,
     }, null, 2) + "\n");
   }
-  console.log(`${c.id}: ${status}${detail ? ` — ${detail}` : ""}`);
+  console.log(`${c.id}: ${status}${failure ? ` — ${failure.step}: ${failure.name}` : ""}`);
   return status;
 }
 
@@ -327,7 +422,12 @@ async function main() {
         mode: "local", bind: "loopback", port, auth: { mode: "token" },
         controlUi: { enabled: true, root: uiRoot },
       },
-      agents: { defaults: { workspace, voiceModel: "openai/gpt-4o-transcribe" } },
+      agents: { defaults: {
+        workspace,
+        model: { primary: CHAT_MODEL },
+        models: { [CHAT_MODEL]: {} },
+        voiceModel: "openai/gpt-4o-transcribe",
+      } },
       plugins: { entries: { openai: { enabled: true } } },
     }), { mode: 0o600 });
 
@@ -349,10 +449,8 @@ async function main() {
       "--params", JSON.stringify({ agentId: "main", key: `agent:main:dictation-${id}`, label: id }),
     ], { cwd: repo, env: localEnv, timeout: 45_000, stdio: "ignore" });
 
-    const save = (path, text) => writeFile(path,
-      text.replaceAll(apiKey, "[redacted]").replaceAll(token, "[redacted]"), { mode: 0o600 });
     for (const c of cases) {
-      if (await runCase(c, { chromium, ramEnv, origin, token, createSession, results, head, save }) !== "PASS") {
+      if (await runCase(c, { chromium, ramEnv, origin, token, createSession, results, head }) !== "PASS") {
         process.exitCode = 1;
       }
     }
