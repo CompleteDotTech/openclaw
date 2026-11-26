@@ -299,8 +299,8 @@ jobs:
       matrix:
         include:
         - label: native-release-candidate
-          source_sha: 1562ad43059fdd602368118751e0026946c1fea2
-          source_tree: 3b3d8f1d33da903219a70ec6978cf1d0a42fb684
+          source_sha: d0442127e5f6816761dd87d07f26a41c92901a2a
+          source_tree: e8e85d155b8cb63a81c078289704bfdd0303f4c2
           base_sha: b53524def896ee3a47c8afe173c4ec40717629de
           base_tree: f6aa1d37afdd25c1bff8e232280729b87eb647f8
           selection_base_sha: b53524def896ee3a47c8afe173c4ec40717629de
