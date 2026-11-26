@@ -79,6 +79,7 @@ export function SessionRailComposer(props: {
 }) {
   let textarea: HTMLTextAreaElement | undefined;
   let composing = false;
+  let draftRevision = 0;
   const paneId = () => `side-chat:${props.sessionKey}`;
   const emojiMenu = createComposerEmojiMenu();
   const inputHandle = createChatAttachmentInputHandle();
@@ -90,6 +91,8 @@ export function SessionRailComposer(props: {
     isConnected: () => props.connected,
     // Follow-ups stay editable while an answer is pending; submit owns that gate.
     canCommit: () => props.connected,
+    // Include owner-driven draft replacement as well as local A→B→A typing.
+    readDraftRevision: () => JSON.stringify([draftRevision, props.companion.draft]),
     onMessage: (message) => props.onDraftChange?.(message.slice(0, SIDE_CHAT_QUESTION_MAX_LENGTH)),
     onError: (message) => showToast({ severity: "error", message }),
     onSubmit: () => props.submit(),
@@ -138,7 +141,10 @@ export function SessionRailComposer(props: {
     dictation.revision();
     return dictationControl.previewDraft() ?? props.companion.draft;
   });
-  const draftRef = liveValue<HTMLTextAreaElement>(visibleDraft, scheduleTextareaHeightAdjustment);
+  const draftRef = liveValue<HTMLTextAreaElement>(
+    () => visibleDraft(),
+    scheduleTextareaHeightAdjustment,
+  );
   // The dictated preview reaches the draft only on commit, so submission finishes it first.
   const submit = () => {
     const active = dictationControl.dictation;
@@ -150,8 +156,15 @@ export function SessionRailComposer(props: {
       return;
     }
     const sessionKey = props.sessionKey;
-    void active.finishActive().then(() => {
-      if (props.sessionKey === sessionKey) {
+    const client = props.client;
+    void active.finishActive({ forSend: true }).then((confirmed) => {
+      if (
+        confirmed &&
+        props.sessionKey === sessionKey &&
+        props.client === client &&
+        props.connected &&
+        props.presented
+      ) {
         props.submit();
       }
     });
@@ -267,6 +280,7 @@ export function SessionRailComposer(props: {
                 return;
               }
               adjustTextareaHeight(event.currentTarget);
+              draftRevision += 1;
               props.onDraftChange?.(event.currentTarget.value);
               emojiMenu.update(event.currentTarget, !composing);
             }}
@@ -314,6 +328,7 @@ export function SessionRailComposer(props: {
             <Show when={settled()}>
               <DirectDictationView
                 control={dictationControl}
+                presented={props.presented}
                 ownerKey={props.sessionKey}
                 inputDeviceId={props.inputDeviceId}
                 renderRevision={dictationRevision()}

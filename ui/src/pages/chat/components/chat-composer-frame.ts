@@ -120,6 +120,8 @@ export function createChatComposerContext(
     state.composerDraftScope = { key: draftKey };
   }
   const draftScope = state.composerDraftScope;
+  const draftClient = props.gatewayClient;
+  const draftSessionId = props.currentSessionId;
   const composition = interaction.composition();
   const visibleDraft =
     state.composerComposing && composition?.key === draftKey
@@ -307,7 +309,12 @@ export function createChatComposerContext(
     submissionAction?: Event,
     followUpModeOverride?: ChatFollowUpMode,
   ): boolean => {
-    if (state.composerDraftScope !== draftScope || !canSubmitDraft(draft)) {
+    if (
+      state.composerDraftScope !== draftScope ||
+      props.gatewayClient !== draftClient ||
+      props.currentSessionId !== draftSessionId ||
+      !canSubmitDraft(draft)
+    ) {
       return false;
     }
     state.composerComposing = false;

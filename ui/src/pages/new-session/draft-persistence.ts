@@ -233,6 +233,11 @@ export class NewSessionDraftPersistence {
     this.pristineMutationBaseline = this.mutationGeneration;
   }
 
+  // Explicit Send must still refer to the local draft the user reviewed.
+  get editRevision(): number {
+    return this.mutationGeneration;
+  }
+
   noteSelectionMutation(field: "model" | "permission") {
     // A pristine submission cancels content hydration; a rejected create must not
     // let the next selection-only edit CAS-write the still-empty composer over that content.

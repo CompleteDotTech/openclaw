@@ -214,7 +214,7 @@ describe("renderChatComposer controls", () => {
     if (!commit) {
       throw new Error("expected the composer transcript callback");
     }
-    return { container, active, locked, finishActive, onSend, commit };
+    return { container, props, active, locked, finishActive, onSend, commit };
   }
 
   it("finishes locked dictation before submitting the complete draft with history held", async () => {
@@ -256,6 +256,36 @@ describe("renderChatComposer controls", () => {
       expect(action?.disabled).toBe(false);
       expect(action?.getAttribute("aria-disabled")).toBe("true");
     }
+  });
+
+  it("does not submit when the original dictation confirmation was canceled", async () => {
+    const { container, finishActive, onSend } = renderDictatingComposer();
+    const confirmation = createDeferred<boolean>();
+    finishActive.mockReturnValue(confirmation.promise);
+    primaryButton(container).click();
+    expect(finishActive).toHaveBeenCalledWith({ forSend: true });
+    confirmation.resolve(false);
+    await confirmation.promise;
+    await Promise.resolve();
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("does not publish or send into a replacement session with the same key", async () => {
+    const { container, props, active, locked, finishActive, onSend, commit } =
+      renderDictatingComposer();
+    const confirmation = createDeferred<boolean>();
+    finishActive.mockReturnValue(confirmation.promise);
+    primaryButton(container).click();
+    props.currentSessionId = "replacement-session";
+    renderComposerInto(container, props);
+    active.mockReturnValue(false);
+    locked.mockReturnValue(false);
+    commit("stale dictated text");
+    confirmation.resolve(true);
+    await confirmation.promise;
+    await Promise.resolve();
+    expect(textarea(container).value).toBe("Typed beginning");
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it("toggles Talk separately from dictation without submitting the draft", async () => {

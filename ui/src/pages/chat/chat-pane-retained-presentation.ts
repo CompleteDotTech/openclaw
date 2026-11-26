@@ -632,6 +632,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     resetTranscriptSession(this.presentationId, this.element);
     const state = this.state;
     if (state) {
+      // A retained pane keeps its draft owner, but never keeps capturing while hidden.
+      getChatComposerState(this.presentationId).dictation?.setPresented(false);
       stopChatRealtimeTalk(state);
       invalidateImageLightbox(state);
       state.sidebarContent = null;
