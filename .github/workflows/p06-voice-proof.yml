@@ -1,20 +1,163 @@
-# Evidence-only exact committed source proof. Independent secretless execution and guard jobs.
+# Evidence-only full Stage4 exact source proof with actual, separately built pinned-parent assets.
+name: P06 Stage4 full exact source and actual rollback proof
 'on':
   push:
     branches:
     - evidence/p06-voice-routes-20261126
 permissions:
   contents: read
+concurrency:
+  group: p06-stage4-${{ github.workflow_sha }}
+  cancel-in-progress: false
 defaults:
   run:
     shell: bash --noprofile --norc -e -o pipefail {0}
-name: P06 stages2-3 exact committed proof
-concurrency:
-  group: p06-proof-${{ github.workflow_sha }}
-  cancel-in-progress: false
 jobs:
-  execution:
+  parent-assets:
+    name: Build immutable provisional parent assets
     if: github.repository == 'CompleteDotTech/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+      SOURCE_REPOSITORY: Marvinthebored/openclaw
+      SOURCE_SHA: 92182120e8baa7ce001f41dec7f0bba1489e6636
+      EXPECTED_SOURCE_TREE: d552dd794421d98780343e789ddc55249cf24646
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      PNPM_CONFIG_FROZEN_LOCKFILE: 'true'
+      GOGC: '30'
+      GOMEMLIMIT: 3GiB
+    steps:
+    - name: Initialize narrow parent build output
+      run: |
+        printf 'P06_PROOF_DIR=%s/p06-rollback-parent\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+        printf 'P06_ASSET_TARGET=%s/p06-rollback-parent/assets\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+        printf 'P06_ASSET_RECEIPT=%s/p06-rollback-parent/build-receipt.json\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+    - name: Checkout the exact provisional parent product
+      id: checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: ${{ env.SOURCE_REPOSITORY }}
+        ref: ${{ env.SOURCE_SHA }}
+        fetch-depth: '1'
+        persist-credentials: 'false'
+    - name: Verify actual parent source identity
+      id: identity
+      run: |
+        mkdir -p "$P06_PROOF_DIR"
+        test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+        test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_SOURCE_TREE"
+        git diff --exit-code
+        git diff --cached --exit-code
+        python3 - <<'PY'
+        import json
+        import os
+        from pathlib import Path
+        receipt = {key.lower(): os.environ[key] for key in ("SOURCE_REPOSITORY", "SOURCE_SHA", "WORKFLOW_SHA")}
+        receipt["source_tree"] = os.environ["EXPECTED_SOURCE_TREE"]
+        receipt["proof_kind"] = "provisional-parent-production-assets"
+        receipt["run_id"] = os.environ["GITHUB_RUN_ID"]
+        Path(os.environ["P06_PROOF_DIR"], "source.json").write_text(json.dumps(receipt, indent=2) + "\n")
+        print(json.dumps(receipt, indent=2))
+        PY
+    - name: Prepare canonical Node and pnpm without shared caches
+      id: toolchain
+      uses: ./.github/actions/setup-node-env
+      with:
+        node-version: 24.22.1
+        install-bun: 'false'
+        install-deps: 'false'
+        semantic-checks: 'true'
+        cache-mode: 'off'
+    - name: Install this checkout's frozen dependencies
+      id: install
+      run: |
+        {
+          node --version
+          pnpm --version
+          pnpm install --frozen-lockfile
+        } 2>&1 | tee "$P06_PROOF_DIR/install.log"
+        git diff --exit-code
+        git diff --cached --exit-code
+    - name: Build the actual pinned parent Control UI
+      id: build
+      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+      run: |
+        pnpm ui:build 2>&1 | tee "$P06_PROOF_DIR/build.log"
+    - name: Retain pristine parent assets and their complete manifest
+      id: assets
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      run: |
+        python3 - <<'PY'
+        import hashlib
+        import json
+        import os
+        from pathlib import Path
+        import re
+        import shutil
+
+        source = Path("dist/control-ui")
+        assert source.is_dir()
+        html = (source / "index.html").read_text()
+        match = re.search(r"globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(\{.*?\});</script>", html, flags=re.S)
+        assert match, "Built document has no readable identity."
+        build = json.loads(match.group(1))
+        assert build["commit"] == os.environ["SOURCE_SHA"], build
+        assert build["dirty"] is False, build
+        assert isinstance(build["buildId"], str) and build["buildId"], build
+        target = Path(os.environ["P06_ASSET_TARGET"])
+        assert not target.exists(), target
+        shutil.copytree(source, target)
+        assets = {}
+        for path in sorted(target.rglob("*")):
+            assert not path.is_symlink(), path
+            if path.is_file():
+                data = path.read_bytes()
+                assets[path.relative_to(target).as_posix()] = {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+        receipt = {
+            "source_repository": os.environ["SOURCE_REPOSITORY"],
+            "source_sha": os.environ["SOURCE_SHA"],
+            "source_tree": os.environ["EXPECTED_SOURCE_TREE"],
+            "workflow_sha": os.environ["WORKFLOW_SHA"],
+            "run_id": os.environ["GITHUB_RUN_ID"],
+            "build_command": "pnpm ui:build",
+            "build_info": build,
+            "index_sha256": assets["index.html"]["sha256"],
+            "asset_count": len(assets),
+            "asset_bytes": sum(item["bytes"] for item in assets.values()),
+            "assets": assets,
+        }
+        Path(os.environ["P06_ASSET_RECEIPT"]).write_text(json.dumps(receipt, indent=2) + "\n")
+        print(json.dumps({key: value for key, value in receipt.items() if key != "assets"}, indent=2))
+        PY
+    - name: Confirm tracked source remained unchanged
+      id: source-unchanged
+      if: ${{ !cancelled() && steps.identity.outcome == 'success' }}
+      run: |
+        {
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_SOURCE_TREE"
+          git diff --exit-code
+          git diff --cached --exit-code
+        } 2>&1 | tee "$P06_PROOF_DIR/source-unchanged.log"
+    - name: Retain only the actual parent build and public-source receipts
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: p06-rollback-parent-assets-${{ github.run_id }}-${{ github.run_attempt }}
+        retention-days: '7'
+        if-no-files-found: error
+        include-hidden-files: 'true'
+        path: |
+          ${{ runner.temp }}/p06-rollback-parent/source.json
+          ${{ runner.temp }}/p06-rollback-parent/build-receipt.json
+          ${{ runner.temp }}/p06-rollback-parent/install.log
+          ${{ runner.temp }}/p06-rollback-parent/build.log
+          ${{ runner.temp }}/p06-rollback-parent/source-unchanged.log
+          ${{ runner.temp }}/p06-rollback-parent/assets/**
+  execution:
+    if: ${{ !cancelled() && github.repository == 'CompleteDotTech/openclaw' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -43,6 +186,7 @@ jobs:
       P06_BROWSER_FILES: ${{ matrix.browser_files }}
       GOGC: '30'
       GOMEMLIMIT: 3GiB
+      P06_ROLLBACK_TEST_FILE: ${{ matrix.rollback_file }}
       PROOF_LANE: execution
     steps:
     - name: Initialize proof directory and require immutable identities
@@ -110,6 +254,7 @@ jobs:
             "run_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
             "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
             "selection": selected,
+            "rollback_test_file": os.environ["P06_ROLLBACK_TEST_FILE"],
             "selected_source_sha256": {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in sorted(set(sum(selected.values(), [])))},
             "limitations": [
                 "Synthetic Gateway, media, and provider fixtures only; no live credentials or microphone hardware.",
@@ -151,11 +296,31 @@ jobs:
       run: |
         mapfile -t test_files < "$P06_PROOF_DIR/test-files.txt"
         pnpm test "${test_files[@]}" --maxWorkers=1 2>&1 | tee "$P06_PROOF_DIR/tests.log"
+    - name: Retain early unit failure diagnostics
+      if: ${{ !cancelled() && steps.tests.outcome == 'failure' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: p06-stage4-unit-failure-${{ github.run_id }}-${{ github.run_attempt }}
+        retention-days: 7
+        if-no-files-found: error
+        path: |
+          ${{ runner.temp }}/p06-voice-proof/source.json
+          ${{ runner.temp }}/p06-voice-proof/tests.log
     - name: Production Control UI typecheck
       id: types
       if: ${{ !cancelled() && steps.install.outcome == 'success' }}
       run: |
         pnpm tsgo:ui 2>&1 | tee "$P06_PROOF_DIR/types.log"
+    - name: Retain early production-types failure diagnostics
+      if: ${{ !cancelled() && steps.types.outcome == 'failure' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      with:
+        name: p06-stage4-production-types-failure-${{ github.run_id }}-${{ github.run_attempt }}
+        retention-days: 7
+        if-no-files-found: error
+        path: |
+          ${{ runner.temp }}/p06-voice-proof/source.json
+          ${{ runner.temp }}/p06-voice-proof/types.log
     - name: Control UI fixture typecheck
       id: test-types
       if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -183,12 +348,111 @@ jobs:
       if: ${{ !cancelled() && steps.install.outcome == 'success' }}
       run: |
         pnpm ui:build 2>&1 | tee "$P06_PROOF_DIR/build.log"
+    - name: Retrieve only this run's actual parent assets
+      id: rollback-parent-assets
+      if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.rollback == 'true' && needs.parent-assets.result == 'success' }}
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: p06-rollback-parent-assets-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/p06-rollback/parent
+    - name: Verify transferred parent assets and freeze exact child assets
+      id: rollback-assets
+      if: ${{ !cancelled() && steps.rollback-parent-assets.outcome == 'success' }}
+      run: |
+        python3 - <<'PY'
+        import hashlib
+        import json
+        import os
+        from pathlib import Path
+
+        parent = Path(os.environ["RUNNER_TEMP"], "p06-rollback", "parent")
+        receipt = json.loads((parent / "build-receipt.json").read_text())
+        assert receipt["source_sha"] == "92182120e8baa7ce001f41dec7f0bba1489e6636"
+        assert receipt["source_tree"] == "d552dd794421d98780343e789ddc55249cf24646"
+        assert receipt["workflow_sha"] == os.environ["WORKFLOW_SHA"]
+        assert receipt["run_id"] == os.environ["GITHUB_RUN_ID"]
+        assert receipt["build_info"]["commit"] == receipt["source_sha"]
+        assert receipt["build_info"]["dirty"] is False
+        assets = parent / "assets"
+        actual = {}
+        for path in sorted(assets.rglob("*")):
+            assert not path.is_symlink(), path
+            if path.is_file():
+                data = path.read_bytes()
+                actual[path.relative_to(assets).as_posix()] = {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+        assert actual and actual == receipt["assets"], "Transferred parent assets differ from the producer manifest."
+        Path(os.environ["P06_PROOF_DIR"], "rollback-parent-build.json").write_text(json.dumps(receipt, indent=2) + "\n")
+        print(f"Verified {len(actual)} exact-parent production assets.")
+        PY
+        export P06_ASSET_TARGET="$RUNNER_TEMP/p06-rollback/child-assets"
+        export P06_ASSET_RECEIPT="$P06_PROOF_DIR/rollback-child-build.json"
+        python3 - <<'PY'
+        import hashlib
+        import json
+        import os
+        from pathlib import Path
+        import re
+        import shutil
+
+        source = Path("dist/control-ui")
+        assert source.is_dir()
+        html = (source / "index.html").read_text()
+        match = re.search(r"globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(\{.*?\});</script>", html, flags=re.S)
+        assert match, "Built document has no readable identity."
+        build = json.loads(match.group(1))
+        assert build["commit"] == os.environ["SOURCE_SHA"], build
+        assert build["dirty"] is False, build
+        assert isinstance(build["buildId"], str) and build["buildId"], build
+        target = Path(os.environ["P06_ASSET_TARGET"])
+        assert not target.exists(), target
+        shutil.copytree(source, target)
+        assets = {}
+        for path in sorted(target.rglob("*")):
+            assert not path.is_symlink(), path
+            if path.is_file():
+                data = path.read_bytes()
+                assets[path.relative_to(target).as_posix()] = {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data)}
+        receipt = {
+            "source_repository": os.environ["SOURCE_REPOSITORY"],
+            "source_sha": os.environ["SOURCE_SHA"],
+            "source_tree": os.environ["EXPECTED_SOURCE_TREE"],
+            "workflow_sha": os.environ["WORKFLOW_SHA"],
+            "run_id": os.environ["GITHUB_RUN_ID"],
+            "build_command": "pnpm ui:build",
+            "build_info": build,
+            "index_sha256": assets["index.html"]["sha256"],
+            "asset_count": len(assets),
+            "asset_bytes": sum(item["bytes"] for item in assets.values()),
+            "assets": assets,
+        }
+        Path(os.environ["P06_ASSET_RECEIPT"]).write_text(json.dumps(receipt, indent=2) + "\n")
+        print(json.dumps({key: value for key, value in receipt.items() if key != "assets"}, indent=2))
+        PY
+        python3 - <<'PY'
+        import json
+        import os
+        from pathlib import Path
+
+        proof = Path(os.environ["P06_PROOF_DIR"])
+        parent = json.loads((proof / "rollback-parent-build.json").read_text())
+        child = json.loads((proof / "rollback-child-build.json").read_text())
+        assert child["source_sha"] == os.environ["SOURCE_SHA"]
+        assert child["source_tree"] == os.environ["EXPECTED_SOURCE_TREE"]
+        assert parent["build_info"]["buildId"] != child["build_info"]["buildId"]
+        assert parent["index_sha256"] != child["index_sha256"]
+        inputs = {"parent": {key: value for key, value in parent.items() if key != "assets"}, "child": {key: value for key, value in child.items() if key != "assets"}, "qualification": "Both production asset directories are exact-source builds; the browser test must copy them before swapping and must preserve their original embedded identities."}
+        (proof / "rollback-inputs.json").write_text(json.dumps(inputs, indent=2) + "\n")
+        print(json.dumps(inputs, indent=2))
+        PY
+        printf 'P06_ROLLBACK_PARENT_ASSETS=%s/p06-rollback/parent/assets\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+        printf 'P06_ROLLBACK_CHILD_ASSETS=%s/p06-rollback/child-assets\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+        printf 'P06_ROLLBACK_CHILD_SHA=%s\n' "$SOURCE_SHA" >> "$GITHUB_ENV"
     - name: Exercise selected voice fixtures in real Chromium
       id: browser
       if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.browser_files != '' }}
       env:
+        OPENCLAW_CAPTURE_UI_PROOF: '1'
         OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: '1'
-        P06_EXPECTED_BROWSER_TESTS: ${{ matrix.expected_browser_tests }}
       run: |
         export OPENCLAW_UI_E2E_ARTIFACT_DIR="$P06_PROOF_DIR/ui-proof"
         mapfile -t browser_files < "$P06_PROOF_DIR/browser-files.txt"
@@ -200,15 +464,52 @@ jobs:
 
         proof = Path(os.environ["P06_PROOF_DIR"])
         report = json.loads((proof / "browser-result.json").read_text())
-        expected = int(os.environ["P06_EXPECTED_BROWSER_TESTS"])
-        assert expected > 0 and report["success"] is True
-        assert report["numPassedTests"] == expected and report["numTotalTests"] == expected
+        expected = {'ui/src/e2e/browser-dictation-status.e2e.test.ts': 17, 'ui/src/e2e/browser-talk-start-stop.e2e.test.ts': 11, 'ui/src/e2e/browser-talk-webkit-error.e2e.test.ts': 3, 'ui/src/e2e/browser-talk-voice-selection.e2e.test.ts': 3, 'ui/src/e2e/browser-talk-ordering.e2e.test.ts': 2, 'ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts': 2, 'ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts': 2, 'ui/src/e2e/browser-voice-routes.e2e.test.ts': 9}
+        assert report["success"] is True and report["numTotalTests"] == 49 and report["numPassedTests"] == 49
         for key in ("numFailedTestSuites", "numPendingTestSuites", "numFailedTests", "numPendingTests", "numTodoTests"):
             assert report[key] == 0, key
-        expected_files = {str(Path(name).resolve()) for name in (proof / "browser-files.txt").read_text().splitlines()}
-        assert {str(Path(result["name"]).resolve()) for result in report["testResults"]} == expected_files
-        assert all(result["status"] == "passed" and all(test["status"] == "passed" for test in result["assertionResults"]) for result in report["testResults"])
-        print(f"Verified {expected} actual browser assertions passed with zero skipped/pending/todo/failed cases.")
+        assert len(report["testResults"]) == len(expected)
+        observed = {}
+        for result in report["testResults"]:
+            name = Path(result["name"]).relative_to(Path.cwd()).as_posix()
+            assert name in expected and result["status"] == "passed"
+            assert len(result["assertionResults"]) == expected[name]
+            assert all(test["status"] == "passed" for test in result["assertionResults"])
+            observed[name] = len(result["assertionResults"])
+        assert observed == expected
+        print("Verified all 49 browser assertions across the 8 selected files passed with zero skipped/pending/todo/failed cases.")
+        PY
+    - name: Exercise actual parent to child to parent compatibility
+      id: rollback
+      if: ${{ !cancelled() && steps.rollback-assets.outcome == 'success' && matrix.rollback == 'true' }}
+      env:
+        P06_ROLLBACK_TEST_FILE: ${{ matrix.rollback_file }}
+        OPENCLAW_CAPTURE_UI_PROOF: '1'
+        OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: '1'
+      run: |
+        export OPENCLAW_UI_E2E_ARTIFACT_DIR="$P06_PROOF_DIR/ui-proof"
+        test -n "$P06_ROLLBACK_TEST_FILE"
+        git ls-files --error-unmatch -- "$P06_ROLLBACK_TEST_FILE"
+        pnpm test:ui:e2e "$P06_ROLLBACK_TEST_FILE" --maxWorkers=1 --reporter=default --reporter=json --outputFile.json "$P06_PROOF_DIR/rollback-result.json" 2>&1 | tee "$P06_PROOF_DIR/rollback.log"
+        python3 - <<'PY'
+        import json
+        import os
+        from pathlib import Path
+
+        report = json.loads(Path(os.environ["P06_PROOF_DIR"], "rollback-result.json").read_text())
+        assert report["success"] is True
+        assert report["numTotalTests"] == 1 and report["numPassedTests"] == 1
+        for key in ("numFailedTestSuites", "numPendingTestSuites", "numFailedTests", "numPendingTests", "numTodoTests"):
+            assert report[key] == 0, key
+        assert len(report["testResults"]) == 1
+        result = report["testResults"][0]
+        assert Path(result["name"]).resolve() == Path(os.environ["P06_ROLLBACK_TEST_FILE"]).resolve()
+        assert result["status"] == "passed"
+        assert len(result["assertionResults"]) == 1
+        assertion = result["assertionResults"][0]
+        assert assertion["status"] == "passed"
+        assert assertion["title"] == "preserves real saved devices and drafts and returns idle after rolling back active dictation"
+        print("Verified exact rollback suite: 1 executed, 1 passed, 0 skipped/pending/todo/failed.")
         PY
     - name: Confirm tracked source remained unchanged
       id: source-unchanged
@@ -236,6 +537,9 @@ jobs:
         BUILD_RESULT: ${{ steps.build.outcome }}
         BROWSER_RESULT: ${{ steps.browser.outcome }}
         SOURCE_UNCHANGED_RESULT: ${{ steps.source-unchanged.outcome }}
+        ROLLBACK_PARENT_ASSETS_RESULT: ${{ steps.rollback-parent-assets.outcome }}
+        ROLLBACK_ASSETS_RESULT: ${{ steps.rollback-assets.outcome }}
+        ROLLBACK_RESULT: ${{ steps.rollback.outcome }}
       run: |
         mkdir -p "$P06_PROOF_DIR"
         python3 - <<'PY'
@@ -245,7 +549,7 @@ jobs:
 
         proof = Path(os.environ["P06_PROOF_DIR"])
         labels = {"success": "PASS", "failure": "FAIL", "skipped": "NOT RUN", "cancelled": "CANCELLED", "": "NOT RUN"}
-        outcomes = {name.lower().removesuffix("_result"): labels[os.environ.get(name, "")] for name in ('CHECKOUT_RESULT', 'IDENTITY_RESULT', 'TOOLCHAIN_RESULT', 'INSTALL_RESULT', 'TESTS_RESULT', 'TYPES_RESULT', 'TEST_TYPES_RESULT', 'LINT_RESULT', 'FORMAT_RESULT', 'I18N_RESULT', 'BUILD_RESULT', 'BROWSER_RESULT', 'SOURCE_UNCHANGED_RESULT')}
+        outcomes = {name.lower().removesuffix("_result"): labels[os.environ.get(name, "")] for name in ('CHECKOUT_RESULT', 'IDENTITY_RESULT', 'TOOLCHAIN_RESULT', 'INSTALL_RESULT', 'TESTS_RESULT', 'TYPES_RESULT', 'TEST_TYPES_RESULT', 'LINT_RESULT', 'FORMAT_RESULT', 'I18N_RESULT', 'BUILD_RESULT', 'BROWSER_RESULT', 'SOURCE_UNCHANGED_RESULT', 'ROLLBACK_PARENT_ASSETS_RESULT', 'ROLLBACK_ASSETS_RESULT', 'ROLLBACK_RESULT')}
         for name in ("live_microphone", "live_provider", "native_global", "stable_upgrade", "post_parent_merge"):
             outcomes[name] = "NOT RUN"
         receipt = {
@@ -269,7 +573,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
-        name: p06-final-${{ matrix.label }}-execution-${{ github.run_id }}-${{ github.run_attempt }}
+        name: p06-final-stage4-execution-${{ github.run_id }}-${{ github.run_attempt }}
         retention-days: 7
         if-no-files-found: error
         path: |
@@ -286,39 +590,72 @@ jobs:
           ${{ runner.temp }}/p06-voice-proof/format.log
           ${{ runner.temp }}/p06-voice-proof/i18n.log
           ${{ runner.temp }}/p06-voice-proof/lint.log
+          ${{ runner.temp }}/p06-voice-proof/rollback.log
           ${{ runner.temp }}/p06-voice-proof/source-unchanged.log
           ${{ runner.temp }}/p06-voice-proof/test-types.log
           ${{ runner.temp }}/p06-voice-proof/tests.log
           ${{ runner.temp }}/p06-voice-proof/types.log
           ${{ runner.temp }}/p06-voice-proof/browser-result.json
+          ${{ runner.temp }}/p06-voice-proof/rollback-parent-build.json
+          ${{ runner.temp }}/p06-voice-proof/rollback-child-build.json
+          ${{ runner.temp }}/p06-voice-proof/rollback-inputs.json
+          ${{ runner.temp }}/p06-voice-proof/rollback-result.json
           ${{ runner.temp }}/p06-voice-proof/ui-proof/**/*.png
           ${{ runner.temp }}/p06-voice-proof/ui-proof/**/*.json
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 1
       matrix:
         include:
-        - label: stage2
-          source_sha: 05c744e595e7db9b28af0466289187dd99cc95a2
-          source_tree: d878ed178ec3e37ecf335cad103cd55ca17c774a
-          base_sha: 8867b88d75f69d0929b6aa879427453f9b634807
-          base_tree: d765c40a16b1c56e11f6800933fa26ea459201ab
-          selection_base_sha: 8867b88d75f69d0929b6aa879427453f9b634807
-          selection_base_tree: d765c40a16b1c56e11f6800933fa26ea459201ab
+        - label: stage4
+          source_sha: da7bcfcac3a48a08c93494ab7b939b9fbc08b241
+          source_tree: 18db8463d027f7b8a4adfc2e2ffc01737fb7dbf1
+          base_sha: c08b0a3bb098d9d3910ac839c20f322bd660a901
+          base_tree: 037be0a2d87b57cac1c2c4356c013629331d7ab9
+          selection_base_sha: 92182120e8baa7ce001f41dec7f0bba1489e6636
+          selection_base_tree: d552dd794421d98780343e789ddc55249cf24646
           format_files: |
+            config/test-lines-allocations/p06-explicit-voice-controls.txt
             config/test-lines-allocations/p06-voice-route-ownership.txt
+            docs/web/control-ui/chat.md
+            ui/src/e2e/browser-dictation-status.e2e.test.ts
+            ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
+            ui/src/e2e/browser-talk-ordering.e2e.test.ts
+            ui/src/e2e/browser-talk-start-stop.e2e.test.ts
+            ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
+            ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
+            ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
+            ui/src/e2e/browser-voice-rollback.e2e.test.ts
             ui/src/e2e/browser-voice-routes.e2e.test.ts
             ui/src/i18n/locales/en-chat-composer.ts
             ui/src/lib/voice-route.test.ts
             ui/src/lib/voice-route.ts
+            ui/src/pages/chat/chat-composer-actions.test.ts
+            ui/src/pages/chat/chat-composer-microphone.test.ts
             ui/src/pages/chat/chat-composer.test.ts
+            ui/src/pages/chat/chat-pane-history.ts
+            ui/src/pages/chat/chat-pane-retained-presentation.ts
             ui/src/pages/chat/chat-realtime-handoff.test.ts
             ui/src/pages/chat/chat-realtime.test.ts
             ui/src/pages/chat/chat-realtime.ts
+            ui/src/pages/chat/chat-session-rail.test.ts
+            ui/src/pages/chat/chat-view.test.ts
+            ui/src/pages/chat/components/chat-composer-controls.tsx
+            ui/src/pages/chat/components/chat-composer-dictation-options.ts
+            ui/src/pages/chat/components/chat-composer-frame.ts
+            ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
+            ui/src/pages/chat/components/chat-session-rail-composer.tsx
+            ui/src/pages/chat/components/chat-session-rail.tsx
+            ui/src/pages/chat/components/chat-voice-activity.tsx
+            ui/src/pages/chat/components/composer-dictation-status.tsx
+            ui/src/pages/chat/components/direct-dictation-view.tsx
             ui/src/pages/chat/composer-dictation-session.ts
             ui/src/pages/chat/composer-dictation.test.ts
             ui/src/pages/chat/composer-dictation.ts
+            ui/src/pages/chat/composer-direct-dictation.test.tsx
+            ui/src/pages/chat/composer-direct-dictation.ts
             ui/src/pages/chat/talk/chat-actions-runtime.ts
+            ui/src/pages/chat/talk/consult.test.ts
             ui/src/pages/chat/talk/input.test-support.ts
             ui/src/pages/chat/talk/input.test.ts
             ui/src/pages/chat/talk/input.ts
@@ -326,106 +663,80 @@ jobs:
             ui/src/pages/chat/talk/session-runtime-loading.test.ts
             ui/src/pages/chat/talk/session.test.ts
             ui/src/pages/chat/talk/session.ts
+            ui/src/pages/chat/talk/shared.ts
             ui/src/pages/chat/talk/split.test.ts
             ui/src/pages/chat/talk/split.ts
             ui/src/pages/chat/talk/transcript-queue.test.ts
+            ui/src/pages/new-session/draft-persistence.ts
+            ui/src/pages/new-session/new-session-page-owner.ts
           source_files: |
             ui/src/i18n/locales/en-chat-composer.ts
             ui/src/lib/voice-route.ts
+            ui/src/pages/chat/chat-pane-history.ts
+            ui/src/pages/chat/chat-pane-retained-presentation.ts
             ui/src/pages/chat/chat-realtime.ts
+            ui/src/pages/chat/components/chat-composer-controls.tsx
+            ui/src/pages/chat/components/chat-composer-dictation-options.ts
+            ui/src/pages/chat/components/chat-composer-frame.ts
+            ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
+            ui/src/pages/chat/components/chat-session-rail-composer.tsx
+            ui/src/pages/chat/components/chat-session-rail.tsx
+            ui/src/pages/chat/components/chat-voice-activity.tsx
+            ui/src/pages/chat/components/composer-dictation-status.tsx
+            ui/src/pages/chat/components/direct-dictation-view.tsx
             ui/src/pages/chat/composer-dictation-session.ts
             ui/src/pages/chat/composer-dictation.ts
+            ui/src/pages/chat/composer-direct-dictation.ts
             ui/src/pages/chat/talk/chat-actions-runtime.ts
             ui/src/pages/chat/talk/input.ts
             ui/src/pages/chat/talk/session.ts
+            ui/src/pages/chat/talk/shared.ts
             ui/src/pages/chat/talk/split.ts
+            ui/src/pages/new-session/draft-persistence.ts
+            ui/src/pages/new-session/new-session-page-owner.ts
           test_files: |
-            ui/src/lib/voice-route.test.ts
             ui/src/pages/chat/composer-dictation.test.ts
-            ui/src/pages/chat/chat-composer.test.ts
-            ui/src/pages/chat/chat-realtime-handoff.test.ts
-            ui/src/pages/chat/chat-realtime.test.ts
-            ui/src/pages/chat/talk/input.test.ts
-            ui/src/pages/chat/talk/lifecycle.test.ts
-            ui/src/pages/chat/talk/session-runtime-loading.test.ts
-            ui/src/pages/chat/talk/session.test.ts
-            ui/src/pages/chat/talk/split.test.ts
-            ui/src/pages/chat/talk/transcript-queue.test.ts
             ui/src/pages/chat/composer-direct-dictation.test.tsx
             ui/src/pages/chat/chat-composer-actions.test.ts
             ui/src/pages/chat/chat-composer-microphone.test.ts
             ui/src/pages/chat/composer-microphone-picker.test.ts
-            ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/components/chat-session-rail-composer-lifetime.test.tsx
-            ui/src/pages/new-session/draft-dictation-session.test.ts
-            ui/src/pages/new-session/draft-persistence.test.ts
-            ui/src/app/settings.node.test.ts
-            ui/src/pages/chat/talk/microphone-meter.test.ts
-            ui/src/pages/chat/talk/webrtc.test.ts
-            ui/src/pages/chat/talk/gateway-relay-lifecycle.test.ts
-          browser_files: |
-            ui/src/e2e/browser-voice-routes.e2e.test.ts
-          expected_browser_tests: 1
-        - label: stage3
-          source_sha: c08b0a3bb098d9d3910ac839c20f322bd660a901
-          source_tree: 037be0a2d87b57cac1c2c4356c013629331d7ab9
-          base_sha: 05c744e595e7db9b28af0466289187dd99cc95a2
-          base_tree: d878ed178ec3e37ecf335cad103cd55ca17c774a
-          selection_base_sha: 05c744e595e7db9b28af0466289187dd99cc95a2
-          selection_base_tree: d878ed178ec3e37ecf335cad103cd55ca17c774a
-          format_files: |
-            ui/src/pages/chat/chat-pane-history.ts
             ui/src/pages/chat/chat-realtime.test.ts
-            ui/src/pages/chat/chat-realtime.ts
-            ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/components/chat-session-rail-composer.tsx
-            ui/src/pages/chat/components/chat-session-rail.tsx
-            ui/src/pages/chat/composer-direct-dictation.test.tsx
-            ui/src/pages/chat/composer-direct-dictation.ts
-            ui/src/pages/chat/talk/chat-actions-runtime.ts
-            ui/src/pages/chat/talk/consult.test.ts
-            ui/src/pages/chat/talk/session.ts
-            ui/src/pages/chat/talk/shared.ts
-            ui/src/pages/chat/talk/split.test.ts
-            ui/src/pages/chat/talk/transcript-queue.test.ts
-          source_files: |
-            ui/src/pages/chat/chat-pane-history.ts
-            ui/src/pages/chat/chat-realtime.ts
-            ui/src/pages/chat/components/chat-session-rail-composer.tsx
-            ui/src/pages/chat/components/chat-session-rail.tsx
-            ui/src/pages/chat/composer-direct-dictation.ts
-            ui/src/pages/chat/talk/chat-actions-runtime.ts
-            ui/src/pages/chat/talk/session.ts
-            ui/src/pages/chat/talk/shared.ts
-          test_files: |
-            ui/src/lib/voice-route.test.ts
-            ui/src/pages/chat/composer-dictation.test.ts
-            ui/src/pages/chat/chat-composer.test.ts
             ui/src/pages/chat/chat-realtime-handoff.test.ts
-            ui/src/pages/chat/chat-realtime.test.ts
+            ui/src/pages/chat/talk/microphone-meter.test.ts
+            ui/src/pages/new-session/draft-dictation-session.test.ts
+            ui/src/app/settings.node.test.ts
+            ui/src/lib/voice-route.test.ts
+            ui/src/pages/chat/chat-composer.test.ts
+            ui/src/pages/chat/chat-session-rail.test.ts
+            ui/src/pages/chat/chat-view.test.ts
             ui/src/pages/chat/talk/input.test.ts
-            ui/src/pages/chat/talk/lifecycle.test.ts
             ui/src/pages/chat/talk/session-runtime-loading.test.ts
             ui/src/pages/chat/talk/session.test.ts
             ui/src/pages/chat/talk/split.test.ts
             ui/src/pages/chat/talk/transcript-queue.test.ts
-            ui/src/pages/chat/composer-direct-dictation.test.tsx
-            ui/src/pages/chat/chat-composer-actions.test.ts
-            ui/src/pages/chat/chat-composer-microphone.test.ts
-            ui/src/pages/chat/composer-microphone-picker.test.ts
-            ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/components/chat-session-rail-composer-lifetime.test.tsx
-            ui/src/pages/new-session/draft-dictation-session.test.ts
-            ui/src/pages/new-session/draft-persistence.test.ts
-            ui/src/app/settings.node.test.ts
-            ui/src/pages/chat/talk/microphone-meter.test.ts
+            ui/src/pages/chat/talk/consult.test.ts
+            ui/src/pages/chat/talk/lifecycle.test.ts
             ui/src/pages/chat/talk/webrtc.test.ts
             ui/src/pages/chat/talk/gateway-relay-lifecycle.test.ts
-            ui/src/pages/chat/talk/consult.test.ts
+            ui/src/pages/chat/components/chat-session-rail-composer-lifetime.test.tsx
+            ui/src/pages/new-session/draft-persistence.test.ts
+            ui/src/pages/chat/chat-pane-retained-presentation.test.ts
+            ui/src/pages/new-session/creation-composer.test.ts
+            ui/src/pages/new-session/composer.test.tsx
           browser_files: |
+            ui/src/e2e/browser-dictation-status.e2e.test.ts
+            ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
+            ui/src/e2e/browser-talk-ordering.e2e.test.ts
+            ui/src/e2e/browser-talk-start-stop.e2e.test.ts
+            ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
+            ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
+            ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
             ui/src/e2e/browser-voice-routes.e2e.test.ts
-          expected_browser_tests: 1
-    name: P06 ${{ matrix.label }} execution
+          rollback: 'true'
+          rollback_file: ui/src/e2e/browser-voice-rollback.e2e.test.ts
+    name: P06 stage4 execution
+    needs:
+    - parent-assets
   guards:
     if: github.repository == 'CompleteDotTech/openclaw'
     runs-on: ubuntu-24.04
@@ -456,6 +767,7 @@ jobs:
       P06_BROWSER_FILES: ${{ matrix.browser_files }}
       GOGC: '30'
       GOMEMLIMIT: 3GiB
+      P06_ROLLBACK_TEST_FILE: ${{ matrix.rollback_file }}
       PROOF_LANE: guards
     steps:
     - name: Initialize proof directory and require immutable identities
@@ -523,6 +835,7 @@ jobs:
             "run_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
             "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
             "selection": selected,
+            "rollback_test_file": os.environ["P06_ROLLBACK_TEST_FILE"],
             "selected_source_sha256": {name: hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in sorted(set(sum(selected.values(), [])))},
             "limitations": [
                 "Synthetic Gateway, media, and provider fixtures only; no live credentials or microphone hardware.",
@@ -645,7 +958,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
-        name: p06-final-${{ matrix.label }}-guards-${{ github.run_id }}-${{ github.run_attempt }}
+        name: p06-final-stage4-guards-${{ github.run_id }}-${{ github.run_attempt }}
         retention-days: 7
         if-no-files-found: error
         path: |
@@ -666,30 +979,58 @@ jobs:
           ${{ runner.temp }}/p06-voice-proof/ui-type-graph-boundary.log
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 1
       matrix:
         include:
-        - label: stage2
-          source_sha: 05c744e595e7db9b28af0466289187dd99cc95a2
-          source_tree: d878ed178ec3e37ecf335cad103cd55ca17c774a
-          base_sha: 8867b88d75f69d0929b6aa879427453f9b634807
-          base_tree: d765c40a16b1c56e11f6800933fa26ea459201ab
-          selection_base_sha: 8867b88d75f69d0929b6aa879427453f9b634807
-          selection_base_tree: d765c40a16b1c56e11f6800933fa26ea459201ab
+        - label: stage4
+          source_sha: da7bcfcac3a48a08c93494ab7b939b9fbc08b241
+          source_tree: 18db8463d027f7b8a4adfc2e2ffc01737fb7dbf1
+          base_sha: c08b0a3bb098d9d3910ac839c20f322bd660a901
+          base_tree: 037be0a2d87b57cac1c2c4356c013629331d7ab9
+          selection_base_sha: 92182120e8baa7ce001f41dec7f0bba1489e6636
+          selection_base_tree: d552dd794421d98780343e789ddc55249cf24646
           format_files: |
+            config/test-lines-allocations/p06-explicit-voice-controls.txt
             config/test-lines-allocations/p06-voice-route-ownership.txt
+            docs/web/control-ui/chat.md
+            ui/src/e2e/browser-dictation-status.e2e.test.ts
+            ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
+            ui/src/e2e/browser-talk-ordering.e2e.test.ts
+            ui/src/e2e/browser-talk-start-stop.e2e.test.ts
+            ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
+            ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
+            ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
+            ui/src/e2e/browser-voice-rollback.e2e.test.ts
             ui/src/e2e/browser-voice-routes.e2e.test.ts
             ui/src/i18n/locales/en-chat-composer.ts
             ui/src/lib/voice-route.test.ts
             ui/src/lib/voice-route.ts
+            ui/src/pages/chat/chat-composer-actions.test.ts
+            ui/src/pages/chat/chat-composer-microphone.test.ts
             ui/src/pages/chat/chat-composer.test.ts
+            ui/src/pages/chat/chat-pane-history.ts
+            ui/src/pages/chat/chat-pane-retained-presentation.ts
             ui/src/pages/chat/chat-realtime-handoff.test.ts
             ui/src/pages/chat/chat-realtime.test.ts
             ui/src/pages/chat/chat-realtime.ts
+            ui/src/pages/chat/chat-session-rail.test.ts
+            ui/src/pages/chat/chat-view.test.ts
+            ui/src/pages/chat/components/chat-composer-controls.tsx
+            ui/src/pages/chat/components/chat-composer-dictation-options.ts
+            ui/src/pages/chat/components/chat-composer-frame.ts
+            ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
+            ui/src/pages/chat/components/chat-session-rail-composer.tsx
+            ui/src/pages/chat/components/chat-session-rail.tsx
+            ui/src/pages/chat/components/chat-voice-activity.tsx
+            ui/src/pages/chat/components/composer-dictation-status.tsx
+            ui/src/pages/chat/components/direct-dictation-view.tsx
             ui/src/pages/chat/composer-dictation-session.ts
             ui/src/pages/chat/composer-dictation.test.ts
             ui/src/pages/chat/composer-dictation.ts
+            ui/src/pages/chat/composer-direct-dictation.test.tsx
+            ui/src/pages/chat/composer-direct-dictation.ts
             ui/src/pages/chat/talk/chat-actions-runtime.ts
+            ui/src/pages/chat/talk/consult.test.ts
             ui/src/pages/chat/talk/input.test-support.ts
             ui/src/pages/chat/talk/input.test.ts
             ui/src/pages/chat/talk/input.ts
@@ -697,103 +1038,75 @@ jobs:
             ui/src/pages/chat/talk/session-runtime-loading.test.ts
             ui/src/pages/chat/talk/session.test.ts
             ui/src/pages/chat/talk/session.ts
+            ui/src/pages/chat/talk/shared.ts
             ui/src/pages/chat/talk/split.test.ts
             ui/src/pages/chat/talk/split.ts
             ui/src/pages/chat/talk/transcript-queue.test.ts
+            ui/src/pages/new-session/draft-persistence.ts
+            ui/src/pages/new-session/new-session-page-owner.ts
           source_files: |
             ui/src/i18n/locales/en-chat-composer.ts
             ui/src/lib/voice-route.ts
+            ui/src/pages/chat/chat-pane-history.ts
+            ui/src/pages/chat/chat-pane-retained-presentation.ts
             ui/src/pages/chat/chat-realtime.ts
+            ui/src/pages/chat/components/chat-composer-controls.tsx
+            ui/src/pages/chat/components/chat-composer-dictation-options.ts
+            ui/src/pages/chat/components/chat-composer-frame.ts
+            ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
+            ui/src/pages/chat/components/chat-session-rail-composer.tsx
+            ui/src/pages/chat/components/chat-session-rail.tsx
+            ui/src/pages/chat/components/chat-voice-activity.tsx
+            ui/src/pages/chat/components/composer-dictation-status.tsx
+            ui/src/pages/chat/components/direct-dictation-view.tsx
             ui/src/pages/chat/composer-dictation-session.ts
             ui/src/pages/chat/composer-dictation.ts
+            ui/src/pages/chat/composer-direct-dictation.ts
             ui/src/pages/chat/talk/chat-actions-runtime.ts
             ui/src/pages/chat/talk/input.ts
             ui/src/pages/chat/talk/session.ts
+            ui/src/pages/chat/talk/shared.ts
             ui/src/pages/chat/talk/split.ts
+            ui/src/pages/new-session/draft-persistence.ts
+            ui/src/pages/new-session/new-session-page-owner.ts
           test_files: |
-            ui/src/lib/voice-route.test.ts
             ui/src/pages/chat/composer-dictation.test.ts
-            ui/src/pages/chat/chat-composer.test.ts
-            ui/src/pages/chat/chat-realtime-handoff.test.ts
-            ui/src/pages/chat/chat-realtime.test.ts
-            ui/src/pages/chat/talk/input.test.ts
-            ui/src/pages/chat/talk/lifecycle.test.ts
-            ui/src/pages/chat/talk/session-runtime-loading.test.ts
-            ui/src/pages/chat/talk/session.test.ts
-            ui/src/pages/chat/talk/split.test.ts
-            ui/src/pages/chat/talk/transcript-queue.test.ts
             ui/src/pages/chat/composer-direct-dictation.test.tsx
             ui/src/pages/chat/chat-composer-actions.test.ts
             ui/src/pages/chat/chat-composer-microphone.test.ts
             ui/src/pages/chat/composer-microphone-picker.test.ts
-            ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/components/chat-session-rail-composer-lifetime.test.tsx
-            ui/src/pages/new-session/draft-dictation-session.test.ts
-            ui/src/pages/new-session/draft-persistence.test.ts
-            ui/src/app/settings.node.test.ts
-            ui/src/pages/chat/talk/microphone-meter.test.ts
-            ui/src/pages/chat/talk/webrtc.test.ts
-            ui/src/pages/chat/talk/gateway-relay-lifecycle.test.ts
-          browser_files: |
-            ui/src/e2e/browser-voice-routes.e2e.test.ts
-          expected_browser_tests: 1
-        - label: stage3
-          source_sha: c08b0a3bb098d9d3910ac839c20f322bd660a901
-          source_tree: 037be0a2d87b57cac1c2c4356c013629331d7ab9
-          base_sha: 05c744e595e7db9b28af0466289187dd99cc95a2
-          base_tree: d878ed178ec3e37ecf335cad103cd55ca17c774a
-          selection_base_sha: 05c744e595e7db9b28af0466289187dd99cc95a2
-          selection_base_tree: d878ed178ec3e37ecf335cad103cd55ca17c774a
-          format_files: |
-            ui/src/pages/chat/chat-pane-history.ts
             ui/src/pages/chat/chat-realtime.test.ts
-            ui/src/pages/chat/chat-realtime.ts
-            ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/components/chat-session-rail-composer.tsx
-            ui/src/pages/chat/components/chat-session-rail.tsx
-            ui/src/pages/chat/composer-direct-dictation.test.tsx
-            ui/src/pages/chat/composer-direct-dictation.ts
-            ui/src/pages/chat/talk/chat-actions-runtime.ts
-            ui/src/pages/chat/talk/consult.test.ts
-            ui/src/pages/chat/talk/session.ts
-            ui/src/pages/chat/talk/shared.ts
-            ui/src/pages/chat/talk/split.test.ts
-            ui/src/pages/chat/talk/transcript-queue.test.ts
-          source_files: |
-            ui/src/pages/chat/chat-pane-history.ts
-            ui/src/pages/chat/chat-realtime.ts
-            ui/src/pages/chat/components/chat-session-rail-composer.tsx
-            ui/src/pages/chat/components/chat-session-rail.tsx
-            ui/src/pages/chat/composer-direct-dictation.ts
-            ui/src/pages/chat/talk/chat-actions-runtime.ts
-            ui/src/pages/chat/talk/session.ts
-            ui/src/pages/chat/talk/shared.ts
-          test_files: |
-            ui/src/lib/voice-route.test.ts
-            ui/src/pages/chat/composer-dictation.test.ts
-            ui/src/pages/chat/chat-composer.test.ts
             ui/src/pages/chat/chat-realtime-handoff.test.ts
-            ui/src/pages/chat/chat-realtime.test.ts
+            ui/src/pages/chat/talk/microphone-meter.test.ts
+            ui/src/pages/new-session/draft-dictation-session.test.ts
+            ui/src/app/settings.node.test.ts
+            ui/src/lib/voice-route.test.ts
+            ui/src/pages/chat/chat-composer.test.ts
+            ui/src/pages/chat/chat-session-rail.test.ts
+            ui/src/pages/chat/chat-view.test.ts
             ui/src/pages/chat/talk/input.test.ts
-            ui/src/pages/chat/talk/lifecycle.test.ts
             ui/src/pages/chat/talk/session-runtime-loading.test.ts
             ui/src/pages/chat/talk/session.test.ts
             ui/src/pages/chat/talk/split.test.ts
             ui/src/pages/chat/talk/transcript-queue.test.ts
-            ui/src/pages/chat/composer-direct-dictation.test.tsx
-            ui/src/pages/chat/chat-composer-actions.test.ts
-            ui/src/pages/chat/chat-composer-microphone.test.ts
-            ui/src/pages/chat/composer-microphone-picker.test.ts
-            ui/src/pages/chat/chat-session-rail.test.ts
-            ui/src/pages/chat/components/chat-session-rail-composer-lifetime.test.tsx
-            ui/src/pages/new-session/draft-dictation-session.test.ts
-            ui/src/pages/new-session/draft-persistence.test.ts
-            ui/src/app/settings.node.test.ts
-            ui/src/pages/chat/talk/microphone-meter.test.ts
+            ui/src/pages/chat/talk/consult.test.ts
+            ui/src/pages/chat/talk/lifecycle.test.ts
             ui/src/pages/chat/talk/webrtc.test.ts
             ui/src/pages/chat/talk/gateway-relay-lifecycle.test.ts
-            ui/src/pages/chat/talk/consult.test.ts
+            ui/src/pages/chat/components/chat-session-rail-composer-lifetime.test.tsx
+            ui/src/pages/new-session/draft-persistence.test.ts
+            ui/src/pages/chat/chat-pane-retained-presentation.test.ts
+            ui/src/pages/new-session/creation-composer.test.ts
+            ui/src/pages/new-session/composer.test.tsx
           browser_files: |
+            ui/src/e2e/browser-dictation-status.e2e.test.ts
+            ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
+            ui/src/e2e/browser-talk-ordering.e2e.test.ts
+            ui/src/e2e/browser-talk-start-stop.e2e.test.ts
+            ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
+            ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
+            ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
             ui/src/e2e/browser-voice-routes.e2e.test.ts
-          expected_browser_tests: 1
-    name: P06 ${{ matrix.label }} guards
+          rollback: 'true'
+          rollback_file: ui/src/e2e/browser-voice-rollback.e2e.test.ts
+    name: P06 stage4 guards
