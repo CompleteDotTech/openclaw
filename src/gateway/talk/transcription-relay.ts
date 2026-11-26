@@ -3,6 +3,7 @@ import { parseFiniteNumber as readFiniteNumber } from "@openclaw/normalization-c
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../../plugins/types.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { recordTalkObservabilityEvent } from "../../talk/observability.js";
 import {
   type TalkEvent,
@@ -61,6 +62,7 @@ type TranscriptionRelaySession = {
   receivedAudio: boolean;
   draining: boolean;
   releaseAuthority?: () => void;
+  releasePolicyListener?: () => void;
 };
 
 type CreateTalkTranscriptionRelaySessionParams = {
@@ -155,6 +157,7 @@ function closeTranscriptionSession(
   transcriptionSessions.delete(session.id);
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
+  session.releasePolicyListener?.();
   try {
     if (!session.draining || "finish" in session.sttSession) {
       session.sttSession.close();
@@ -340,6 +343,21 @@ export function createTalkTranscriptionRelaySession(
   };
   relayRef.current = relay;
   transcriptionSessions.set(transcriptionSessionId, relay);
+  // Config publication is synchronous: abort the owned upload before later I/O
+  // can continue, including when recording has already entered its drain phase.
+  relay.releasePolicyListener = sessionChanges.subscribeFacts((change) => {
+    if (!("all" in change) || !change.all) {
+      return;
+    }
+    try {
+      relay.assertCurrent();
+    } catch {
+      failTranscriptionSession(
+        relay,
+        "Speech permission or the selected route changed. Start a new recording after reviewing the destination.",
+      );
+    }
+  });
   registerTalkConnectionCleanup(params.connId, "transcription-relay", () =>
     closeTalkTranscriptionRelaySessionsForConnection(params.connId),
   );

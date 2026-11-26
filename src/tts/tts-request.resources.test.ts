@@ -8,6 +8,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { captureTalkSpeechDataAuthority } from "../gateway/talk/speech-data-policy.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
@@ -259,6 +260,54 @@ describe.each([
       });
     },
   );
+});
+
+it("revokes Talk synthesis after preparation without dispatching or falling back", async () => {
+  const primary = createNativeSpeechFixture(synthesizeTalkSpeech, "policy-primary");
+  const fallback = createNativeSpeechFixture(synthesizeTalkSpeech, "policy-fallback", false, 20);
+  fallback.resume();
+
+  await withFixtures([primary, fallback], async () => {
+    const cfg = combineConfig(primary, [fallback]);
+    let currentConfig = cfg;
+    let fallbackPrepared = false;
+    void fallback.state.prepareStarted.promise.then(() => {
+      fallbackPrepared = true;
+    });
+    setRuntimeConfigSnapshot(currentConfig);
+    const pending = settle(
+      primary.run({
+        cfg,
+        timeoutMs: undefined,
+        assertCurrent: captureTalkSpeechDataAuthority(cfg, () => currentConfig),
+      }),
+    );
+    try {
+      await waitForHook(primary.state.prepareStarted.promise, pending);
+      expect(primary.state.connections.length).toBeGreaterThan(0);
+      currentConfig = {
+        ...cfg,
+        talk: { speechDataPolicy: { mode: "device-local" } },
+      };
+      setRuntimeConfigSnapshot(currentConfig);
+      primary.resume();
+      const outcome = await pending;
+      expect(outcome.error).toMatchObject({ code: "policy-revoked" });
+      expect(outcome.value).toBeUndefined();
+      expect(fallbackPrepared).toBe(false);
+      expect(
+        [primary, fallback].flatMap((fixture) =>
+          fixture.state.connections.flatMap((entry) => entry.requests),
+        ),
+      ).toEqual([]);
+      expectDisposed([primary, fallback]);
+    } finally {
+      primary.resume();
+      fallback.resume();
+      await pending;
+      clearRuntimeConfigSnapshot();
+    }
+  });
 });
 
 // Talk shares the buffered request owner; settlement above covers its separate entry point.

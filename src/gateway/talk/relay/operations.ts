@@ -253,13 +253,20 @@ function closeTalkRealtimeRelaySessionsForConnection(connId: string): Promise<vo
 }
 
 function getRelaySession(relaySessionId: string, connId: string): RelaySession {
-  return requireActiveTalkRelaySession({
+  const session = requireActiveTalkRelaySession({
     sessions: relaySessions,
     sessionId: relaySessionId,
     connId,
     closeSession: (session) => void closeRelaySession(session, "completed"),
     unknownSessionMessage: "Unknown realtime relay session",
   });
+  try {
+    session.runAuthority?.assertCurrent();
+  } catch (error) {
+    void closeRelaySession(session, "error");
+    throw error;
+  }
+  return session;
 }
 
 export function sendTalkRealtimeRelayAudio(params: {

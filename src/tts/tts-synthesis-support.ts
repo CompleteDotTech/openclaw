@@ -266,6 +266,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
     resolvedProvider: ReadySpeechProvider;
   }) => TtsProviderOperation<TSynthesis>;
   buildSuccess: (params: TtsProviderSuccess<TSynthesis>) => TResult;
+  assertCurrent?: () => void;
 }) {
   const { cfg, config, persona, providers } = params;
   const errors: string[] = [];
@@ -298,6 +299,8 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   );
 
   for (const { provider, voiceModel } of providers) {
+    // Revocation cannot be treated as a provider failure and retried elsewhere.
+    params.assertCurrent?.();
     attemptedProviders.push(provider);
     const providerStart = Date.now();
     try {
@@ -399,6 +402,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         target: params.target,
         timeoutMs,
       };
+      params.assertCurrent?.();
       const overrides = await resolvedProvider.provider.prepareSynthesis?.({ ...request });
       const prepared = {
         text: overrides?.text ?? request.text,
@@ -409,6 +413,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
           ? { ...request.providerOverrides, ...overrides.providerOverrides }
           : request.providerOverrides,
       };
+      params.assertCurrent?.();
       const synthesis = await operation.synthesize({
         text: prepared.text,
         cfg,
@@ -418,6 +423,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         timeoutMs,
       });
       try {
+        params.assertCurrent?.();
         const latencyMs = Date.now() - providerStart;
         attempts.push({
           provider,
@@ -450,6 +456,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
         );
       }
     } catch (err) {
+      params.assertCurrent?.();
       const errorMsg = formatTtsProviderError(provider, err);
       const reasonCode = isTtsTimeoutError(err) ? "timeout" : "provider_error";
       const latencyMs = Date.now() - providerStart;

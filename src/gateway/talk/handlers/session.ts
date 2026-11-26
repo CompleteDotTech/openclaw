@@ -65,6 +65,11 @@ import {
 import { restoreTalkSessionTarget } from "../session-start.js";
 import { prepareTalkSessionTarget, requirePreparedTalkSessionTarget } from "../session-target.js";
 import {
+  assertTalkConversationSpeechAllowed,
+  captureTalkSpeechDataAuthority,
+  isTalkSpeechDataRestricted,
+} from "../speech-data-policy.js";
+import {
   createTalkTranscriptionRelaySession,
   sendTalkTranscriptionRelayAudio,
   stopTalkTranscriptionRelaySession,
@@ -99,6 +104,14 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       const mode = params.mode ?? (params.transport === "managed-room" ? "stt-tts" : "realtime");
       const transport = params.transport ?? (mode === "stt-tts" ? "managed-room" : "gateway-relay");
       const brain = params.brain ?? (mode === "transcription" ? "none" : "agent-consult");
+      const initialConfig = context.getRuntimeConfig();
+      const assertInitialSpeechPolicy = captureTalkSpeechDataAuthority(
+        initialConfig,
+        context.getRuntimeConfig,
+      );
+      if (mode !== "transcription" || params.purpose !== "dictation") {
+        assertTalkConversationSpeechAllowed(initialConfig);
+      }
       if (
         !operatorScopeSatisfied("operator.talk", client?.connect.scopes ?? []) &&
         resolveSessionMethodScope("talk.session.create", params) !== "operator.sessions.write"
@@ -162,6 +175,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             },
           },
           (resolvedSession) => {
+            assertInitialSpeechPolicy();
             if (!resolvedSession.ok) {
               respond(false, undefined, resolvedSession.error);
               return;
@@ -240,7 +254,11 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         replacement?.assertCurrent(target);
         const { agentId } = target;
         const assertCommitAllowed = composeSessionSourceAssertion(
-          [sessionMutationCommitGuard, sessionMutationAuthorization?.assertCurrent],
+          [
+            sessionMutationCommitGuard,
+            sessionMutationAuthorization?.assertCurrent,
+            captureTalkSpeechDataAuthority(runtimeConfig, context.getRuntimeConfig),
+          ],
           (assertSources) => {
             assertSources();
             replacement?.assertCurrent(target);
@@ -319,6 +337,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             }),
         });
         const assertEnsuredTargetCurrent = () => {
+          assertCommitAllowed();
           sessionMutationCommitGuard?.();
           sessionMutationAuthorization?.assertTargetCurrent({
             agentId,
@@ -408,6 +427,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           return;
         }
         const runtimeConfig = context.getRuntimeConfig();
+        const assertSpeechPolicy = captureTalkSpeechDataAuthority(
+          runtimeConfig,
+          context.getRuntimeConfig,
+        );
         const sessionKey = normalizeOptionalString(params.sessionKey);
         const target =
           sessionMutationAuthorization?.talkSessionTarget ??
@@ -418,6 +441,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           requirePreparedTalkSessionTarget(target);
         }
         const assertCurrent = () => {
+          assertSpeechPolicy();
           requester.assertCurrent();
           // Retain the admitted session authority, not only its routing facts:
           // provider callbacks can arrive after deletion, replacement, or revocation.
@@ -431,10 +455,13 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           params.provider,
           params.model,
           target?.agentId,
+          undefined,
+          assertCurrent,
         );
         if (transcriptionConfig.file && !transcriptionConfig.file.ready) {
           throw new Error(
-            "No configured audio transcription provider is available; check tools.media.models",
+            transcriptionConfig.file.speechData?.readiness.message ??
+              "No configured audio transcription provider is available; check tools.media.models",
           );
         }
         const resolution = transcriptionConfig.file
@@ -472,6 +499,18 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           ...session,
           sessionId: session.transcriptionSessionId,
           brain,
+          ...(isTalkSpeechDataRestricted(runtimeConfig)
+            ? {
+                dataPolicy: operatorScopeSatisfied("operator.read", client?.connect.scopes ?? [])
+                  ? transcriptionConfig.file?.speechData?.readiness
+                  : {
+                      ...transcriptionConfig.file?.speechData?.readiness,
+                      provider: undefined,
+                      model: undefined,
+                      destination: undefined,
+                    },
+              }
+            : {}),
         });
         return;
       }

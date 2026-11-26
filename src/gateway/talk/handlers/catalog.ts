@@ -58,6 +58,10 @@ import { withPreparedSessionResolve } from "../../sessions-resolve.js";
 import { formatForLog } from "../../ws-log.js";
 import { buildTalkRealtimeConfig } from "../session-config.js";
 import {
+  captureTalkSpeechDataAuthority,
+  isTalkSpeechDataRestricted,
+} from "../speech-data-policy.js";
+import {
   buildTalkTranscriptionCatalog,
   resolveCatalogProviderSelection,
   settleTalkCatalogTasks,
@@ -67,6 +71,7 @@ import { buildTalkTtsConfig } from "./speech-config.js";
 type TalkCatalogSnapshot = Awaited<ReturnType<typeof buildTalkCatalog>>;
 type TalkCatalogEntry = {
   snapshot?: TalkCatalogSnapshot;
+  assertSnapshotPolicy?: () => void;
   revision?: readonly unknown[];
   refreshAfter: number;
   pending?: Promise<void>;
@@ -98,7 +103,13 @@ function readTalkCatalog(
     talkCatalogs.set(owner, entries);
     lifetime?.addEventListener("abort", () => ownedEntries.clear(), { once: true });
   }
-  const key = JSON.stringify([agentId, params.provider?.trim(), params.model?.trim()]);
+  const key = JSON.stringify([
+    agentId,
+    params.provider?.trim(),
+    params.model?.trim(),
+    params.transcriptionProvider?.trim(),
+    params.transcriptionModel?.trim(),
+  ]);
   let entry = entries.get(key);
   if (!entry) {
     // Bound arbitrary model overrides; never evict work that still owns a provider call.
@@ -177,8 +188,18 @@ function readTalkCatalog(
       }, CATALOG_REFRESH_DEADLINE_MS);
       deadline.unref();
       try {
+        const assertSnapshotPolicy = captureTalkSpeechDataAuthority(
+          config,
+          context.getRuntimeConfig,
+        );
         const build = () =>
-          buildTalkCatalog(config, params, measure, retained.snapshot !== undefined);
+          buildTalkCatalog(
+            config,
+            params,
+            measure,
+            retained.snapshot !== undefined,
+            context.getRuntimeConfig,
+          );
         const snapshot = await admission.run(() =>
           withPluginRuntimeGatewayContextResolver(
             resolver,
@@ -192,8 +213,10 @@ function readTalkCatalog(
             { inheritRequestScope: false },
           ),
         );
+        assertSnapshotPolicy();
         if (!lifetime?.aborted) {
           retained.snapshot = snapshot;
+          retained.assertSnapshotPolicy = assertSnapshotPolicy;
         }
         if (!expired) {
           logSlow("completed");
@@ -221,6 +244,7 @@ async function buildTalkCatalog(
   params: TalkCatalogParams,
   measure: <T>(phase: string, run: () => Promise<T>) => Promise<T>,
   hasSnapshot: boolean,
+  getCurrentConfig: () => OpenClawConfig,
 ) {
   const onReadinessError = (error: unknown): false => {
     if (hasSnapshot) {
@@ -230,6 +254,25 @@ async function buildTalkCatalog(
   };
   // Reject ambiguous ownership before provider discovery loads unrelated plugins.
   const realtimeAgentId = resolveTalkSessionAgentId(config, params.sessionKey);
+  if (isTalkSpeechDataRestricted(config)) {
+    const transcription = await measure("transcription", () =>
+      buildTalkTranscriptionCatalog(
+        config,
+        realtimeAgentId,
+        onReadinessError,
+        { provider: params.transcriptionProvider, model: params.transcriptionModel },
+        captureTalkSpeechDataAuthority(config, getCurrentConfig),
+      ),
+    );
+    return {
+      modes: ["transcription"],
+      transports: ["gateway-relay"],
+      brains: ["none"],
+      speech: { ready: false, providers: [] },
+      transcription,
+      realtime: { ready: false, providers: [] },
+    };
+  }
   // A sign-in the provider refuses for voice gets named, so clients can point to its API key.
   // Read alongside provider discovery so it never lengthens the catalog build.
   const pendingAuthStore = loadAuthProfileStoreForRuntimeAsync(
@@ -324,7 +367,10 @@ async function buildTalkCatalog(
       ),
     ),
     measure("transcription", () =>
-      buildTalkTranscriptionCatalog(config, realtimeAgentId, onReadinessError),
+      buildTalkTranscriptionCatalog(config, realtimeAgentId, onReadinessError, {
+        provider: params.transcriptionProvider,
+        model: params.transcriptionModel,
+      }),
     ),
     measure("realtimeProviders", () =>
       settleTalkCatalogTasks(
@@ -492,7 +538,13 @@ export const talkCatalogHandler: GatewayRequestHandler = async ({
   try {
     const config = context.getRuntimeConfig();
     const respondCatalog = (resolvedParams: TalkCatalogParams) => {
-      const catalog = readTalkCatalog(context, config, resolvedParams)?.snapshot;
+      const entry = readTalkCatalog(context, config, resolvedParams);
+      let catalog = entry?.snapshot;
+      try {
+        entry?.assertSnapshotPolicy?.();
+      } catch {
+        catalog = undefined;
+      }
       if (catalog) {
         // Session callers need availability, not provider inventory or configuration.
         respond(
@@ -505,7 +557,20 @@ export const talkCatalogHandler: GatewayRequestHandler = async ({
                 brains: ["none"],
                 speech: { ready: false, providers: [] },
                 realtime: { ready: false, providers: [] },
-                transcription: { ready: catalog.transcription.ready, providers: [] },
+                transcription: {
+                  ready: catalog.transcription.ready,
+                  providers: [],
+                  ...(catalog.transcription.dataPolicy
+                    ? {
+                        dataPolicy: {
+                          ...catalog.transcription.dataPolicy,
+                          provider: undefined,
+                          model: undefined,
+                          destination: undefined,
+                        },
+                      }
+                    : {}),
+                },
               },
           undefined,
         );

@@ -117,6 +117,8 @@ type SpeechSynthesisParams = {
   timeoutMs?: number;
   agentId?: string;
   accountId?: string;
+  /** Host-owned permission for each new synthesis dispatch; absent for ordinary TTS. */
+  assertCurrent?: () => void;
 };
 
 export async function synthesizeSpeech(params: SpeechSynthesisParams): Promise<TtsSynthesisResult> {
@@ -135,6 +137,7 @@ export async function synthesizeTalkSpeech(
 async function synthesizeSpeechInternal(
   params: SpeechSynthesisParams,
 ): Promise<TtsSynthesisResult> {
+  params.assertCurrent?.();
   return await withOwnedTtsRequest(
     {
       text: params.text,
@@ -147,6 +150,7 @@ async function synthesizeSpeechInternal(
       accountId: params.accountId,
     },
     async (setup) => {
+      params.assertCurrent?.();
       if ("error" in setup) {
         return { success: false, error: setup.error };
       }
@@ -154,6 +158,7 @@ async function synthesizeSpeechInternal(
       const target = resolveTtsSynthesisTarget(params.channel);
       return await executeTtsProviderAttempts({
         ...setup,
+        assertCurrent: params.assertCurrent,
         synthesisText: normalizeSpeechText(params.text),
         providerOverrides: params.overrides?.providerOverrides,
         timeoutMs: params.timeoutMs,

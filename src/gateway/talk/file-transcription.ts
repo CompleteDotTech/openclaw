@@ -5,9 +5,15 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-sc
 import type { OpenClawConfig } from "../../config/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { MediaUnderstandingProvider } from "../../media-understanding/provider-types.js";
+import {
+  probeRestrictedAudioRoute,
+  RestrictedAudioError,
+  transcribeRestrictedAudio,
+} from "../../media-understanding/restricted-audio.js";
 import type { RealtimeTranscriptionSessionCallbacks } from "../../realtime-transcription/provider-types.js";
 import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import { mulawToPcmInto } from "../../talk/audio-codec.js";
+import type { TalkSpeechDataPlan } from "./speech-data-policy.js";
 
 export type TalkFileTranscriptionConfig = {
   cfg: OpenClawConfig;
@@ -18,7 +24,53 @@ export type TalkFileTranscriptionConfig = {
   ready: boolean;
   provider?: string;
   providers: Array<{ id: string; models: string[]; configured: boolean }>;
+  speechData?: TalkSpeechDataPlan;
 };
+
+/** The selected restricted route uses the same file-session owner without plugin discovery. */
+export async function resolveRestrictedTalkFileTranscriptionConfig(
+  cfg: OpenClawConfig,
+  agentId: string | undefined,
+  plan: TalkSpeechDataPlan,
+  assertCurrent: () => void,
+): Promise<TalkFileTranscriptionConfig> {
+  const resolvedAgentId = agentId ?? resolveTalkSessionAgentId(cfg);
+  const probe = plan.route
+    ? await probeRestrictedAudioRoute({ route: plan.route, assertCurrent })
+    : undefined;
+  const readiness = probe
+    ? {
+        ...plan.readiness,
+        configured: probe.configured,
+        initialized: probe.initialized,
+        available: probe.available,
+        permitted: probe.permitted,
+        reason: probe.error?.code ?? "model-advertised",
+        message:
+          probe.error?.message ??
+          "The approved endpoint advertises this model. Recognition and model initialization remain unverified; processing is on the Gateway's chosen endpoint.",
+      }
+    : plan.readiness;
+  return {
+    cfg,
+    agentId: resolvedAgentId,
+    agentDir: resolveAgentDir(cfg, resolvedAgentId),
+    workspaceDir: resolveAgentWorkspaceDir(cfg, resolvedAgentId),
+    maxBytes: plan.maxBytes,
+    ready: readiness.available && readiness.permitted,
+    provider: readiness.provider,
+    providers: readiness.provider
+      ? [
+          {
+            id: readiness.provider,
+            models: readiness.model ? [readiness.model] : [],
+            configured: readiness.configured,
+          },
+        ]
+      : [],
+    speechData: { ...plan, readiness },
+  };
+}
 
 /** Explicit file models use the same selection and input budget as uploaded voice notes. */
 export async function resolveTalkFileTranscriptionConfig(
@@ -142,6 +194,7 @@ export function createTalkFileTranscriptionSession(
       if (cancellation.signal.aborted) {
         throw new Error("Transcription session is closed");
       }
+      assertCurrent();
       if ((bytes + audio.length) * 2 + 44 > config.maxBytes) {
         throw new Error(`Transcription audio exceeds the configured ${config.maxBytes} byte limit`);
       }
@@ -161,6 +214,27 @@ export function createTalkFileTranscriptionSession(
       const audio = Buffer.concat(chunks, bytes);
       chunks.length = 0;
       bytes = 0;
+      if (config.speechData) {
+        const { route, language, prompt, timeoutMs } = config.speechData;
+        if (!route) {
+          throw new RestrictedAudioError("route-denied");
+        }
+        assertCurrent();
+        const result = await transcribeRestrictedAudio({
+          route,
+          buffer: encodeWav(audio),
+          signal: cancellation.signal,
+          assertCurrent,
+          language,
+          prompt,
+          timeoutMs,
+        });
+        if (!cancellation.signal.aborted) {
+          assertCurrent();
+          callbacks.onTranscript?.(result.text);
+        }
+        return;
+      }
       const root = resolvePreferredOpenClawTmpDir();
       await fs.mkdir(root, { recursive: true, mode: 0o700 });
       const directory = await fs.mkdtemp(path.join(root, "talk-stt-"));

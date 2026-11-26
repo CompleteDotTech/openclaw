@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { normalizeLegacyTalkConfig } from "../commands/doctor/shared/legacy-talk-config-normalizer.js";
 import { TALK_TEST_PROVIDER_ID } from "../test-utils/talk-test-provider.js";
 import { buildTalkConfigResponse, normalizeTalkSection } from "./talk.js";
+import { TalkSchema } from "./zod-schema.root-support.js";
 
 describe("talk normalization", () => {
   it("preserves the explicit ambient Talk agent", () => {
@@ -95,5 +97,25 @@ describe("talk normalization", () => {
       },
     } as const;
     expect(normalizeTalkSection(structuredClone(config))).toEqual(config);
+  });
+
+  it("preserves the selected policy through normalization and the Talk response", () => {
+    const config = {
+      speechDataPolicy: { mode: "trusted-endpoint", endpoint: "http://127.0.0.1:8080/v1/" },
+    } as const;
+    expect(buildTalkConfigResponse(normalizeTalkSection(config))).toEqual(config);
+  });
+
+  it("does not erase unsupported policy fields during Doctor normalization before validation", () => {
+    const config = {
+      provider: " acme ",
+      speechDataPolicy: { mode: "device-local", version: 2 },
+    } as const;
+    const normalized = normalizeLegacyTalkConfig({ talk: config }, []);
+    expect(normalized.talk).toEqual({
+      provider: "acme",
+      speechDataPolicy: { mode: "device-local", version: 2 },
+    });
+    expect(TalkSchema.safeParse(normalized.talk).success).toBe(false);
   });
 });
