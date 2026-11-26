@@ -1,5 +1,5 @@
 # Evidence-only immutable source generation. No tests, static checks, builds or publication run in these jobs.
-name: P06 stage2-repair-generation1 canonical generation
+name: P06 combined-repair-generation1 canonical generation
 'on':
   push:
     branches:
@@ -22,25 +22,51 @@ jobs:
       max-parallel: 1
       matrix:
         include:
-        - label: stage2-repair
-          source_sha: 6cdfe5569c582070ec692b5df719ecb557cfe049
-          source_tree: 1081b40c8e67729b530d179d7bee15f951243b46
-          selection_base_sha: 8867b88d75f69d0929b6aa879427453f9b634807
-          selection_base_tree: d765c40a16b1c56e11f6800933fa26ea459201ab
+        - label: combined-repair
+          source_sha: 410932546e4476f30b576562f96f0322d4553bca
+          source_tree: 4be3282f1e54e2da305dbcda0a049ea4897de5ee
+          selection_base_sha: 92182120e8baa7ce001f41dec7f0bba1489e6636
+          selection_base_tree: d552dd794421d98780343e789ddc55249cf24646
           format_files: |
-            config/test-lines-allocations/p06-voice-route-ownership.txt
+            docs/web/control-ui/chat.md
+            ui/src/e2e/browser-dictation-status.e2e.test.ts
+            ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts
+            ui/src/e2e/browser-talk-ordering.e2e.test.ts
+            ui/src/e2e/browser-talk-start-stop.e2e.test.ts
+            ui/src/e2e/browser-talk-start-stop.webrtc-sdp.e2e.test.ts
+            ui/src/e2e/browser-talk-voice-selection.e2e.test.ts
+            ui/src/e2e/browser-talk-webkit-error.e2e.test.ts
+            ui/src/e2e/browser-voice-rollback.e2e.test.ts
             ui/src/e2e/browser-voice-routes.e2e.test.ts
             ui/src/i18n/locales/en-chat-composer.ts
             ui/src/lib/voice-route.test.ts
             ui/src/lib/voice-route.ts
+            ui/src/pages/chat/chat-composer-actions.test.ts
+            ui/src/pages/chat/chat-composer-microphone.test.ts
             ui/src/pages/chat/chat-composer.test.ts
+            ui/src/pages/chat/chat-pane-history.ts
+            ui/src/pages/chat/chat-pane-retained-presentation.ts
             ui/src/pages/chat/chat-realtime-handoff.test.ts
             ui/src/pages/chat/chat-realtime.test.ts
             ui/src/pages/chat/chat-realtime.ts
+            ui/src/pages/chat/chat-session-rail.test.ts
+            ui/src/pages/chat/chat-view.test.ts
+            ui/src/pages/chat/components/chat-composer-controls.tsx
+            ui/src/pages/chat/components/chat-composer-dictation-options.ts
+            ui/src/pages/chat/components/chat-composer-frame.ts
+            ui/src/pages/chat/components/chat-composer-microphone-menu.tsx
+            ui/src/pages/chat/components/chat-session-rail-composer.tsx
+            ui/src/pages/chat/components/chat-session-rail.tsx
+            ui/src/pages/chat/components/chat-voice-activity.tsx
+            ui/src/pages/chat/components/composer-dictation-status.tsx
+            ui/src/pages/chat/components/direct-dictation-view.tsx
             ui/src/pages/chat/composer-dictation-session.ts
             ui/src/pages/chat/composer-dictation.test.ts
             ui/src/pages/chat/composer-dictation.ts
+            ui/src/pages/chat/composer-direct-dictation.test.tsx
+            ui/src/pages/chat/composer-direct-dictation.ts
             ui/src/pages/chat/talk/chat-actions-runtime.ts
+            ui/src/pages/chat/talk/consult.test.ts
             ui/src/pages/chat/talk/input.test-support.ts
             ui/src/pages/chat/talk/input.test.ts
             ui/src/pages/chat/talk/input.ts
@@ -48,12 +74,15 @@ jobs:
             ui/src/pages/chat/talk/session-runtime-loading.test.ts
             ui/src/pages/chat/talk/session.test.ts
             ui/src/pages/chat/talk/session.ts
+            ui/src/pages/chat/talk/shared.ts
             ui/src/pages/chat/talk/split.test.ts
             ui/src/pages/chat/talk/split.ts
             ui/src/pages/chat/talk/transcript-queue.test.ts
+            ui/src/pages/new-session/draft-persistence.ts
+            ui/src/pages/new-session/new-session-page-owner.ts
           prune_mock_exports: 'true'
-          mock_exports_base_sha: 8867b88d75f69d0929b6aa879427453f9b634807
-          mock_exports_base_tree: d765c40a16b1c56e11f6800933fa26ea459201ab
+          mock_exports_base_sha: 92182120e8baa7ce001f41dec7f0bba1489e6636
+          mock_exports_base_tree: d552dd794421d98780343e789ddc55249cf24646
           generated_files: |
             ui/src/i18n/.i18n/raw-copy-baseline.json
             config/test-mock-exports-baseline.txt
