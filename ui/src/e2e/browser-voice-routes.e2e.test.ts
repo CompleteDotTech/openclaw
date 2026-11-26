@@ -109,7 +109,11 @@ async function installVoice(page: Page, id: string, route: "chat" | "new" = "cha
       const request = await gateway.waitForRequest("talk.session.create");
       expect(request.params).toMatchObject({ mode: "transcription", brain: "none" });
       await gateway.resolveDeferred("talk.session.create");
-      await page.locator('.agent-chat__dictation-status .agent-chat__voice-activity[data-status="listening"]').waitFor();
+      await page
+        .locator(
+          '.agent-chat__dictation-status .agent-chat__voice-activity[data-status="listening"]',
+        )
+        .waitFor();
     },
     readyTalk: async () => {
       // The synthetic peer exposes its external open event after the real
@@ -229,10 +233,14 @@ suite.define(() => {
     suite.withPage(
       { permissions: ["microphone"], viewport: { width: 1440, height: 900 } },
       async ({ page }) => {
-        const { gateway, textarea: main, open, admit, emit, close } = await installVoice(
-          page,
-          "replaced-side-draft",
-        );
+        const {
+          gateway,
+          textarea: main,
+          open,
+          admit,
+          emit,
+          close,
+        } = await installVoice(page, "replaced-side-draft");
         await open();
         await main.fill("Keep the main draft.");
         await openChatSidePanelType(page, "Side chat");
@@ -243,11 +251,14 @@ suite.define(() => {
         await admit();
         await emit("Provisional speech from the old conversation.");
         await expect.poll(() => side.inputValue()).toContain("Provisional speech");
-        const audioStates = () => page.evaluate(() =>
-          (window as Window & { openclawVideoTalkTracks?: MediaStreamTrack[] })
-            .openclawVideoTalkTracks?.filter((track) => track.kind === "audio")
-            .map((track) => track.readyState),
-        );
+        const audioStates = () =>
+          page.evaluate(() =>
+            (
+              window as Window & { openclawVideoTalkTracks?: MediaStreamTrack[] }
+            ).openclawVideoTalkTracks
+              ?.filter((track) => track.kind === "audio")
+              .map((track) => track.readyState),
+          );
         expect(await audioStates()).toEqual(["live"]);
 
         const original = await gateway.getSessionRow("agent:main:main");
@@ -263,15 +274,26 @@ suite.define(() => {
           sessionKey: original.key,
           reason: "create",
         });
-        await gateway.waitForRequest("chat.history", { after, match: { sessionKey: original.key } });
+        await gateway.waitForRequest("chat.history", {
+          after,
+          match: { sessionKey: original.key },
+        });
         expect((await gateway.waitForRequest("talk.session.close")).params).toMatchObject({
           discard: true,
         });
         await expect.poll(audioStates).toEqual(["ended"]);
-        await expect.poll(() => page.evaluate(async () =>
-          (await navigator.locks.query()).held?.some((lock) => lock.name === "openclaw-voice-capture"),
-        )).toBe(false);
-        await expect.poll(() => rail.getByRole("button", { name: "Cancel dictation", exact: true }).count()).toBe(0);
+        await expect
+          .poll(() =>
+            page.evaluate(async () =>
+              (await navigator.locks.query()).held?.some(
+                (lock) => lock.name === "openclaw-voice-capture",
+              ),
+            ),
+          )
+          .toBe(false);
+        await expect
+          .poll(() => rail.getByRole("button", { name: "Cancel dictation", exact: true }).count())
+          .toBe(0);
         await emit("Late old speech must stay discarded.", true);
         await close();
         await gateway.resolveDeferred("talk.session.close");
@@ -280,7 +302,9 @@ suite.define(() => {
         await expectNoAgentWrites(gateway);
         expect(await gateway.getRequests("talk.session.create")).toHaveLength(1);
         // The real pane observation retired capture while this read remained held.
-        await gateway.resolveDeferred("chat.history", undefined, { match: { sessionKey: original.key } });
+        await gateway.resolveDeferred("chat.history", undefined, {
+          match: { sessionKey: original.key },
+        });
         await expect.poll(() => side.inputValue()).toBe("Keep the side draft.");
       },
     ));
@@ -437,7 +461,7 @@ suite.define(() => {
         .toBeGreaterThan(0);
       await secondPage.bringToFront();
       await secondPage.getByRole("button", { name: "Dictation", exact: true }).click();
-      const alert = secondPage.locator(".agent-chat__composer-alert");
+      const alert = secondPage.locator(".agent-chat__composer-status-band");
       await expect.poll(() => alert.textContent()).toContain("Microphone inputs are busy");
       expect(["status", "alert"]).toContain(await alert.getAttribute("role"));
       expect(await second.gateway.getRequests("talk.session.create")).toHaveLength(0);

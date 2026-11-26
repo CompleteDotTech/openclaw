@@ -131,7 +131,9 @@ export class VoiceRouteSession {
       return attempt.ready.promise;
     } catch (error) {
       return Promise.reject(
-        error instanceof Error ? error : new Error("Voice capture failed.", { cause: error }),
+        error instanceof Error || error instanceof DOMException
+          ? error
+          : new Error("Voice capture failed.", { cause: error }),
       );
     }
   }

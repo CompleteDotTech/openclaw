@@ -56,7 +56,7 @@ export function ChatSessionRailPanel(
   );
   const readConversationScope = (): DirectDictationScope => ({
     owner: conversation.read(),
-    sessionId: props.state.currentSessionId,
+    sessionId: props.state.currentSessionId ?? undefined,
   });
   const modelControls = createParkedProjection(
     () =>

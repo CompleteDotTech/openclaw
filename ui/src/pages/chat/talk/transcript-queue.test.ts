@@ -14,6 +14,7 @@ const transportMock = vi.hoisted(() => ({
 vi.mock("./gateway-relay.ts", () => ({ GatewayRelayRealtimeTalkTransport: vi.fn() }));
 // mock-isolation: Queue tests must not connect to a provider.
 vi.mock("./google-live.ts", () => ({ GoogleLiveRealtimeTalkTransport: vi.fn() }));
+// mock-isolation: Queue fixtures drive transcripts and input stop without WebRTC peers.
 vi.mock("./webrtc.ts", () => ({
   WebRtcSdpRealtimeTalkTransport: vi.fn(function (
     _session: unknown,
@@ -115,10 +116,16 @@ it.each([false, true])(
     handleTranscript({ role: "user", text: "Accepted first", final: true });
     handleTranscript({ role: "assistant", text: "Accepted second", final: true });
     const stopped = session.stop();
+    const stopSettlement = replaced
+      ? expect(stopped).rejects.toMatchObject({
+          name: "AbortError",
+          message: "The Talk destination changed.",
+        })
+      : expect(stopped).resolves.toBeUndefined();
     current = !replaced;
     firstWrite.resolve();
     await vi.runAllTimersAsync();
-    await stopped;
+    await stopSettlement;
 
     expect(written).toEqual(
       replaced ? ["Accepted first"] : ["Accepted first", "Accepted first", "Accepted second"],

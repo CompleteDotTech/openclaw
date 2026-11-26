@@ -15,6 +15,7 @@ const transportMock = vi.hoisted(() => ({
   stop: vi.fn(),
 }));
 
+// mock-isolation: Lifecycle fixtures own relay activation and input stop without subscriptions.
 vi.mock("./gateway-relay.ts", () => ({
   GatewayRelayRealtimeTalkTransport: vi.fn(function (
     _session: unknown,
@@ -36,6 +37,7 @@ vi.mock("./gateway-relay.ts", () => ({
 vi.mock("./google-live.ts", () => ({
   GoogleLiveRealtimeTalkTransport: vi.fn(),
 }));
+// mock-isolation: Lifecycle fixtures own startup and input stop without WebRTC peers.
 vi.mock("./webrtc.ts", () => ({
   WebRtcSdpRealtimeTalkTransport: vi.fn(function (
     _session: unknown,
