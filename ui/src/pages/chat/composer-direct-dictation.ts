@@ -77,6 +77,11 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
   };
 }
 
+export type DirectDictationScope = {
+  owner: object;
+  sessionId?: string;
+};
+
 type DirectDictationOptions = {
   textarea: Pick<
     DirectDictationTextarea,
@@ -85,6 +90,7 @@ type DirectDictationOptions = {
   getClient: () => GatewayBrowserClient | null;
   prepareSession?: () => Promise<string | undefined>;
   getSessionKey?: () => string | undefined;
+  readConversationScope?: () => DirectDictationScope | undefined;
   isConnected: () => boolean;
   canCommit: () => boolean;
   readDraftRevision?: () => number | string;
@@ -100,7 +106,7 @@ type DirectDictationOptions = {
 export class DirectDictationControl extends EventTarget {
   private readonly devicePicker = new ComposerMicrophoneOwner();
   private session: ComposerDictationOwner | null = null;
-  private owner: { key: string } | null = null;
+  private owner: { key: string; scope: DirectDictationScope | undefined } | null = null;
 
   constructor(private readonly options: DirectDictationOptions) {
     super();
@@ -137,13 +143,25 @@ export class DirectDictationControl extends EventTarget {
   }
 
   prepare(ownerKey: string, inputDeviceId?: string, presented = true) {
-    if (this.owner?.key !== ownerKey) {
-      this.owner = { key: ownerKey };
+    const scope = this.options.readConversationScope?.();
+    if (
+      this.owner?.key !== ownerKey ||
+      this.owner.scope?.owner !== scope?.owner ||
+      this.owner.scope?.sessionId !== scope?.sessionId
+    ) {
+      this.owner = { key: ownerKey, scope };
       this.session?.dispose();
       this.session = null;
     }
     const owner = this.owner;
-    const ownsDraft = () => this.owner === owner;
+    const ownsDraft = () => {
+      const current = this.options.readConversationScope?.();
+      return (
+        this.owner === owner &&
+        current?.owner === scope?.owner &&
+        current?.sessionId === scope?.sessionId
+      );
+    };
     const client = this.options.getClient();
     const connected = this.options.isConnected() && client !== null;
     this.devicePicker.syncCatalog(client, connected, this.options.getSessionKey?.());
@@ -151,6 +169,7 @@ export class DirectDictationControl extends EventTarget {
     const dictationOptions = {
       client,
       draftKey: owner.key,
+      sessionId: scope?.sessionId,
       connected,
       presented,
       enabled,

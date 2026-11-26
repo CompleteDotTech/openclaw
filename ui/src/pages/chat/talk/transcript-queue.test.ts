@@ -35,8 +35,18 @@ import { RealtimeTalkSession } from "./session.ts";
 
 const sessions = new Set<RealtimeTalkSession>();
 
-async function start(request: unknown, callbacks: RealtimeTalkCallbacks) {
-  const session = new RealtimeTalkSession({ request } as never, "agent:main:main", callbacks);
+async function start(
+  request: unknown,
+  callbacks: RealtimeTalkCallbacks,
+  localOptions: ConstructorParameters<typeof RealtimeTalkSession>[4] = {},
+) {
+  const session = new RealtimeTalkSession(
+    { request } as never,
+    "agent:main:main",
+    callbacks,
+    {},
+    localOptions,
+  );
   sessions.add(session);
   await session.start();
   const context = transportMock.context;
@@ -77,6 +87,69 @@ afterEach(() => {
   }
   sessions.clear();
   vi.useRealTimers();
+});
+
+it.each([false, true])(
+  "drains accepted speech after Stop only for its original conversation (replaced: %s)",
+  async (replaced) => {
+    vi.useFakeTimers();
+    const firstWrite = createDeferred();
+    const written: string[] = [];
+    let firstAttempt = true;
+    let current = true;
+    const request = queueRequest("voice-original-scope", async (method, params) => {
+      if (method !== "talk.client.transcript") {
+        return;
+      }
+      written.push(String(params?.text));
+      if (firstAttempt) {
+        firstAttempt = false;
+        await firstWrite.promise;
+        throw new Error("Temporary transcript failure");
+      }
+    });
+    const { session, handleTranscript } = await start(
+      request,
+      {},
+      { isConversationCurrent: () => current },
+    );
+    handleTranscript({ role: "user", text: "Accepted first", final: true });
+    handleTranscript({ role: "assistant", text: "Accepted second", final: true });
+    const stopped = session.stop();
+    const stopSettlement = replaced
+      ? expect(stopped).rejects.toMatchObject({
+          name: "AbortError",
+          message: "The Talk destination changed.",
+        })
+      : expect(stopped).resolves.toBeUndefined();
+    current = !replaced;
+    firstWrite.resolve();
+    await vi.runAllTimersAsync();
+    await stopSettlement;
+
+    expect(written).toEqual(
+      replaced ? ["Accepted first"] : ["Accepted first", "Accepted first", "Accepted second"],
+    );
+    expect(calls(request, "talk.client.close")).toHaveLength(1);
+    expect(transportMock.stop).toHaveBeenCalledOnce();
+  },
+);
+
+it("rejects a provider final before history admission after the conversation changes", async () => {
+  let current = true;
+  const request = queueRequest("voice-stale-provider", async () => undefined);
+  const onTranscript = vi.fn();
+  const { session, handleTranscript } = await start(
+    request,
+    { onTranscript },
+    { isConversationCurrent: () => current },
+  );
+  current = false;
+  handleTranscript({ role: "user", text: "Speech from the retired conversation", final: true });
+
+  expect(calls(request, "talk.client.transcript")).toEqual([]);
+  expect(onTranscript).not.toHaveBeenCalled();
+  await session.stop();
 });
 
 it("does not admit normalized-empty finals into a stalled transcript queue", async () => {
