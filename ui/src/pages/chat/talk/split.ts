@@ -31,6 +31,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     private readonly sessionKey: string,
     private readonly callbacks: RealtimeTalkCallbacks,
     private readonly options: SplitTalkOptions,
+    private readonly checkDataPolicy: () => Promise<void>,
     private readonly inputDeviceId?: string,
   ) {}
 
@@ -58,6 +59,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
   }
 
   private async listen(): Promise<void> {
+    await this.checkDataPolicy();
     if (this.closed) {
       return;
     }
@@ -97,6 +99,10 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
           return;
         }
         if (answer) {
+          await this.checkDataPolicy();
+          if (this.closed) {
+            return;
+          }
           await this.options.playback.speak(
             this.client,
             answer,
@@ -113,6 +119,10 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
   }
 
   private async send(message: string): Promise<string> {
+    await this.checkDataPolicy();
+    if (this.closed) {
+      return "";
+    }
     const runId: string = crypto.randomUUID();
     this.runId = runId;
     const controller = new AbortController();

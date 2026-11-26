@@ -20,13 +20,16 @@ import {
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { registerSpeechDataPolicyEnglish } from "../../i18n/locales/en-speech-data-policy.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { speechDataPolicyRestrictsTalk } from "../../lib/speech-data-policy.ts";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
 import { DeviceTalk, VoiceWakeEditor, type VoiceWakeEditorState } from "./talk-device.tsx";
 import { resolveTalkModelFamilySettings, type TalkRealtimeSelection } from "./talk-schema.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
+registerEnglishCatalog(registerSpeechDataPolicyEnglish);
 
 export type TalkRealtimeProviderOption = TalkCatalogResult["realtime"]["providers"][number];
 
@@ -152,6 +155,13 @@ function StatusRow(props: TalkViewProps) {
               : undefined,
         kind: "muted" as const,
         label: t(catalog.kind === "loading" ? "common.loading" : "talkPage.status.unavailable"),
+      };
+    }
+    if (speechDataPolicyRestrictsTalk(catalog.transcription?.dataPolicy)) {
+      return {
+        description: t("chat.speechDataPolicy.talkUnavailable"),
+        kind: "warn" as const,
+        label: t("talkPage.status.unavailable"),
       };
     }
     return {
@@ -356,12 +366,15 @@ function ModelFamilyRow(props: TalkViewProps) {
 }
 
 function TalkCatalogRows(props: TalkViewProps) {
+  const restricted = () =>
+    props.catalog.kind === "ready" &&
+    speechDataPolicyRestrictsTalk(props.catalog.transcription?.dataPolicy);
   return (
     <>
       <StatusRow {...props} />
-      <ProviderRow {...props} />
-      <ModelRow {...props} />
-      <VoiceRow {...props} />
+      <ProviderRow {...props} configBusy={props.configBusy || restricted()} />
+      <ModelRow {...props} configBusy={props.configBusy || restricted()} />
+      <VoiceRow {...props} configBusy={props.configBusy || restricted()} />
       <ModelFamilyRow {...props} />
     </>
   );

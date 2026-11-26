@@ -5,7 +5,9 @@ import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import type { MenuEntry } from "../../../components/solid/menu.tsx";
 import { SwitchIndicator } from "../../../components/solid/switch.tsx";
+import { speechDataPolicyDescription } from "../../../components/speech-data-policy.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { speechDataPolicyRestrictsTalk } from "../../../lib/speech-data-policy.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
 import { type RealtimeTalkDeviceIssue, realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
 import { voiceApiKeyMessage } from "../voice-api-key-notice.tsx";
@@ -43,12 +45,18 @@ export function MicrophoneMenu(props: {
       let capabilities = [
         capabilityRow("realtime", props.picker.realtimeStatus, keyed.talk ?? keyed.speech, {
           label: t("chat.composer.realtimeTalkCapability"),
-          unavailableReason: t("chat.composer.realtimeTalkProviderUnavailable"),
+          unavailableReason: t(
+            speechDataPolicyRestrictsTalk(props.picker.dataPolicy)
+              ? "chat.speechDataPolicy.talkUnavailable"
+              : "chat.composer.realtimeTalkProviderUnavailable",
+          ),
           canConfigure: Boolean(props.picker.onOpenTalkSettings),
         }),
         capabilityRow("dictation", props.picker.dictationStatus, keyed.dictation, {
           label: t("chat.composer.dictationCapability"),
-          unavailableReason: t("chat.composer.dictationProviderUnavailableShort"),
+          unavailableReason: props.picker.dataPolicy
+            ? speechDataPolicyDescription(props.picker.dataPolicy)
+            : t("chat.composer.dictationProviderUnavailableShort"),
           canConfigure: Boolean(props.picker.onOpenDictationSettings),
         }),
       ].filter(
@@ -89,6 +97,14 @@ export function MicrophoneMenu(props: {
             </div>
           ),
         });
+      notice(
+        "data-policy",
+        "chat-talk-input-picker__note",
+        props.picker.dataPolicy
+          ? speechDataPolicyDescription(props.picker.dataPolicy)
+          : t("chat.speechDataPolicy.localityUnverified"),
+        "status",
+      );
       const fault = (id: string, issue: RealtimeTalkDeviceIssue) => {
         const message = realtimeTalkDeviceIssueMessage(issue, "audioinput");
         entries.push({

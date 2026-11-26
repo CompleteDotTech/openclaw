@@ -1,7 +1,12 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSpeechDataPolicyEnglish } from "../../i18n/locales/en-speech-data-policy.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import {
+  speechDataPolicyRestrictsTalk,
+  type SpeechDataPolicyStatus,
+} from "../../lib/speech-data-policy.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import type {
   ComposerDictationCommits,
@@ -9,6 +14,8 @@ import type {
   placeComposerDictation,
 } from "./composer-dictation-session.ts";
 import type { RealtimeTalkLevelSignal } from "./talk/level.ts";
+
+registerSpeechDataPolicyEnglish();
 
 const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
@@ -28,12 +35,44 @@ type ComposerDictationOwnerOptions = {
   connected: boolean;
   enabled: boolean;
   dictationAvailable?: boolean;
+  dataPolicy?: SpeechDataPolicyStatus;
   realtimeTalkActive: boolean;
+  onDataPolicyChange?: (dataPolicy: SpeechDataPolicyStatus | undefined) => void;
   onCommit: (text: string, late?: true, preservePreview?: true) => void;
   onError: (message: string, failure: ComposerDictationFailure) => void;
   onTap?: () => void;
   onDictationUnavailable?: () => void;
 };
+
+function sameDictationDataPolicy(
+  displayed: SpeechDataPolicyStatus | undefined,
+  admitted: SpeechDataPolicyStatus | undefined,
+): boolean {
+  if (!speechDataPolicyRestrictsTalk(displayed) && !speechDataPolicyRestrictsTalk(admitted)) {
+    return true;
+  }
+  if (!displayed || !admitted) {
+    return false;
+  }
+  // Optional route details must agree when exposed; session-only scopes can
+  // legitimately omit them from both catalog and admission responses.
+  return (
+    [
+      "mode",
+      "configured",
+      "initialized",
+      "available",
+      "permitted",
+      "transport",
+      "provider",
+      "model",
+      "destination",
+      "reason",
+      "message",
+      "refinement",
+    ] as const
+  ).every((field) => displayed[field] === admitted[field]);
+}
 
 // Gesture and session admission must remain synchronous across pointer and media callbacks.
 export class ComposerDictationOwner extends EventTarget {
@@ -317,6 +356,7 @@ export class ComposerDictationOwner extends EventTarget {
     // while Escape/visibility/blur keep guarding the live capture lifecycle.
     this.clearPointerGesture();
     const captureStart = {};
+    const displayedDataPolicy = this.options.dataPolicy;
     this.captureStart = captureStart;
     this.setPhase("connecting");
     if (this.captureStart !== captureStart) {
@@ -347,6 +387,32 @@ export class ComposerDictationOwner extends EventTarget {
       const session = new ComposerDictationSession(
         client,
         {
+          onBeforeCapture: (dataPolicy) => {
+            if (
+              this.captureStart !== captureStart ||
+              this.session !== session ||
+              this.disposed ||
+              !this.connecting
+            ) {
+              throw new DOMException("Dictation capture was retired", "AbortError");
+            }
+            const currentDataPolicy = this.options.dataPolicy;
+            if (
+              !sameDictationDataPolicy(displayedDataPolicy, dataPolicy) ||
+              !sameDictationDataPolicy(currentDataPolicy, dataPolicy) ||
+              (speechDataPolicyRestrictsTalk(dataPolicy) &&
+                (!dataPolicy?.configured || !dataPolicy.available || !dataPolicy.permitted))
+            ) {
+              // A catalog accepted during startup already replaced the shown
+              // route; an older session response must not roll it back.
+              this.options.onDataPolicyChange?.(
+                sameDictationDataPolicy(displayedDataPolicy, currentDataPolicy)
+                  ? dataPolicy
+                  : currentDataPolicy,
+              );
+              throw new Error(t("chat.speechDataPolicy.dictationReviewRequired"));
+            }
+          },
           onError: (message, preservesText) => {
             if (this.session !== session && !commits.has(session)) {
               return;
@@ -368,7 +434,7 @@ export class ComposerDictationOwner extends EventTarget {
             }
           },
         },
-        { sessionKey },
+        { sessionKey, purpose: "dictation" },
       );
       this.session = session;
       await session.start();

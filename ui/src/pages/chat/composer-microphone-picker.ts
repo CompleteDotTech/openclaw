@@ -4,6 +4,10 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import {
+  speechDataPolicyRestrictsTalk,
+  type SpeechDataPolicyStatus,
+} from "../../lib/speech-data-policy.ts";
+import {
   discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
   type RealtimeTalkDeviceIssue,
@@ -45,6 +49,7 @@ export type MicrophonePickerProps = {
   showRealtimeCapability?: boolean;
   realtimeStatus: ComposerTalkCapabilityStatus;
   dictationStatus: ComposerTalkCapabilityStatus;
+  dataPolicy?: SpeechDataPolicyStatus;
   onOpen: () => void;
   onClose: () => void;
   onSelect: (deviceId: string) => void;
@@ -69,9 +74,11 @@ export class ComposerMicrophoneOwner extends EventTarget {
   private catalogSessionKey: string | undefined;
   private catalogRequest = 0;
   private stopFocus: (() => void) | undefined;
+  private stopEvents: (() => void) | undefined;
   canConfigure = true;
   realtimeStatus: ComposerTalkCapabilityStatus = "unknown";
   dictationStatus: ComposerTalkCapabilityStatus = "unknown";
+  dataPolicy: SpeechDataPolicyStatus | undefined;
   apiKeyProviders: VoiceApiKeyProviders = {};
   /** Tapping Talk without its key explains why instead of opening the picker. */
   talkApiKeyNotice = false;
@@ -102,6 +109,8 @@ export class ComposerMicrophoneOwner extends EventTarget {
     }
     this.stopFocus?.();
     this.stopFocus = undefined;
+    this.stopEvents?.();
+    this.stopEvents = undefined;
     this.canConfigure = canRead;
     this.catalogClient = client;
     this.catalogConnected = catalogConnected;
@@ -109,12 +118,24 @@ export class ComposerMicrophoneOwner extends EventTarget {
     this.catalogRequest++;
     this.realtimeStatus = canRead ? "unknown" : "unavailable";
     this.dictationStatus = canRead || canDictate ? "unknown" : "unavailable";
+    this.dataPolicy = undefined;
     this.apiKeyProviders = {};
     this.talkApiKeyNotice = false;
     if (!client || !catalogConnected) {
       return;
     }
     this.stopFocus = listen(window, "focus", this.refreshOnFocus);
+    this.stopEvents = client.addEventListener((event) => {
+      if (event.event === "config.changed") {
+        // A restricted route loses its previous admission until rechecked.
+        // Ordinary routing retains its existing focus-refresh behavior.
+        if (speechDataPolicyRestrictsTalk(this.dataPolicy)) {
+          this.realtimeStatus = "checking";
+          this.dictationStatus = "checking";
+        }
+        void this.loadCatalog();
+      }
+    });
     void this.loadCatalog();
   }
 
@@ -143,6 +164,24 @@ export class ComposerMicrophoneOwner extends EventTarget {
       this.dispatchEvent(new Event("change"));
     }
   }
+
+  /** Admission owns the route for this attempted recording, ahead of cached readiness. */
+  readonly setSessionDataPolicy = (dataPolicy: SpeechDataPolicyStatus | undefined): void => {
+    this.catalogRequest++;
+    this.dataPolicy = dataPolicy;
+    this.dictationStatus = dataPolicy
+      ? dataPolicy.configured && dataPolicy.available && dataPolicy.permitted
+        ? "ready"
+        : "unavailable"
+      : "unknown";
+    this.realtimeStatus = speechDataPolicyRestrictsTalk(dataPolicy) ? "unavailable" : "unknown";
+    this.apiKeyProviders = {};
+    this.talkApiKeyNotice = false;
+    this.dispatchEvent(new Event("change"));
+    if (!speechDataPolicyRestrictsTalk(dataPolicy)) {
+      void this.loadCatalog();
+    }
+  };
 
   /** Drops the devicechange subscription so a closed picker stops refreshing. */
   release(): void {
@@ -207,8 +246,19 @@ export class ComposerMicrophoneOwner extends EventTarget {
         return;
       }
       const talk = config?.config?.talk;
-      this.dictationStatus = catalog.transcription?.ready === true ? "ready" : "unavailable";
+      this.dataPolicy = catalog.transcription?.dataPolicy;
+      this.dictationStatus =
+        catalog.transcription?.ready === true &&
+        (!this.dataPolicy ||
+          (this.dataPolicy.configured && this.dataPolicy.available && this.dataPolicy.permitted))
+          ? "ready"
+          : "unavailable";
       this.apiKeyProviders = voiceApiKeyProviders(catalog, talk?.realtime?.mode === "stt-tts");
+      if (speechDataPolicyRestrictsTalk(this.dataPolicy)) {
+        this.realtimeStatus = "unavailable";
+        this.apiKeyProviders = {};
+        return;
+      }
       if (!config) {
         this.realtimeStatus = "unavailable";
         return;

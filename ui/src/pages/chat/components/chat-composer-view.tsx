@@ -7,6 +7,7 @@ import { createMemberWelcomeSlot } from "../../../components/openclaw-id/member-
 import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-strip.tsx";
+import { SpeechDataPolicyNotice } from "../../../components/speech-data-policy.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../styles/chat/composer-mobile.css";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
@@ -169,6 +170,10 @@ export function renderChatComposerView(
   const composerAlerts = createMemo(() =>
     showComposerInput() ? (
       <>
+        <SpeechDataPolicyNotice
+          policy={context().runControlsProps.dataPolicy}
+          class="agent-chat__composer-alert"
+        />
         <ChatVoiceStatus
           status={props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus}
           detail={props.realtimeTalkDetail}

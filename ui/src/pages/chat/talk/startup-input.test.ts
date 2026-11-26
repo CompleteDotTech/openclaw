@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
+import { createUnrestrictedTalkTestClient } from "./session.test-support.ts";
 import type { RealtimeTalkTransportContext } from "./shared.ts";
 
 const transports = vi.hoisted(
@@ -57,7 +58,7 @@ function microphone() {
 const sessions: RealtimeTalkSession[] = [];
 function sessionFor(request: ReturnType<typeof vi.fn>) {
   const session = new RealtimeTalkSession(
-    { request } as never,
+    createUnrestrictedTalkTestClient(request),
     "agent:main:main",
     {},
     {},

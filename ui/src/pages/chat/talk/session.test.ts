@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../../test-helpers/gateway-client.ts";
+import { speechDataPolicyFixture } from "../../../test-helpers/speech-data-policy.ts";
 import * as gatewayRelayTransport from "./gateway-relay.ts";
 import * as googleLiveTransport from "./google-live.ts";
 import { useRealtimeTalkMicrophoneFixture } from "./input.test-support.ts";
@@ -47,10 +52,10 @@ function videoRequest(voiceSessionId = "voice-1") {
   );
 }
 function sessionFor(
-  request: unknown,
+  request: GatewayRequestHandler,
   callbacks: ConstructorParameters<typeof RealtimeTalkSession>[2] = {},
 ) {
-  return new RealtimeTalkSession({ request } as never, "main", callbacks);
+  return new RealtimeTalkSession(createTestGatewayClient(request), "main", callbacks);
 }
 function called(request: { mock: { calls: [string, ...unknown[]][] } }, method: string) {
   return request.mock.calls.some(([name]) => name === method);
@@ -119,20 +124,36 @@ describe("RealtimeTalkSession", () => {
     vi.restoreAllMocks();
   });
 
+  it("refuses browser Live before opening the microphone under restricted policy", async () => {
+    const request = vi.fn(async (_method: string) => ({
+      ...videoCatalog(true),
+      transcription: { providers: [], dataPolicy: speechDataPolicyFixture() },
+    }));
+    const session = sessionFor(request);
+    await expect(session.start()).rejects.toThrow("unavailable under this policy");
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+    expect(called(request, "talk.client.create")).toBe(false);
+    expect(webRtcInstances).toHaveLength(0);
+    await session.stop();
+  });
+
   it.each(["webrtc", "gateway-relay"] as const)(
     "claims a voice replacement once through its original %s create endpoint",
     async (transport) => {
-      const request = vi.fn(async () => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "talk.catalog") {
+          return videoCatalog(false);
+        }
         throw new Error("replacement rejected");
       });
       const session = new RealtimeTalkSession(
-        { request } as never,
+        createTestGatewayClient(request),
         "agent:main:voice",
         {},
         { transport, voice: "spruce", voiceChangeId: "change-1" },
       );
       await expect(session.start()).rejects.toThrow("replacement rejected");
-      expect(request).toHaveBeenCalledOnce();
+      expect(request.mock.calls.filter(([method]) => method !== "talk.catalog")).toHaveLength(1);
       expect(request).toHaveBeenCalledWith(
         transport === "gateway-relay" ? "talk.session.create" : "talk.client.create",
         expect.objectContaining({
@@ -161,6 +182,9 @@ describe("RealtimeTalkSession", () => {
       clientSecret: "test-session",
     });
     const request = vi.fn((method: string) => {
+      if (method === "talk.catalog") {
+        return Promise.resolve(videoCatalog(false));
+      }
       if (method === "talk.client.create") {
         return Promise.resolve(result());
       }
@@ -197,6 +221,9 @@ describe("RealtimeTalkSession", () => {
   it("closes a Gateway relay allocated after the session stops", async () => {
     const create = createDeferred<ReturnType<typeof createGatewayRelaySession>>();
     const request = vi.fn((method: string) => {
+      if (method === "talk.catalog") {
+        return Promise.resolve(videoCatalog(false));
+      }
       if (method === "talk.client.create") {
         return create.promise;
       }
@@ -230,6 +257,9 @@ describe("RealtimeTalkSession", () => {
   it("closes a superseded client-owned allocation without replacing the active call", async () => {
     const creates: Array<ReturnType<typeof createDeferred<unknown>>> = [];
     const request = vi.fn((method: string) => {
+      if (method === "talk.catalog") {
+        return Promise.resolve(videoCatalog(false));
+      }
       if (method === "talk.client.create") {
         const create = createDeferred<unknown>();
         creates.push(create);
@@ -240,7 +270,7 @@ describe("RealtimeTalkSession", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const client = { request } as never;
+    const client = createTestGatewayClient(request);
     const session = new RealtimeTalkSession(client, "main");
 
     const firstStart = session.start();
@@ -293,7 +323,9 @@ describe("RealtimeTalkSession", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const onVideoCapability = vi.fn();
-    const session = new RealtimeTalkSession({ request } as never, "main", { onVideoCapability });
+    const session = new RealtimeTalkSession(createTestGatewayClient(request), "main", {
+      onVideoCapability,
+    });
 
     await session.start();
 
@@ -326,7 +358,7 @@ describe("RealtimeTalkSession", () => {
   it("passes voice-change options and camera choice to client-owned realtime session creation", async () => {
     const request = vi.fn(async () => createWebRtcSession());
     const session = new RealtimeTalkSession(
-      { request } as never,
+      createTestGatewayClient(request),
       "main",
       {},
       {
@@ -428,7 +460,7 @@ describe("RealtimeTalkSession", () => {
       return createWebRtcSession();
     });
     const onVideoCapability = vi.fn();
-    const session = new RealtimeTalkSession({ request } as never, "main", {
+    const session = new RealtimeTalkSession(createTestGatewayClient(request), "main", {
       onVideoCapability,
     });
 
@@ -463,6 +495,9 @@ describe("RealtimeTalkSession", () => {
   ])("does not fall back when $name", async ({ readConfig }) => {
     const clientError = new Error("browser session unavailable");
     const request = vi.fn(async (method: string) => {
+      if (method === "talk.catalog") {
+        return Promise.resolve(videoCatalog(false));
+      }
       if (method === "talk.client.create") {
         throw clientError;
       }
@@ -476,6 +511,7 @@ describe("RealtimeTalkSession", () => {
     await expect(session.start()).rejects.toBe(clientError);
 
     expect(request.mock.calls).toEqual([
+      ["talk.catalog", { sessionKey: "main" }, requestTimeoutOptions],
       [
         "talk.client.create",
         { sessionKey: "main", capabilities: ["voice-transcript", "voice-selection"] },
@@ -491,6 +527,9 @@ describe("RealtimeTalkSession", () => {
     { name: "Auto", config: {} },
   ])("falls back to Gateway relay when config resolves $name", async ({ config }) => {
     const request = vi.fn(async (method: string) => {
+      if (method === "talk.catalog") {
+        return Promise.resolve(videoCatalog(false));
+      }
       if (method === "talk.client.create") {
         throw new Error("browser session unavailable");
       }
@@ -502,12 +541,12 @@ describe("RealtimeTalkSession", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const session = new RealtimeTalkSession({ request } as never, "main");
+    const session = new RealtimeTalkSession(createTestGatewayClient(request), "main");
 
     await session.start();
 
     expect(request).toHaveBeenNthCalledWith(
-      3,
+      4,
       "talk.session.create",
       {
         sessionKey: "main",
@@ -534,6 +573,9 @@ describe("RealtimeTalkSession", () => {
       const clientError = new Error("browser session unavailable");
       let creates = 0;
       const request = vi.fn(async (method: string) => {
+        if (method === "talk.catalog") {
+          return Promise.resolve(videoCatalog(false));
+        }
         if (method === "talk.client.create") {
           creates += 1;
           if (creates === 1) {
@@ -556,7 +598,7 @@ describe("RealtimeTalkSession", () => {
         }
         return { ok: true };
       });
-      const session = new RealtimeTalkSession({ request } as never, "main");
+      const session = new RealtimeTalkSession(createTestGatewayClient(request), "main");
       const starting = session.start().then(
         () => undefined,
         (error: unknown) => error,

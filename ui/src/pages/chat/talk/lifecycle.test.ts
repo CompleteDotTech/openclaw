@@ -2,7 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { useRealtimeTalkMicrophoneFixture } from "./input.test-support.ts";
-import { createGatewayRelaySession } from "./session.test-support.ts";
+import {
+  createGatewayRelaySession,
+  createUnrestrictedTalkTestClient,
+} from "./session.test-support.ts";
 import type { RealtimeTalkTransportContext } from "./shared.ts";
 
 const transportMock = vi.hoisted(() => ({
@@ -79,7 +82,11 @@ function sessionFor(
   request: unknown,
   callbacks: ConstructorParameters<typeof RealtimeTalkSession>[2] = {},
 ) {
-  return new RealtimeTalkSession({ request } as never, "agent:main:main", callbacks);
+  return new RealtimeTalkSession(
+    createUnrestrictedTalkTestClient(request),
+    "agent:main:main",
+    callbacks,
+  );
 }
 function calls<T extends [string, ...unknown[]]>(
   request: { mock: { calls: T[] } },
@@ -352,7 +359,7 @@ describe("RealtimeTalkSession lifecycle", () => {
       createCount += 1;
       return createVoiceSession(`voice-start-${createCount}`);
     });
-    const client = { request } as never;
+    const client = createUnrestrictedTalkTestClient(request);
     transportMock.start
       .mockRejectedValueOnce(new Error("first startup failed"))
       .mockRejectedValueOnce(new Error("second startup failed"));
@@ -378,7 +385,7 @@ describe("RealtimeTalkSession lifecycle", () => {
       () => createVoiceSession(`voice-concurrent-stop-${++creates}`),
       transcriptEntryIds,
     );
-    const client = { request } as never;
+    const client = createUnrestrictedTalkTestClient(request);
     const session = new RealtimeTalkSession(client, "agent:main:main");
     await session.start();
     const existingContext = transcriptContext(transportMock.webRtcContexts);
@@ -473,7 +480,7 @@ describe("RealtimeTalkSession lifecycle", () => {
         return { ok: true };
       },
     );
-    const client = { request } as never;
+    const client = createUnrestrictedTalkTestClient(request);
     const first = new RealtimeTalkSession(client, "agent:main:main");
     const second = new RealtimeTalkSession(client, "agent:main:main");
     const third = new RealtimeTalkSession(client, "agent:main:main");
@@ -531,7 +538,7 @@ describe("RealtimeTalkSession lifecycle", () => {
         return { ok: true };
       },
     );
-    const client = { request } as never;
+    const client = createUnrestrictedTalkTestClient(request);
     const draining = Array.from(
       { length: 16 },
       (_, index) => new RealtimeTalkSession(client, `agent:main:session-${index}`),
@@ -587,7 +594,7 @@ describe("RealtimeTalkSession lifecycle", () => {
         return { ok: true };
       },
     );
-    const client = { request } as never;
+    const client = createUnrestrictedTalkTestClient(request);
     const first = new RealtimeTalkSession(client, "agent:main:main", {}, { transport: "webrtc" });
     const second = new RealtimeTalkSession(client, "agent:main:main", {}, { transport: "webrtc" });
     const third = new RealtimeTalkSession(client, "agent:main:main", {}, { transport: "webrtc" });

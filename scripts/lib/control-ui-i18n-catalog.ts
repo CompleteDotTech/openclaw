@@ -100,6 +100,7 @@ import { registerSidebarAttentionEnglish } from "../../ui/src/i18n/locales/en-si
 import { registerSkillLibraryEnglish } from "../../ui/src/i18n/locales/en-skill-library.ts";
 import { registerSkillWorkshopEnglish } from "../../ui/src/i18n/locales/en-skill-workshop.ts";
 import { registerSkillsBrowserEnglish } from "../../ui/src/i18n/locales/en-skills-browser.ts";
+import { registerSpeechDataPolicyEnglish } from "../../ui/src/i18n/locales/en-speech-data-policy.ts";
 import { registerSystemsEnglish } from "../../ui/src/i18n/locales/en-systems.ts";
 import { registerTemplateCreatorEnglish } from "../../ui/src/i18n/locales/en-template-creator.ts";
 import { registerTemplatesEnglish } from "../../ui/src/i18n/locales/en-templates.ts";
@@ -234,6 +235,7 @@ const sourceFiles = [
   "en-session-skill-library.ts",
   "en-skill-workshop.ts",
   "en-skills-browser.ts",
+  "en-speech-data-policy.ts",
   "en-systems.ts",
   "en-update-actions.ts",
   "en-tool-diagnostics.ts",
@@ -703,6 +705,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerBrowserEnglish.catalog,
     registerChatCameraEnglish.catalog,
     registerChatVoiceApiKeyEnglish.catalog,
+    registerSpeechDataPolicyEnglish.catalog,
     registerChatDictationEnglish.catalog,
     { chat: { pullRequests: { ...ciPullRequests, automationNoChecks, automationRetry } } },
     registerChatCommandResultsEnglish.catalog,

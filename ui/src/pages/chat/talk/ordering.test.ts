@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 // @vitest-environment jsdom
 import { createRealtimeTalkConversationState } from "./conversation-state.ts";
 import { orderRealtimeTalkConversation, updateRealtimeTalkConversation } from "./conversation.ts";
 import { useRealtimeTalkMicrophoneFixture } from "./input.test-support.ts";
+import { createUnrestrictedTalkTestClient } from "./session.test-support.ts";
 import { RealtimeTalkSession } from "./session.ts";
 import type { RealtimeTalkTranscript } from "./shared.ts";
 
@@ -84,7 +84,7 @@ function createCall(
   });
   const onStatus = vi.fn();
   const session = new RealtimeTalkSession(
-    { request } as unknown as GatewayBrowserClient,
+    createUnrestrictedTalkTestClient(request),
     "agent:main:main",
     {
       onStatus,

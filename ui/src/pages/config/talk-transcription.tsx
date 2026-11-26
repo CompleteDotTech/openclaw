@@ -17,10 +17,15 @@ import {
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
+import {
+  speechDataPolicyDescription,
+  speechDataPolicyLabel,
+} from "../../components/speech-data-policy.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { speechDataPolicyRestrictsTalk } from "../../lib/speech-data-policy.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 
 const AUTOMATIC = "";
@@ -142,6 +147,13 @@ function talkRowState(
     };
   }
   const loaded = catalog;
+  if (speechDataPolicyRestrictsTalk(loaded.dataPolicy)) {
+    return {
+      kind: "warn",
+      label: t("talkPage.status.unavailable"),
+      description: t("chat.speechDataPolicy.talkUnavailable"),
+    };
+  }
   const status = {
     kind: loaded.ready ? ("ok" as const) : ("warn" as const),
     label: t(loaded.ready ? "talkPage.status.ready" : "talkPage.status.notReady"),
@@ -276,6 +288,9 @@ export function TalkTranscriptionSection(props: TranscriptionProps) {
     );
   };
   const voiceNotesDescription = () => {
+    if (speechDataPolicyRestrictsTalk(loadedCatalog(props.catalog)?.dataPolicy)) {
+      return t("chat.speechDataPolicy.selectionReadiness");
+    }
     const provider = preferredProvider();
     if (!provider || provider.configured) {
       return t("talkPage.transcription.voiceNotesDescription");
@@ -307,6 +322,23 @@ export function TalkTranscriptionSection(props: TranscriptionProps) {
       title={t("talkPage.transcription.title")}
       description={t("talkPage.transcription.description")}
     >
+      <Show when={loadedCatalog(props.catalog)?.dataPolicy}>
+        {(policy) => (
+          <SettingsRow
+            title={t("chat.speechDataPolicy.title")}
+            description={speechDataPolicyDescription(policy())}
+            role="status"
+            control={
+              <SettingsStatus
+                kind={
+                  policy().available && policy().permitted && policy().initialized ? "ok" : "warn"
+                }
+                label={speechDataPolicyLabel(policy())}
+              />
+            }
+          />
+        )}
+      </Show>
       <TalkRow
         catalog={props.catalog}
         preferredProviderId={

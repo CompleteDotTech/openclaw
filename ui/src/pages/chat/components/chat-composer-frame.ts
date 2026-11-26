@@ -548,6 +548,7 @@ export function createChatComposerContext(
         holdToDictate: props.composerHoldToRecord !== false,
         realtimeStatus: devicePicker.realtimeStatus,
         dictationStatus: devicePicker.dictationStatus,
+        dataPolicy: devicePicker.dataPolicy,
         onOpen: devicePicker.handleOpen,
         onClose: devicePicker.handleClose,
         onSelect: (deviceId: string) => {
@@ -624,6 +625,7 @@ export function createChatComposerContext(
     voiceActive: props.realtimeTalkActive,
     voiceStatus: props.realtimeTalkStatus,
     voiceDetail: props.realtimeTalkDetail,
+    dataPolicy: devicePicker.dataPolicy,
     voiceInputLevel: props.realtimeTalkInputLevel,
     voiceVideoCapable: props.realtimeTalkVideoCapable,
     voiceVideoEnabled: Boolean(props.realtimeTalkVideoStream),

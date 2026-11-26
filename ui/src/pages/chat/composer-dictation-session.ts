@@ -1,3 +1,4 @@
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
@@ -6,6 +7,7 @@ import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictati
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import type { SpeechDataPolicyStatus } from "../../lib/speech-data-policy.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -24,6 +26,7 @@ const DICTATION_SAMPLE_RATE_HZ = 8000;
 type DictationSessionResult = {
   sessionId: string;
   transcriptionSessionId?: string;
+  dataPolicy?: SpeechDataPolicyStatus;
   audio?: {
     inputEncoding?: unknown;
     inputSampleRateHz?: unknown;
@@ -31,6 +34,7 @@ type DictationSessionResult = {
 };
 
 type ComposerDictationSessionCallbacks = {
+  onBeforeCapture?: (dataPolicy: SpeechDataPolicyStatus | undefined) => void;
   onError: (message: string, preservesText: boolean) => void;
   onLevel?: (level: number) => void;
   onTranscriptChange: () => void;
@@ -204,6 +208,7 @@ export class ComposerDictationSession {
     private readonly callbacks: ComposerDictationSessionCallbacks,
     private readonly options?: {
       sessionKey?: string;
+      purpose?: "dictation";
       inputDeviceId?: string;
       silenceTimeoutMs?: number;
     },
@@ -231,6 +236,7 @@ export class ComposerDictationSession {
     // here rather than after the user has started speaking.
     const result = await this.client.request<DictationSessionResult>("talk.session.create", {
       mode: "transcription",
+      ...(this.options?.purpose ? { purpose: this.options.purpose } : {}),
       transport: "gateway-relay",
       brain: "none",
       ...(this.options?.sessionKey ? { sessionKey: this.options.sessionKey } : {}),
@@ -246,6 +252,20 @@ export class ComposerDictationSession {
     ) {
       await this.closeRemote();
       throw new Error(t("chat.composer.dictationAudioUnsupported"));
+    }
+    if (this.options?.purpose === "dictation") {
+      try {
+        this.callbacks.onBeforeCapture?.(result.dataPolicy);
+      } catch (error) {
+        this.discarded = true;
+        // Report the review requirement even if the Gateway loses the discard
+        // acknowledgement. The existing owner retains bounded cleanup.
+        void this.stopAndClose(false).catch(() => undefined);
+        throw error;
+      }
+    }
+    if (this.stopped) {
+      return;
     }
     // Listen before awaiting the permission prompt: a provider failure while it is
     // open must stop startup instead of capturing against a removed session.
@@ -435,7 +455,7 @@ export class ComposerDictationSession {
         .request(
           "talk.session.close",
           { sessionId: this.sessionId, ...(discard ? { discard } : {}) },
-          { timeoutMs: null },
+          { timeoutMs: discard ? DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS : null },
         )
         .then(() => undefined)
         .catch(() => undefined)

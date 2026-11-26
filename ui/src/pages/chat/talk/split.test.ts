@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
@@ -13,6 +14,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
+import { speechDataPolicyFixture } from "../../../test-helpers/speech-data-policy.ts";
 import { createStorageMock } from "../../../test-helpers/storage.ts";
 import { stopChatRealtimeTalk, type ChatRealtimeState } from "../chat-realtime.ts";
 import { createChatPageStateContext } from "../chat-state-context.test-support.ts";
@@ -122,6 +124,9 @@ function harness(provider?: string) {
     const payload = asOptionalRecord(params);
     if (method === "talk.config") {
       return config(provider);
+    }
+    if (method === "talk.catalog") {
+      return { realtime: { providers: [] }, transcription: { ready: true, providers: [] } };
     }
     if (method === "talk.session.create") {
       captureCount += 1;
@@ -259,6 +264,84 @@ function observeSend(h: ReturnType<typeof harness>) {
   });
   return sent.promise;
 }
+
+it.each(["device-local", "trusted-endpoint"] as const)(
+  "refuses split Talk before microphone access under %s policy",
+  async (mode) => {
+    const h = harness();
+    h.intercept("talk.catalog", () =>
+      Promise.resolve({
+        realtime: { providers: [] },
+        transcription: {
+          providers: [],
+          ready: true,
+          dataPolicy: speechDataPolicyFixture({ mode }),
+        },
+      }),
+    );
+    await h.state.toggleRealtimeTalk();
+    expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("error");
+    expect(h.state.realtimeTalk.snapshot.realtimeTalkDetail).toContain(
+      "unavailable under this policy",
+    );
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled();
+    expect(h.called("talk.session.create")).toBe(false);
+    expect(h.called("chat.send")).toBe(false);
+  },
+);
+
+it.each(["transcript", "reply"] as const)(
+  "blocks an automatic %s while a changed speech policy is being checked",
+  async (stage) => {
+    const h = harness();
+    await h.state.toggleRealtimeTalk();
+    if (stage === "reply") {
+      h.utterance();
+      await h.sent.promise;
+    }
+    const check = createDeferred<unknown>();
+    h.intercept("talk.catalog", () => check.promise);
+    h.emit("config.changed", {});
+    if (stage === "transcript") {
+      h.utterance();
+    } else {
+      h.answer("Synthetic answer");
+    }
+    await vi.waitFor(() => expect(h.called("talk.session.close")).toBe(true));
+    expect(h.called("chat.send")).toBe(stage === "reply");
+    expect(h.called("tts.speak")).toBe(false);
+    check.resolve({
+      realtime: { providers: [] },
+      transcription: { providers: [], dataPolicy: speechDataPolicyFixture() },
+    });
+    await vi.waitFor(() => expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("error"));
+    expect(h.called("chat.send")).toBe(stage === "reply");
+    expect(h.called("tts.speak")).toBe(false);
+    expect(tracks.every((track) => track.stop.mock.calls.length > 0)).toBe(true);
+  },
+);
+
+it("does not send after a stale permissive check completes behind a newer policy change", async () => {
+  const h = harness();
+  await h.state.toggleRealtimeTalk();
+  const old = createDeferred<unknown>();
+  const current = createDeferred<unknown>();
+  let checks = 0;
+  h.intercept("talk.catalog", () => (++checks === 1 ? old.promise : current.promise));
+  h.utterance();
+  await vi.waitFor(() => expect(checks).toBe(1));
+  h.emit("config.changed", {});
+  expect(checks).toBe(2);
+  old.resolve({ realtime: { providers: [] }, transcription: { ready: true, providers: [] } });
+  await old.promise;
+  expect(h.called("chat.send")).toBe(false);
+  current.resolve({
+    realtime: { providers: [] },
+    transcription: { providers: [], dataPolicy: speechDataPolicyFixture() },
+  });
+  await vi.waitFor(() => expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("error"));
+  expect(h.called("chat.send")).toBe(false);
+});
 
 it.each([
   { provider: "openai", leaf: "displayed-leaf" },
@@ -469,7 +552,7 @@ it.each(["finish", "Stop"])(
         expect(h.request).toHaveBeenCalledWith(
           "talk.session.close",
           { sessionId: "capture-1", discard: true },
-          { timeoutMs: null },
+          { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
         );
       } finally {
         release.resolve();
