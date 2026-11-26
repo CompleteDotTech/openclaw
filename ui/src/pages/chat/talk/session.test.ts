@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { VoiceRouteSession } from "../../../lib/voice-route.ts";
 import * as gatewayRelayTransport from "./gateway-relay.ts";
 import * as googleLiveTransport from "./google-live.ts";
 import { useRealtimeTalkMicrophoneFixture } from "./input.test-support.ts";
@@ -27,6 +28,13 @@ const googleInstances: MockTransport[] = [];
 const relayInstances: MockTransport[] = [];
 const webRtcInstances: MockTransport[] = [];
 const requestTimeoutOptions = { timeoutMs: 30_000 };
+const sessions = new Set<RealtimeTalkSession>();
+
+function createSession(...args: ConstructorParameters<typeof RealtimeTalkSession>) {
+  const session = new RealtimeTalkSession(...args);
+  sessions.add(session);
+  return session;
+}
 
 function createWebRtcSession(voiceSessionId = "voice-1") {
   return { provider: "openai", transport: "webrtc", voiceSessionId, clientSecret: "secret" };
@@ -50,7 +58,7 @@ function sessionFor(
   request: unknown,
   callbacks: ConstructorParameters<typeof RealtimeTalkSession>[2] = {},
 ) {
-  return new RealtimeTalkSession({ request } as never, "main", callbacks);
+  return createSession({ request } as never, "main", callbacks);
 }
 function called(request: { mock: { calls: [string, ...unknown[]][] } }, method: string) {
   return request.mock.calls.some(([name]) => name === method);
@@ -85,7 +93,10 @@ describe("RealtimeTalkSession", () => {
         const transport: MockTransport = {
           ctx,
           start: googleStart,
-          stop: googleStop,
+          stop: (options) => {
+            ctx.input.stop();
+            googleStop(options);
+          },
           setVideoEnabled: googleSetVideoEnabled,
           switchCamera: googleSwitchCamera,
         };
@@ -95,7 +106,14 @@ describe("RealtimeTalkSession", () => {
     );
     vi.spyOn(gatewayRelayTransport, "GatewayRelayRealtimeTalkTransport").mockImplementation(
       function (_session, ctx) {
-        const transport: MockTransport = { ctx, start: relayStart, stop: relayStop };
+        const transport: MockTransport = {
+          ctx,
+          start: relayStart,
+          stop: (options) => {
+            ctx.input.stop();
+            relayStop(options);
+          },
+        };
         relayInstances.push(transport);
         return transport as unknown as gatewayRelayTransport.GatewayRelayRealtimeTalkTransport;
       },
@@ -105,7 +123,10 @@ describe("RealtimeTalkSession", () => {
         const transport: MockTransport = {
           ctx,
           start: webRtcStart,
-          stop: webRtcStop,
+          stop: (options) => {
+            ctx.input.stop();
+            webRtcStop(options);
+          },
           setVideoEnabled: webRtcSetVideoEnabled,
           switchCamera: webRtcSwitchCamera,
         };
@@ -116,7 +137,38 @@ describe("RealtimeTalkSession", () => {
   });
 
   afterEach(() => {
+    for (const session of sessions) {
+      void session.stop().catch(() => undefined);
+    }
+    sessions.clear();
     vi.restoreAllMocks();
+  });
+
+  it("retains capture through a recoverable provider error until the microphone stops", async () => {
+    const onStatus = vi.fn();
+    const request = vi.fn(async (method: string) =>
+      method === "talk.client.create" ? createWebRtcSession() : { ok: true },
+    );
+    const session = sessionFor(request, { onStatus });
+    const dictation = new VoiceRouteSession({
+      route: "dictation",
+      destination: { kind: "draft", key: "another-draft" },
+      owner: {},
+    });
+    try {
+      await session.start();
+      const ctx = transportContext(webRtcInstances[0]);
+      ctx.callbacks.onStatus?.("error", "Temporary response failure");
+      expect(onStatus).toHaveBeenLastCalledWith("error", "Temporary response failure");
+      expect(ctx.input.stream).not.toBeNull();
+      await expect(dictation.acquireCapture()).rejects.toThrow(/microphone/i);
+      ctx.callbacks.onStatus?.("listening");
+      expect(onStatus).toHaveBeenLastCalledWith("listening", undefined);
+      ctx.input.stop();
+      await expect(dictation.acquireCapture()).resolves.toBeUndefined();
+    } finally {
+      dictation.cancel();
+    }
   });
 
   it.each(["webrtc", "gateway-relay"] as const)(
@@ -125,7 +177,7 @@ describe("RealtimeTalkSession", () => {
       const request = vi.fn(async () => {
         throw new Error("replacement rejected");
       });
-      const session = new RealtimeTalkSession(
+      const session = createSession(
         { request } as never,
         "agent:main:voice",
         {},
@@ -241,7 +293,7 @@ describe("RealtimeTalkSession", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const client = { request } as never;
-    const session = new RealtimeTalkSession(client, "main");
+    const session = createSession(client, "main");
 
     const firstStart = session.start();
     await vi.waitFor(() => expect(creates).toHaveLength(1));
@@ -250,7 +302,7 @@ describe("RealtimeTalkSession", () => {
     await vi.waitFor(() => expect(creates).toHaveLength(2));
     creates[1]!.resolve(createWebRtcSession("voice-current"));
     await secondStart;
-    const blocked = new RealtimeTalkSession(client, "main");
+    const blocked = createSession(client, "main");
     await expect(blocked.start()).rejects.toThrow(
       "Too many active or closing realtime Talk voice sessions",
     );
@@ -293,7 +345,7 @@ describe("RealtimeTalkSession", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const onVideoCapability = vi.fn();
-    const session = new RealtimeTalkSession({ request } as never, "main", { onVideoCapability });
+    const session = createSession({ request } as never, "main", { onVideoCapability });
 
     await session.start();
 
@@ -325,7 +377,7 @@ describe("RealtimeTalkSession", () => {
 
   it("passes voice-change options and camera choice to client-owned realtime session creation", async () => {
     const request = vi.fn(async () => createWebRtcSession());
-    const session = new RealtimeTalkSession(
+    const session = createSession(
       { request } as never,
       "main",
       {},
@@ -428,7 +480,7 @@ describe("RealtimeTalkSession", () => {
       return createWebRtcSession();
     });
     const onVideoCapability = vi.fn();
-    const session = new RealtimeTalkSession({ request } as never, "main", {
+    const session = createSession({ request } as never, "main", {
       onVideoCapability,
     });
 
@@ -502,7 +554,7 @@ describe("RealtimeTalkSession", () => {
       }
       throw new Error(`Unexpected request: ${method}`);
     });
-    const session = new RealtimeTalkSession({ request } as never, "main");
+    const session = createSession({ request } as never, "main");
 
     await session.start();
 
@@ -556,7 +608,7 @@ describe("RealtimeTalkSession", () => {
         }
         return { ok: true };
       });
-      const session = new RealtimeTalkSession({ request } as never, "main");
+      const session = createSession({ request } as never, "main");
       const starting = session.start().then(
         () => undefined,
         (error: unknown) => error,

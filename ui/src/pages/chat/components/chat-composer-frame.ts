@@ -120,6 +120,8 @@ export function createChatComposerContext(
     state.composerDraftScope = { key: draftKey };
   }
   const draftScope = state.composerDraftScope;
+  const draftClient = props.gatewayClient;
+  const draftSessionId = props.currentSessionId;
   const composition = interaction.composition();
   const visibleDraft =
     state.composerComposing && composition?.key === draftKey
@@ -307,7 +309,12 @@ export function createChatComposerContext(
     submissionAction?: Event,
     followUpModeOverride?: ChatFollowUpMode,
   ): boolean => {
-    if (state.composerDraftScope !== draftScope || !canSubmitDraft(draft)) {
+    if (
+      state.composerDraftScope !== draftScope ||
+      props.gatewayClient !== draftClient ||
+      props.currentSessionId !== draftSessionId ||
+      !canSubmitDraft(draft)
+    ) {
       return false;
     }
     state.composerComposing = false;
@@ -509,32 +516,16 @@ export function createChatComposerContext(
   const devicePicker = voice.picker;
   const talkModelKey = devicePicker.apiKeyProviders.talk;
   const talkKey = talkModelKey ?? devicePicker.apiKeyProviders.speech;
-  const startRealtimeTalk = () => {
-    // Catalog help does not require history; only starting Talk does.
-    if (devicePicker.realtimeStatus !== "ready") {
-      if (talkKey && voice.configureApiKey) {
-        devicePicker.setTalkApiKeyNotice(true);
-      } else {
-        devicePicker.handleOpen();
-      }
-      return;
-    }
-    if (props.submitDisabledReason) {
-      return;
-    }
-    props.onToggleRealtimeTalk?.();
-  };
-  const handleVoicePrimaryAction = () => {
+  const toggleRealtimeTalk = () => {
     if (props.realtimeTalkActive) {
       props.onToggleRealtimeTalk?.();
-      return;
+    } else if (
+      devicePicker.realtimeStatus === "ready" &&
+      !props.submitDisabledReason &&
+      !voice.dictation.locksComposer
+    ) {
+      props.onToggleRealtimeTalk?.();
     }
-    const liveDraft = state.composerTextarea?.value ?? visibleDraft;
-    if (liveDraft.trim() || props.attachments?.length) {
-      submitDraft(liveDraft);
-      return;
-    }
-    startRealtimeTalk();
   };
   const selectedMicrophoneId = props.realtimeTalkInputDeviceId?.trim() ?? "";
   const microphonePicker: MicrophonePickerProps | undefined = props.onToggleRealtimeTalk
@@ -545,21 +536,14 @@ export function createChatComposerContext(
         selectedDeviceId: selectedMicrophoneId,
         voiceActive: Boolean(props.realtimeTalkActive),
         issue: devicePicker.issue,
-        holdToDictate: props.composerHoldToRecord !== false,
         realtimeStatus: devicePicker.realtimeStatus,
+        splitTalkMissing: devicePicker.splitTalkMissing,
         dictationStatus: devicePicker.dictationStatus,
         onOpen: devicePicker.handleOpen,
         onClose: devicePicker.handleClose,
         onSelect: (deviceId: string) => {
           patchSettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined });
           devicePicker.handleClose();
-        },
-        onHoldToDictateChange: (enabled: boolean) => {
-          if (props.onComposerHoldToRecordChange) {
-            props.onComposerHoldToRecordChange(enabled);
-          } else {
-            patchSettings({ composerHoldToRecord: enabled });
-          }
         },
         onOpenTalkSettings: devicePicker.canConfigure ? props.onOpenTalkSettings : undefined,
         onOpenDictationSettings: devicePicker.canConfigure
@@ -574,29 +558,16 @@ export function createChatComposerContext(
     state,
     devicePicker,
     interaction.setError,
-    visibleDraft.trim() || props.attachments?.length ? startRealtimeTalk : handleVoicePrimaryAction,
   );
-  const dictation =
-    props.onToggleRealtimeTalk && props.composerHoldToRecord !== false
-      ? voice.dictation
-      : undefined;
-  const handleDictationStart = (event?: PointerEvent) => {
+  const dictation = props.gatewayClient || props.onToggleRealtimeTalk ? voice.dictation : undefined;
+  const handleDictationStart = () => {
     interaction.setError(null);
     const target = state.composerTextarea;
-    // Both hold and direct/mobile starts capture the draft before its preview
-    // replaces the textarea value; otherwise committing appends the speech twice.
-    const selection = {
+    state.dictationSelection = {
       start: target?.selectionStart ?? visibleDraft.length,
       end: target?.selectionEnd ?? visibleDraft.length,
       value: target?.value ?? visibleDraft,
     };
-    // Stop also emits pointerdown; only a new gesture owns a draft snapshot.
-    if (!event || dictation?.handlePointerDown(event)) {
-      state.dictationSelection = selection;
-      if (event && target) {
-        target.readOnly = true;
-      }
-    }
   };
   const replacingRunningGoal =
     isBusy &&
@@ -630,7 +601,7 @@ export function createChatComposerContext(
     voiceVideoPending: props.realtimeTalkVideoPending,
     onAbort: props.onAbort,
     onSend: (event?: Event) => submitDraft(state.composerTextarea?.value ?? props.draft, event),
-    onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
+    onToggleVoice: props.onToggleRealtimeTalk ? toggleRealtimeTalk : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
     talkApiKeyNotice:
@@ -642,7 +613,7 @@ export function createChatComposerContext(
           }
         : undefined,
     readDictation: dictation ? () => dictation : undefined,
-    onDictationPointerDown: handleDictationStart,
+    talkReady: devicePicker.realtimeStatus === "ready",
     onDirectDictationStart: handleDictationStart,
     onPrimaryActionPointerDown: (event: PointerEvent) => {
       if (composerInput.composerInputHasFocus(state.composerTextarea)) {

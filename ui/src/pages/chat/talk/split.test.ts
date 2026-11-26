@@ -9,6 +9,7 @@ import type { GatewayEventFrame } from "../../../api/gateway.ts";
 import { createRuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
 import { sessionsResult } from "../../../lib/sessions/session-capability.test-support.ts";
 import { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
+import { VoiceRouteSession } from "../../../lib/voice-route.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -17,6 +18,7 @@ import { createStorageMock } from "../../../test-helpers/storage.ts";
 import { stopChatRealtimeTalk, type ChatRealtimeState } from "../chat-realtime.ts";
 import { createChatPageStateContext } from "../chat-state-context.test-support.ts";
 import { createPageState } from "../chat-state-page.ts";
+import { voiceCaptureLocksFixture } from "./input.test-support.ts";
 
 type AudioProcessor = {
   onaudioprocess: ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void) | null;
@@ -33,10 +35,12 @@ const config = (provider?: string) => ({
 });
 
 class FakeAudioContext {
+  private playback = false;
   readonly sampleRate = 8000;
   readonly destination = {};
   close = vi.fn(async () => undefined);
-  createMediaStreamSource() {
+  createMediaStreamSource(stream: { playback?: boolean }) {
+    this.playback = Boolean(stream.playback);
     return { connect() {}, disconnect() {} };
   }
   createGain() {
@@ -51,7 +55,7 @@ class FakeAudioContext {
     return {
       fftSize: 0,
       smoothingTimeConstant: 0,
-      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0),
+      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(this.playback ? 0.25 : 0),
       disconnect() {},
     };
   }
@@ -80,6 +84,7 @@ beforeEach(() => {
   vi.stubGlobal("AudioContext", FakeAudioContext);
   vi.stubGlobal("Audio", FakeAudio);
   vi.stubGlobal("navigator", {
+    locks: voiceCaptureLocksFixture(),
     mediaDevices: {
       getUserMedia: vi.fn(async () => {
         const track = Object.assign(new EventTarget(), { stop: vi.fn() });
@@ -267,6 +272,26 @@ it.each([
   "routes configured split Talk through STT, chat and Gateway speech (provider: $provider)",
   async ({ provider, leaf }) => {
     const h = harness(provider);
+    const stopPlaybackTrack = vi.fn();
+    if (provider) {
+      class FakePlaybackStream {
+        readonly playback = true;
+
+        getTracks() {
+          return [{ stop: stopPlaybackTrack }];
+        }
+      }
+      vi.stubGlobal("MediaStream", FakePlaybackStream);
+      const OriginalAudio = FakeAudio;
+      vi.stubGlobal(
+        "Audio",
+        class extends OriginalAudio {
+          captureStream() {
+            return new FakePlaybackStream();
+          }
+        },
+      );
+    }
     h.state.chatDisplayedLeafEntryId = leaf;
     await h.state.toggleRealtimeTalk();
     expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("listening");
@@ -289,9 +314,18 @@ it.each([
       text: "The local model answered.",
     });
     expect(audios).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("speaking");
+    if (provider) {
+      expect(h.state.realtimeTalk.snapshot.realtimeTalkInputLevel.value).toBeGreaterThan(0);
+    }
     expect(tracks).toHaveLength(1);
     expectDefined(audios[0], "speech playback").dispatchEvent(new Event("ended"));
     await h.nextCapture.promise;
+    expect(h.state.realtimeTalk.snapshot.realtimeTalkInputLevel.value).toBe(0);
+    if (provider) {
+      expect(stopPlaybackTrack).toHaveBeenCalledOnce();
+    }
     expect(h.state.realtimeTalk.snapshot.realtimeTalkConversationState.entries).toEqual([]);
     await h.state.toggleRealtimeTalk();
   },
@@ -385,6 +419,49 @@ it.each(["Stop", "cleanup"])(
       expect(aborts).toEqual([]);
     }
     expect(h.called("tts.speak")).toBe(false);
+  },
+);
+
+it.each(["session replacement", "connection replacement", "route"] as const)(
+  "does not send a delayed split transcript after %s",
+  async (change) => {
+    const h = harness();
+    h.state.currentSessionId = "first-incarnation";
+    h.state.chatMessage = "Keep the typed draft.";
+    const draining = createDeferred();
+    const final = createDeferred();
+    h.intercept("talk.session.close", async (next) => {
+      draining.resolve();
+      await final.promise;
+      return next();
+    });
+    try {
+      await h.state.toggleRealtimeTalk();
+      h.utterance();
+      await draining.promise;
+      if (change === "session replacement") {
+        h.state.currentSessionId = "second-incarnation";
+      } else if (change === "connection replacement") {
+        h.state.client = createTestGatewayClient(h.request);
+      } else {
+        h.state.sessionKey = "agent:local:replacement";
+      }
+      final.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(h.called("chat.send")).toBe(false);
+      expect(h.called("tts.speak")).toBe(false);
+      expect(h.state.chatMessage).toBe("Keep the typed draft.");
+      expect(h.state.realtimeTalk.snapshot).toMatchObject({
+        realtimeTalkSession: null,
+        realtimeTalkActive: false,
+        realtimeTalkStatus: "idle",
+      });
+      expect(tracks).toHaveLength(1);
+      expect(tracks[0]?.stop).toHaveBeenCalledOnce();
+    } finally {
+      final.resolve();
+    }
   },
 );
 
@@ -559,7 +636,91 @@ it("surfaces a rejected chat admission instead of waiting forever for a model re
   expect(h.called("chat.send")).toBe(true);
   expect(h.called("tts.speak")).toBe(false);
   expect(tracks).toHaveLength(1);
+  expect(tracks[0]?.stop).toHaveBeenCalledOnce();
+  const dictation = new VoiceRouteSession({
+    route: "dictation",
+    destination: { kind: "draft", key: sessionKey },
+    owner: {},
+  });
+  try {
+    await expect(dictation.acquireCapture()).resolves.toBeUndefined();
+  } finally {
+    dictation.cancel();
+  }
 });
+
+it.each(["transcription", "speech"] as const)(
+  "releases split Talk after a %s provider failure without changing routes",
+  async (phase) => {
+    const h = harness("openai");
+    const message = `Synthetic ${phase} provider failure`;
+    const failed = createDeferred();
+    h.state.chatMessage = "Keep the typed draft.";
+    onTestFinished(
+      h.state.realtimeTalk.subscribe(() => {
+        if (h.state.realtimeTalk.snapshot.realtimeTalkStatus === "error") {
+          failed.resolve();
+        }
+      }),
+    );
+    h.intercept("talk.speak", async () => {
+      throw new Error(message);
+    });
+    await h.state.toggleRealtimeTalk();
+    const route = expectDefined(h.state.realtimeTalk.snapshot.voiceRoute, "Talk route");
+    if (phase === "transcription") {
+      h.emit("talk.event", { transcriptionSessionId: "capture-1", type: "error", message });
+    } else {
+      const sent = observeSend(h);
+      h.utterance();
+      await sent;
+      h.answer("This answer must not be played.");
+    }
+    await failed.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    const requestsAfterFailure = h.request.mock.calls.length;
+    h.emit("talk.event", {
+      transcriptionSessionId: "capture-1",
+      type: "transcript",
+      text: "Late speech must not start another turn.",
+      final: true,
+    });
+    h.utterance();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.request).toHaveBeenCalledTimes(requestsAfterFailure);
+    expect(h.state.realtimeTalk.snapshot).toMatchObject({
+      realtimeTalkStatus: "error",
+      realtimeTalkDetail: message,
+    });
+    expect(h.state.realtimeTalk.snapshot.voiceRoute).toBe(route);
+    expect(route.identity.route).toBe("talk");
+    expect(h.state.chatMessage).toBe("Keep the typed draft.");
+    expect(tracks).toHaveLength(1);
+    expect(tracks[0]?.stop).toHaveBeenCalledOnce();
+    const calls = h.request.mock.calls.map(([method]) => method);
+    expect(calls.filter((method) => method === "talk.session.create")).toHaveLength(1);
+    expect(calls.filter((method) => method === "talk.session.close")).toHaveLength(1);
+    expect(calls.filter((method) => method === "chat.send")).toHaveLength(phase === "speech" ? 1 : 0);
+    expect(calls.filter((method) => method === "talk.speak")).toHaveLength(phase === "speech" ? 1 : 0);
+    expect(
+      calls.filter((method) =>
+        ["agent", "sessions.dispatch", "tools.invoke", "talk.client.create", "tts.speak"].includes(
+          method,
+        ),
+      ),
+    ).toEqual([]);
+    const dictation = new VoiceRouteSession({
+      route: "dictation",
+      destination: { kind: "draft", key: sessionKey },
+      owner: {},
+    });
+    try {
+      await expect(dictation.acquireCapture()).resolves.toBeUndefined();
+    } finally {
+      dictation.cancel();
+    }
+  },
+);
 
 it("keeps split Talk listening after a successfully completed empty utterance", async () => {
   const h = harness();

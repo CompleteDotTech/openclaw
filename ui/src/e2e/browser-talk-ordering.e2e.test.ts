@@ -17,7 +17,7 @@ async function startTalk(page: Page, voiceSessionId: string) {
   await installOpenAiTalkFixture(page);
   await page.goto(`${suite.server.baseUrl}chat`);
   await waitForTalkReady(page);
-  await page.getByRole("button", { name: "Start voice input" }).click();
+  await page.getByRole("button", { name: "Talk", exact: true }).click();
   await gateway.waitForRequest("talk.client.create");
   await expect
     .poll(() =>
@@ -114,7 +114,7 @@ suite.define(() => {
         await expect
           .poll(() => rows.allTextContents())
           .toEqual(["Please say glacier.", "Glacier.", "Please say lantern.", "Lantern."]);
-        await page.getByRole("button", { name: "Stop voice input" }).click();
+        await page.getByRole("button", { name: "Stop Talk", exact: true }).click();
         await gateway.waitForRequest("talk.client.close");
         expect(await gateway.getRequests("talk.client.close")).toHaveLength(1);
       },

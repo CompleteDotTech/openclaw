@@ -64,7 +64,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/appearance`);
         await page.locator("[data-settings-microphone]").selectOption("usb");
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page.getByRole("button", { name: "Tap to talk", exact: true }).click();
+        await page.getByRole("button", { name: "Talk", exact: true }).click();
         const alert = page.locator(".agent-chat__composer-alert[role=alert]");
         await expect
           .poll(() => alert.textContent())
@@ -112,7 +112,7 @@ suite.define(() => {
           expect(await requests()).toEqual([{ audio: selectedAudio }, { audio: defaultAudio }]);
           await expect.poll(() => recovery.count()).toBe(0);
           if (decision === "accept") {
-            await page.getByRole("button", { name: "Stop voice input" }).click();
+            await page.getByRole("button", { name: "Stop Talk", exact: true }).click();
             await gateway.waitForRequest("talk.client.close");
           }
         }
