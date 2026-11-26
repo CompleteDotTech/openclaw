@@ -23,6 +23,7 @@ export type ChatRealtimeState = {
   connected: boolean;
   settings: UiSettings;
   sessionKey: string;
+  currentSessionId?: string | null;
   chatMessages: unknown[];
   lastError?: string | null;
   chatError?: string | null;
@@ -57,6 +58,7 @@ type ChatRealtimeSnapshot = {
 
 /** Synchronous call/device authority; projections observe complete state transitions. */
 class ChatRealtimeOwner {
+  conversationScope: object = {};
   private value: ChatRealtimeSnapshot = {
     voiceRoute: null,
     realtimeTalkActive: false,
@@ -138,6 +140,13 @@ export function dismissRealtimeTalkError(state: ChatRealtimeState) {
   stopChatRealtimeTalk(state);
 }
 
+export function retireChatRealtimeConversation(state: ChatRealtimeState) {
+  // Ordinary Stop drains accepted transcripts. A replaced conversation revokes
+  // even earlier detached drains before its replacement history arrives.
+  state.realtimeTalk.conversationScope = {};
+  stopChatRealtimeTalk(state);
+}
+
 export function attachChatRealtimeActions(
   state: ChatRealtimeState,
   canStart: () => boolean = () => true,
@@ -172,7 +181,7 @@ export function attachChatRealtimeActions(
     const inputDeviceId = useSystemDefault
       ? undefined
       : talkSettings.realtimeTalkInputDeviceId?.trim() || undefined;
-    const { client, sessionKey } = state;
+    const { client, sessionKey, currentSessionId } = state;
     const voiceController = voiceChange
       ? state.realtimeTalk.snapshot.realtimeTalkVoiceController
       : null;
@@ -268,6 +277,7 @@ export function attachChatRealtimeActions(
         state.client !== client ||
         !state.connected ||
         state.sessionKey !== sessionKey ||
+        state.currentSessionId !== currentSessionId ||
         !canStart()
       ) {
         playback.stop();
@@ -287,7 +297,22 @@ export function attachChatRealtimeActions(
         split = {
           silenceTimeoutMs: talk.silenceTimeoutMs ?? 900,
           speechMethod: talk.provider || talk.resolved?.provider ? "talk.speak" : "tts.speak",
-          sendMessage,
+          sendMessage: (message, runId) => {
+            voiceRoute.requireRoute("talk");
+            if (
+              state.client !== client ||
+              state.sessionKey !== sessionKey ||
+              state.currentSessionId !== currentSessionId ||
+              state.realtimeTalk.snapshot.voiceRoute !== voiceRoute ||
+              !state.connected
+            ) {
+              if (state.realtimeTalk.snapshot.voiceRoute === voiceRoute) {
+                stopChatRealtimeTalk(state);
+              }
+              throw new DOMException("The Talk destination changed.", "AbortError");
+            }
+            return sendMessage(message, runId);
+          },
           playback,
           maxTextLength,
         };
@@ -310,6 +335,7 @@ export function attachChatRealtimeActions(
     return runtime.startChatRealtimeSession(state, {
       client,
       sessionKey,
+      currentSessionId,
       voiceController,
       useSystemDefault,
       voiceChange,
