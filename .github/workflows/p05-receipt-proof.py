@@ -13,6 +13,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 
 ROOT = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
@@ -294,32 +295,97 @@ def identity():
     )
 
 
-def reports_from_console(text):
-    """Read native JSON reporter output in memory; persist only sanitized projections."""
-    reports = []
-    decoder = json.JSONDecoder()
-    for match in re.finditer(r"(?m)^[ \t]*\{", text):
-        try:
-            value, _ = decoder.raw_decode(text[match.start():].lstrip())
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict) and {"testResults", "numTotalTests", "success"} <= value.keys():
-            reports.append(value)
-    require(reports, "native_test_report_missing")
-    return reports
+def run_native_report(label, command, cwd):
+    """Drain a native JSON report through a private FIFO without raw disk storage."""
+    fifo = PRIVATE / (label + "-" + uuid.uuid4().hex + ".json.pipe")
+    os.mkfifo(fifo, 0o600)
+    read_fd = None
+    keeper_fd = None
+    reader = None
+    stopping = threading.Event()
+    reader_closed = threading.Event()
+    report = bytearray()
+    errors = []
+    code = None
+    try:
+        read_fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        # Keep EOF pending until the canonical invocation finishes, including
+        # the case where no reporter ever opens the FIFO.
+        keeper_fd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+
+        def drain():
+            try:
+                while not stopping.is_set():
+                    if not select.select([read_fd], [], [], 0.2)[0]:
+                        continue
+                    chunk = os.read(read_fd, 64 * 1024)
+                    if not chunk:
+                        return
+                    if len(report) + len(chunk) > 32 * 1024 * 1024:
+                        if "report_capture_limit_exceeded" not in errors:
+                            errors.append("report_capture_limit_exceeded")
+                        # Continue draining so an oversized native report cannot
+                        # strand its writer; retain only the bounded prefix.
+                    elif not errors:
+                        report.extend(chunk)
+            except Exception:
+                errors.append("fifo_read_failed")
+                # A failed drain must release its read endpoint so the native
+                # writer gets EPIPE instead of blocking on a full unread FIFO.
+                try:
+                    os.close(read_fd)
+                except OSError:
+                    pass
+                reader_closed.set()
+
+        reader = threading.Thread(target=drain, daemon=True)
+        reader.start()
+        code, _ = run_command(
+            label, [*command, "--outputFile=" + str(fifo)], cwd=cwd,
+        )
+    finally:
+        if keeper_fd is not None:
+            os.close(keeper_fd)
+        if reader is not None:
+            reader.join(timeout=5)
+            if reader.is_alive():
+                stopping.set()
+                reader.join(timeout=1)
+                errors.append("fifo_writer_did_not_close")
+        joined = reader is None or not reader.is_alive()
+        if read_fd is not None and not reader_closed.is_set():
+            os.close(read_fd)
+        fifo.unlink(missing_ok=True)
+        emit(label + "-report-transport", {
+            "transport": "task-private 0600 FIFO",
+            "raw_report_written_to_disk": False,
+            "canonical_exit_code": code,
+            "reader_joined": joined,
+            "captured_bytes": len(report),
+            "reader_errors": errors,
+            "fifo_removed": not fifo.exists(),
+        })
+        require(joined and not errors, "native_report_transport_failed")
+    require(report, "native_test_report_missing")
+    value = json.loads(report)
+    require(
+        isinstance(value, dict) and {"testResults", "numTotalTests", "success"} <= value.keys(),
+        "native_test_report_invalid",
+    )
+    return code, [value]
 
 
 def run_tests(label, files, expected=None, cwd=ROOT, base_red=False):
     require(len(files) == 1, "report_capture_requires_one_canonical_file")
     # Vitest 5 defaults JSON to disk. One file keeps the canonical wrapper on
     # one invocation, avoiding its multi-invocation staging directory. Native
-    # output goes directly to this process's pipe and is redacted before storage.
-    command = ["pnpm", "test", *files, "--maxWorkers=1", "--reporter=json", "--outputFile=/dev/stdout"]
+    # output goes to a task-private FIFO and is redacted before storage. Reopening
+    # /dev/stdout is unsupported when the canonical child stdout is a socket.
+    command = ["pnpm", "test", *files, "--maxWorkers=1", "--reporter=json"]
     if base_red:
         # Native filtering uses fullTestName with " > "; JSON fullName uses " ".
         command += ["--testNamePattern", "^" + re.escape(BASE_RED_FILTER_NAME) + "$"]
-    code, text = run_command(label, command, cwd=cwd, capture=True)
-    reports = reports_from_console(text)
+    code, reports = run_native_report(label, command, cwd)
     observed = []
     assertions = []
     for report in reports:
@@ -331,9 +397,19 @@ def run_tests(label, files, expected=None, cwd=ROOT, base_red=False):
             assertions.extend((name, test) for test in result["assertionResults"])
     require(sorted(observed) == sorted(files), "test_file_inventory_mismatch")
     inventory = [
-        {"file": name, "name": sanitize(test["fullName"]), "status": test["status"]}
+        {
+            "file": name, "name": sanitize(test["fullName"]), "status": test["status"],
+            "failure_messages": [sanitize(message) for message in (test.get("failureMessages") or [])],
+        }
         for name, test in assertions
     ]
+    emit(label + "-observed-cases", {
+        "canonical_exit_code": code,
+        "passed": sum(test["status"] == "passed" for _, test in assertions),
+        "failed": sum(test["status"] == "failed" for _, test in assertions),
+        "skipped": sum(test["status"] in ("pending", "skipped") for _, test in assertions),
+        "tests": inventory,
+    })
     if base_red:
         selected = [(name, test) for name, test in assertions if test["fullName"] == BASE_RED_NAME]
         require(code == 1 and len(selected) == 1, "base_did_not_fail_one_selected_case")
