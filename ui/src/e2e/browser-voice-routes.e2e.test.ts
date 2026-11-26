@@ -5,9 +5,10 @@ import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import type { MockGatewayControls } from "../test-helpers/control-ui-e2e-contract.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { rasterizeProofAnnotations } from "../test-helpers/proof-annotations.ts";
 import {
+  dispatchOpenAiTalkEvent,
   installOpenAiTalkFixture,
   installTalkBrowserFixtures,
   TALK_READY_HISTORY_MESSAGE,
@@ -328,6 +329,18 @@ suite.define(() => {
         await open();
         await textarea.fill("Keep my text.");
         const dictate = page.getByRole("button", { name: "Dictation", exact: true });
+        // A held press that leaves the control must not select another route.
+        await page.clock.install();
+        await dictate.hover();
+        await page.mouse.down();
+        await page.clock.runFor(1_001);
+        expect(await gateway.getRequests("talk.session.create")).toHaveLength(0);
+        expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
+        await page.mouse.move(1, 1);
+        await page.mouse.up();
+        await page.clock.runFor(1_001);
+        expect(await gateway.getRequests("talk.session.create")).toHaveLength(0);
+        expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
         // Cancel a press before click: there is no alternate hold-to-Talk entry.
         await dictate.dispatchEvent("pointerdown", {
           pointerId: 1,
@@ -409,6 +422,8 @@ suite.define(() => {
       const talk = page.getByRole("button", { name: "Talk", exact: true });
       expect(await talk.isDisabled()).toBe(true);
       expect(await talk.getAttribute("aria-description")).toContain("Stop and review dictation");
+      await talk.click({ force: true });
+      await talk.dblclick({ force: true });
       expect(await gateway.getRequests("talk.session.create")).toHaveLength(1);
       await emit(imperative);
       await expect.poll(() => textarea.inputValue()).toBe(`Existing draft. ${imperative}`);
@@ -429,6 +444,11 @@ suite.define(() => {
       await expect
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
         .toBeGreaterThan(0);
+      expect(await dictate.isDisabled()).toBe(true);
+      await dictate.click({ force: true });
+      await dictate.dblclick({ force: true });
+      expect(await gateway.getRequests("talk.session.create")).toHaveLength(1);
+      expect(await gateway.getRequests("talk.client.create")).toHaveLength(1);
       await emit(imperative, true);
       await close();
       await gateway.resolveDeferred("talk.session.close");
@@ -444,6 +464,72 @@ suite.define(() => {
       await gateway.waitForRequest("talk.client.close");
       expect(await textarea.inputValue()).toBe(`Typed during finalization. ${imperative}`);
     }));
+
+  it.each(["Dictation", "Talk"] as const)(
+    "keeps %s idle after Gateway reconnect without replaying capture",
+    (route) =>
+      suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
+        const { gateway, textarea, open, admit, emit, readyTalk } = await installVoice(
+          page,
+          `reconnect-${route}`,
+        );
+        await open();
+        const originalHistory = await historyText(page);
+        await textarea.fill("Keep my typed draft.");
+        await page.getByRole("button", { name: route, exact: true }).click();
+        const expectedDraft =
+          route === "Dictation" ? "Keep my typed draft. Retained speech." : "Keep my typed draft.";
+        if (route === "Dictation") {
+          await admit();
+          await emit("Retained speech.");
+          await expect.poll(() => textarea.inputValue()).toBe(expectedDraft);
+        } else {
+          await gateway.waitForRequest("talk.client.create");
+          await readyTalk();
+        }
+        const audioStates = () =>
+          page.evaluate(() =>
+            (
+              window as Window & { openclawVideoTalkTracks?: MediaStreamTrack[] }
+            ).openclawVideoTalkTracks
+              ?.filter((track) => track.kind === "audio")
+              .map((track) => track.readyState),
+          );
+        await expect.poll(audioStates).toEqual(["live"]);
+        await reconnectMockGateway(page, gateway);
+        await waitForTalkReady(page);
+        await expect.poll(audioStates).toEqual(["ended"]);
+        await expect
+          .poll(() =>
+            page.evaluate(async () =>
+              (await navigator.locks.query()).held?.some(
+                (lock) => lock.name === "openclaw-voice-capture",
+              ),
+            ),
+          )
+          .toBe(false);
+        expect(await page.getByRole("button", { name: "Stop Talk", exact: true }).count()).toBe(0);
+        expect(await page.getByRole("button", { name: "Cancel dictation", exact: true }).count()).toBe(
+          0,
+        );
+        if (route === "Dictation") {
+          await emit("Late old speech must stay discarded.", true);
+        } else {
+          await dispatchOpenAiTalkEvent(page, {
+            type: "conversation.item.input_audio_transcription.completed",
+            item_id: "late-reconnect-item",
+            transcript: "Late old speech must stay discarded.",
+          });
+        }
+        await expect.poll(() => textarea.inputValue()).toBe(expectedDraft);
+        expect(await historyText(page)).toEqual(originalHistory);
+        await expectNoAgentWrites(gateway);
+        expect(await gateway.getRequests("talk.session.create")).toHaveLength(
+          route === "Dictation" ? 1 : 0,
+        );
+        expect(await gateway.getRequests("talk.client.create")).toHaveLength(route === "Talk" ? 1 : 0);
+      }),
+  );
 
   it("uses real same-origin Web Locks across windows without replaying a refused capture", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page, context }) => {
