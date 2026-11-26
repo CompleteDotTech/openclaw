@@ -12,6 +12,7 @@ import {
   attachChatRealtimeActions,
   createInitialChatRealtimeState,
   dismissRealtimeTalkError,
+  retireChatRealtimeConversation,
   stopChatRealtimeTalk,
   type ChatRealtimeState,
 } from "./chat-realtime.ts";
@@ -27,6 +28,7 @@ type InspectableRealtimeTalkSession = {
     inputDeviceId?: string;
     videoDeviceId?: string;
     voiceRoute?: VoiceRouteSession;
+    isConversationCurrent: () => boolean;
   };
 };
 
@@ -247,6 +249,40 @@ it.each([false, true])(
   },
 );
 
+it("ignores an old voice-change event after the same-key conversation is replaced", async () => {
+  const listeners = new Set<(event: GatewayEventFrame) => void>();
+  vi.mocked(state.client!.addEventListener).mockImplementation((listener) => {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  });
+  vi.spyOn(RealtimeTalkSession.prototype, "getVoiceSessionId").mockReturnValue("voice-original");
+  vi.spyOn(RealtimeTalkSession.prototype, "getTransport").mockReturnValue("webrtc");
+  state.currentSessionId = "first-incarnation";
+  await start();
+  const original = read().realtimeTalkSession;
+  state.currentSessionId = "second-incarnation";
+
+  for (const listener of listeners) {
+    listener({
+      type: "event",
+      event: "talk.voice.change",
+      payload: {
+        sessionKey: "main",
+        voiceSessionId: "voice-original",
+        voice: "spruce",
+        changeId: "old-change",
+        phase: "requested",
+      },
+    });
+  }
+
+  expect(read().realtimeTalkSession).toBe(original);
+  expect(RealtimeTalkSession.prototype.stop).not.toHaveBeenCalled();
+  expect(startSpy).toHaveBeenCalledOnce();
+});
+
 it.each([false, true])("launches with persisted devices (blocked storage: %s)", async (blocked) => {
   if (blocked) {
     vi.spyOn(localStorage, "setItem").mockImplementation(() => {
@@ -280,33 +316,41 @@ it("requires explicit one-shot consent and preserves the saved microphone for la
   expect(inspectSession().localOptions.inputDeviceId).toBe("usb-mic");
 });
 
-it.each(["dismiss", "route", "disconnect", "reconnect", "replacement"] as const)(
-  "revokes retained microphone recovery after %s",
-  async (event) => {
-    startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());
-    await state.toggleRealtimeTalk();
-    const retry = read().realtimeTalkUseSystemDefault!;
-    if (event === "dismiss") {
-      dismissRealtimeTalkError(state);
-    } else if (event === "route") {
-      state.sessionKey = "another-session";
-    } else if (event === "disconnect") {
-      state.connected = false;
-    } else if (event === "reconnect") {
-      stopChatRealtimeTalk(state);
-      state.connected = true;
-    } else {
-      await state.toggleRealtimeTalk();
-    }
-    const calls = startSpy.mock.calls.length;
-    await retry();
-    // A rejected stale activation stays consumed even if the context returns.
+it.each([
+  "dismiss",
+  "route",
+  "session replacement",
+  "disconnect",
+  "reconnect",
+  "replacement",
+] as const)("revokes retained microphone recovery after %s", async (event) => {
+  state.currentSessionId = "first-incarnation";
+  startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());
+  await state.toggleRealtimeTalk();
+  const retry = read().realtimeTalkUseSystemDefault!;
+  if (event === "dismiss") {
+    dismissRealtimeTalkError(state);
+  } else if (event === "route") {
+    state.sessionKey = "another-session";
+  } else if (event === "session replacement") {
+    state.currentSessionId = "second-incarnation";
+  } else if (event === "disconnect") {
+    state.connected = false;
+  } else if (event === "reconnect") {
+    stopChatRealtimeTalk(state);
     state.connected = true;
-    state.sessionKey = "main";
-    await retry();
-    expect(startSpy).toHaveBeenCalledTimes(calls);
-  },
-);
+  } else {
+    await state.toggleRealtimeTalk();
+  }
+  const calls = startSpy.mock.calls.length;
+  await retry();
+  // A rejected stale activation stays consumed even if the context returns.
+  state.connected = true;
+  state.sessionKey = "main";
+  state.currentSessionId = "first-incarnation";
+  await retry();
+  expect(startSpy).toHaveBeenCalledTimes(calls);
+});
 
 it.each(["failed", "cancelled", "succeeded"] as const)(
   "does not overwrite a newer preference when explicit recovery %s",
@@ -713,6 +757,41 @@ it("retires callback ownership before stopping a session", async () => {
   });
 });
 
+it("retires the call on a callback after the same-key conversation is replaced", async () => {
+  state.currentSessionId = "first-incarnation";
+  const { callbacks } = await start();
+  callbacks.onStatus?.("listening");
+  state.currentSessionId = "second-incarnation";
+  callbacks.onTranscript?.({ role: "user", text: "Stale conversation text", final: true });
+  callbacks.onStatus?.("error", "Stale provider error");
+  callbacks.onInputLevel?.(0.9);
+  callbacks.onVideoCapability?.(true);
+  expect(entries()).toEqual([]);
+  expect(read()).toMatchObject({
+    realtimeTalkSession: null,
+    realtimeTalkActive: false,
+    realtimeTalkStatus: "idle",
+    realtimeTalkDetail: null,
+    realtimeTalkVideoCapable: false,
+  });
+  expect(RealtimeTalkSession.prototype.stop).toHaveBeenCalledOnce();
+  expect(read().realtimeTalkInputLevel.value).toBe(0);
+});
+
+it("retires earlier transcript drains before replacement history supplies a new session id", async () => {
+  state.currentSessionId = "first-incarnation";
+  const original = (await start()).localOptions.isConversationCurrent;
+  stopChatRealtimeTalk(state);
+  expect(original()).toBe(true);
+
+  retireChatRealtimeConversation(state);
+  expect(state.currentSessionId).toBe("first-incarnation");
+  expect(original()).toBe(false);
+  const replacement = (await start()).localOptions.isConversationCurrent;
+  expect(replacement()).toBe(true);
+  expect(original()).toBe(false);
+});
+
 it("does not dispatch a stopped Talk activation when browser capture admission arrives late", async () => {
   const admission = createDeferred<LockGrantedCallback<unknown>>();
   const complete = createDeferred();
@@ -734,9 +813,17 @@ it("does not dispatch a stopped Talk activation when browser capture admission a
   }
 });
 
-it.each(["stop", "route", "disconnect", "superseded", "replacement"] as const)(
+it.each([
+  "stop",
+  "route",
+  "session replacement",
+  "disconnect",
+  "superseded",
+  "replacement",
+] as const)(
   "prepares gesture audio synchronously and admits only the current startup after %s",
   async (change) => {
+    state.currentSessionId = "first-incarnation";
     type Runtime = typeof import("./talk/chat-actions-runtime.ts");
     const loaded = createDeferred<Runtime>();
     const loading = createDeferred();
@@ -759,6 +846,8 @@ it.each(["stop", "route", "disconnect", "superseded", "replacement"] as const)(
         }
       } else if (change === "route") {
         state.sessionKey = "another-session";
+      } else if (change === "session replacement") {
+        state.currentSessionId = "second-incarnation";
       } else if (change === "disconnect") {
         state.connected = false;
       } else {

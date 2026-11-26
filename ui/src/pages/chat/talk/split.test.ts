@@ -422,6 +422,49 @@ it.each(["Stop", "cleanup"])(
   },
 );
 
+it.each(["session replacement", "connection replacement", "route"] as const)(
+  "does not send a delayed split transcript after %s",
+  async (change) => {
+    const h = harness();
+    h.state.currentSessionId = "first-incarnation";
+    h.state.chatMessage = "Keep the typed draft.";
+    const draining = createDeferred();
+    const final = createDeferred();
+    h.intercept("talk.session.close", async (next) => {
+      draining.resolve();
+      await final.promise;
+      return next();
+    });
+    try {
+      await h.state.toggleRealtimeTalk();
+      h.utterance();
+      await draining.promise;
+      if (change === "session replacement") {
+        h.state.currentSessionId = "second-incarnation";
+      } else if (change === "connection replacement") {
+        h.state.client = createTestGatewayClient(h.request);
+      } else {
+        h.state.sessionKey = "agent:local:replacement";
+      }
+      final.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(h.called("chat.send")).toBe(false);
+      expect(h.called("tts.speak")).toBe(false);
+      expect(h.state.chatMessage).toBe("Keep the typed draft.");
+      expect(h.state.realtimeTalk.snapshot).toMatchObject({
+        realtimeTalkSession: null,
+        realtimeTalkActive: false,
+        realtimeTalkStatus: "idle",
+      });
+      expect(tracks).toHaveLength(1);
+      expect(tracks[0]?.stop).toHaveBeenCalledOnce();
+    } finally {
+      final.resolve();
+    }
+  },
+);
+
 it.each(["started", "text before", "empty before", "text after"])(
   "waits for the model answer across ACK/final ordering (%s)",
   async (sequence) => {

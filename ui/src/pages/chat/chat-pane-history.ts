@@ -47,10 +47,12 @@ import {
   preparePaneSessionHandoff,
 } from "./chat-pane-shared.ts";
 import { ChatPaneSnapshotHydration } from "./chat-pane-snapshot-hydration.ts";
+import { retireChatRealtimeConversation } from "./chat-realtime.ts";
 import { TranscriptHistoryInput } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { readTranscriptViewport } from "./components/chat-transcript-scroll-events.ts";
 import { persistChatComposerState } from "./composer-draft-storage.ts";
 import { captureChatSessionScrollPosition, saveChatSessionScrollPosition } from "./scroll.ts";
@@ -126,6 +128,10 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     const state = this.state;
     if (!state) {
       return;
+    }
+    if (options?.replaceSession) {
+      getChatComposerState(this.presentationId).dictation?.cancel();
+      retireChatRealtimeConversation(state);
     }
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
     if (catalogKey) {
