@@ -1,0 +1,124 @@
+# Evidence-only scripted audio proof for OpenClaw dictation PRs.
+# OpenAI text-to-speech turns each scenario phrase into a WAV, and a PR-specific
+# Playwright harness plays it to Chromium as a fake microphone while the PR's own
+# Gateway uses live OpenAI transcription. Every run hears exactly the same words.
+#
+# Runs only on pushes to this branch. To prove a PR, add proof/<pr>/scenario.json
+# and its harness script, then point proof/run.json at the PR, its exact head SHA,
+# that directory and the script name.
+name: Scripted audio dictation proof
+'on':
+  push:
+    branches:
+    - ct-scripted-audio-proof
+    paths:
+    - proof/**
+    - .github/workflows/scripted-audio-proof.yml
+permissions:
+  contents: read
+concurrency:
+  group: scripted-audio-proof-${{ github.ref }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash --noprofile --norc -e -o pipefail {0}
+jobs:
+  proof:
+    name: Scripted audio proof
+    if: github.repository == 'CompleteDotTech/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CI: 'true'
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      PNPM_CONFIG_FROZEN_LOCKFILE: 'true'
+    steps:
+    - name: Check out the harness branch
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        path: harness
+        persist-credentials: 'false'
+    - name: Read the run config
+      id: cfg
+      run: |
+        cfg=harness/proof/run.json
+        pr=$(jq -r '.pr' "$cfg"); sha=$(jq -r '.sha' "$cfg"); dir=$(jq -r '.dir' "$cfg"); script=$(jq -r '.script' "$cfg")
+        [[ "$pr" =~ ^[0-9]+$ ]] || { echo "run.json: pr must be a number"; exit 1; }
+        [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "run.json: sha must be a full 40-character commit SHA"; exit 1; }
+        [[ "$dir" =~ ^proof/[A-Za-z0-9._-]+$ ]] || { echo "run.json: dir must be proof/<name>"; exit 1; }
+        [[ "$script" =~ ^[A-Za-z0-9._-]+\.m?js$ ]] || { echo "run.json: bad script name"; exit 1; }
+        test -f "harness/$dir/scenario.json" && test -f "harness/$dir/$script"
+        { echo "pr=$pr"; echo "sha=$sha"; echo "dir=$dir"; echo "script=$script"; } >> "$GITHUB_OUTPUT"
+    - name: Check out the exact PR head
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: CompleteDotTech/openclaw
+        ref: ${{ steps.cfg.outputs.sha }}
+        path: pr
+        fetch-depth: '1'
+        persist-credentials: 'false'
+    - name: Verify and record the source under test
+      env:
+        PR: ${{ steps.cfg.outputs.pr }}
+        SHA: ${{ steps.cfg.outputs.sha }}
+        DIR: ${{ steps.cfg.outputs.dir }}
+      run: |
+        test "$(git -C pr rev-parse HEAD)" = "$SHA"
+        jq -n --arg pr "$PR" --arg sha "$SHA" --arg tree "$(git -C pr rev-parse 'HEAD^{tree}')" \
+          --arg harness "$(git -C harness rev-parse HEAD)" --arg run "$GITHUB_RUN_ID" \
+          '{pr: $pr, head: $sha, tree: $tree, harness_commit: $harness, run_id: $run}' | tee "harness/$DIR/source.json"
+    - name: Set up Node
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 24.22.1
+    - name: Install and build the PR (no secrets)
+      working-directory: pr
+      run: |
+        corepack enable pnpm
+        npm install --global bun@1.4.4
+        node --version; pnpm --version
+        pnpm install --frozen-lockfile
+        NODE_OPTIONS=--max-old-space-size=8192 pnpm build:ci-artifacts
+        pnpm --dir ui exec playwright install --with-deps chromium
+    - name: Turn off swap before the secret is used
+      run: |
+        sudo swapoff -a
+        test "$(wc -l < /proc/swaps)" -eq 1
+    - name: Generate the scripted audio clips
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        DIR: ${{ steps.cfg.outputs.dir }}
+      run: |
+        node harness/proof/make-clips.mjs "harness/$DIR/scenario.json"
+        cat "harness/$DIR/clips/script.md" >> "$GITHUB_STEP_SUMMARY"
+    - name: Run the browser proof
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        DIR: ${{ steps.cfg.outputs.dir }}
+        SCRIPT: ${{ steps.cfg.outputs.script }}
+      run: |
+        ulimit -c 0
+        node "harness/$DIR/$SCRIPT" "$GITHUB_WORKSPACE/pr"
+    - name: Summarize the cases
+      if: always()
+      env:
+        DIR: ${{ steps.cfg.outputs.dir }}
+      run: |
+        shopt -s nullglob
+        {
+          echo "## Case results"
+          for f in harness/"$DIR"/results/run-*/*/case.json; do
+            echo "- $(basename "$(dirname "$f")"): $(jq -r '.status + (if .detail then " (" + .detail + ")" else "" end)' "$f")"
+          done
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: Upload the proof bundle
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: scripted-audio-proof-pr${{ steps.cfg.outputs.pr }}-${{ github.run_id }}
+        path: |
+          harness/${{ steps.cfg.outputs.dir }}/source.json
+          harness/${{ steps.cfg.outputs.dir }}/clips/
+          harness/${{ steps.cfg.outputs.dir }}/results/
+        retention-days: 30
+        if-no-files-found: warn
