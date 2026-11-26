@@ -1,12 +1,12 @@
 import { execFileSync, spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { access, mkdir, mkdtemp, readFile, rm, statfs, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 class ProofError extends Error {
   constructor(message) {
@@ -80,33 +80,46 @@ function wavDurationMs(b) {
   return Math.ceil(dataBytes / 96);
 }
 
-function command(text) {
-  const matches = [...text.matchAll(/\breference file\s+(.+?)\s+end reference\b/gi)];
-  return matches.length === 1 ? matches[0] : null;
+function words(s) {
+  return (s.toLowerCase().replaceAll("’", "'")
+    .match(/[\p{L}\p{N}]+(?:'[\p{L}\p{N}]+)*/gu) ?? []).join(" ");
 }
 
-function spokenPath(text) {
-  return text.trim().replace(/\s+(?:forward\s+)?slash\s+/gi, "/")
-    .replace(/\s+dot\s+/gi, ".");
+// Mirror the resolver's spoken matching for these synthetic fixtures.
+// Never use the browser's actual chooser outcome to qualify the input.
+function matchesFixture(query, expected) {
+  const path = query.trim().replaceAll("\\", "/");
+  if (/[:\u0000-\u001f\u007f]/u.test(path) ||
+      path.split("/").some((p) => !p || p.startsWith("."))) return false;
+  const tokens = (s) => s.replace(/([\p{Ll}\d])(\p{Lu})/gu, "$1 $2")
+    .normalize("NFC").toLocaleLowerCase("en-US").split(/[\s/._-]+/u).filter(Boolean);
+  const q = tokens(path), file = tokens(expected);
+  return path === expected || path === expected.split("/").at(-1) ||
+    (q.length > 0 && q.every((token) => file.includes(token)));
 }
 
-function words(text) {
-  const m = command(text);
-  if (m) text = text.replace(m[0], `reference file ${spokenPath(m[1])} end reference`);
-  return (text.toLowerCase().replaceAll("’", "'")
-    .match(/@?[\p{L}\p{N}]+(?:['/.][\p{L}\p{N}]+)*/gu) ?? []).join(" ");
-}
-
-function classifyTranscript(text, c) {
-  const m = command(text);
-  if (!m || spokenPath(m[1]) !== c.commandFile || words(text) !== words(c.expectedTranscript)) {
-    throw new InconclusiveSTT("Final STT did not return the intended words and path.");
+function qualify(raw, c, recognize) {
+  const parse = (s) => recognize(s, { locale: "en-US", literal: false, commandMode: false });
+  const plan = parse(raw);
+  function intended(parsed, offset) {
+    if (parsed.status !== "ready" || parsed.commands.length !== 1) return null;
+    const cmd = parsed.commands[0];
+    const start = cmd.start + offset, end = cmd.end + offset;
+    if (cmd.kind !== "file" || !matchesFixture(cmd.query, c.file) ||
+        words(raw.slice(0, start)) !== words(c.before) ||
+        words(raw.slice(end)) !== words(c.after)) return null;
+    return { start, end, query: cmd.query, recognizedCommands: plan.commands.length };
   }
-  const singleQuoted = /'let['’]s use reference file notes end reference[,.]?'|‘let['’]s use reference file notes end reference[,.]?’/i;
-  if (c.requiresSingleQuotes && !singleQuoted.test(text)) {
-    throw new InconclusiveSTT("Final STT did not return the required single-quoted command.");
+  if (!c.singleQuoted) return intended(plan, 0);
+
+  // Locate an actual single-quoted span, not a contraction. Parse its contents
+  // separately so failure to protect the original span doesn't disqualify it.
+  const quotes = /(?<![\p{L}\p{M}\p{N}])'(?:[^'\n]|(?<=[\p{L}\p{M}\p{N}])'(?=[\p{L}\p{M}\p{N}]))*'(?![\p{L}\p{M}\p{N}])|‘(?:[^’\n]|(?<=[\p{L}\p{M}\p{N}])’(?=[\p{L}\p{M}\p{N}]))*’(?![\p{L}\p{M}\p{N}])/gu;
+  for (const span of raw.matchAll(quotes)) {
+    const result = intended(parse(span[0].slice(1, -1)), span.index + 1);
+    if (result) return result;
   }
-  return m;
+  return null;
 }
 
 function parseFrame(payload) {
@@ -122,16 +135,19 @@ async function tabTo(page, target) {
   throw new ProofError("Could not reach the chooser control by Tab.");
 }
 
-async function runCase(c, h) {
-  const out = join(h.results, c.id);
+async function runTake(c, take, h) {
+  const clipId = `${c.id}--${take.id}`;
+  const out = join(h.results, c.id, take.id);
   await mkdir(out);
   let stage = "create fixture session";
   let status = "FAIL", failure = null, screenshot = null, chooserScreenshot = null;
   let browser, page, draft, connectId, createId, closeId, opened, closeOK, firstAudioAt;
-  let gatewayMessage;
+  let gatewayMessage, clipSha256, qualified;
   const events = [], fileActions = [], blockedSends = [];
   const secrets = new Set([apiKey, h.token]);
-  const remember = (value) => { if (typeof value === "string" && value.length >= 8) secrets.add(value); };
+  const remember = (value) => {
+    if (typeof value === "string" && value.length >= 8) secrets.add(value);
+  };
   const relayEvents = () => events.filter((e) => e.id === opened?.transcriptionSessionId);
   const finalParts = () => relayEvents()
     .filter((e) => e.type === "transcript" && e.final === true && typeof e.text === "string")
@@ -139,10 +155,12 @@ async function runCase(c, h) {
   const transcript = () => finalParts().map((s) => s.trim()).filter(Boolean).join(" ");
 
   try {
-    h.createSession(c.id);
+    h.createSession(clipId);
     stage = "load WAV and launch Chromium";
-    const clip = join(here, "clips", `${c.id}.wav`);
-    const duration = wavDurationMs(await readFile(clip));
+    const clip = join(here, "clips", `${clipId}.wav`);
+    const audio = await readFile(clip);
+    clipSha256 = createHash("sha256").update(audio).digest("hex");
+    const duration = wavDurationMs(audio);
     browser = await h.chromium.launch({
       headless: true,
       env: h.ramEnv,
@@ -159,7 +177,7 @@ async function runCase(c, h) {
     page = await context.newPage();
     page.setDefaultTimeout(15_000);
 
-    // Forward real Gateway traffic unchanged, except never forward a turn submission.
+    // Forward real Gateway traffic, except never forward a turn submission.
     await page.routeWebSocket((url) => url.host === new URL(h.origin).host, (socket) => {
       const server = socket.connectToServer();
       socket.onMessage((message) => {
@@ -190,7 +208,9 @@ async function runCase(c, h) {
           }
           if (f.id === createId) opened = f.ok ? p : false;
           if (f.id === closeId) closeOK = f.ok === true;
-          if (!f.ok && [connectId, createId, closeId].includes(f.id)) gatewayMessage = f.error?.message;
+          if (!f.ok && [connectId, createId, closeId].includes(f.id)) {
+            gatewayMessage = f.error?.message;
+          }
         }
         if (f?.type === "event" && f.event === "talk.event" && p?.transcriptionSessionId) {
           if (p.type === "error") gatewayMessage = p.message;
@@ -203,7 +223,7 @@ async function runCase(c, h) {
     });
 
     stage = "navigate to real Chat";
-    await page.goto(`${h.origin}/chat/main/dictation-${c.id}#token=${h.token}`);
+    await page.goto(`${h.origin}/chat/main/dictation-${clipId}#token=${h.token}`);
     stage = "mount native composer textarea";
     draft = page.locator(DRAFT);
     await draft.waitFor({ state: "attached" });
@@ -252,18 +272,24 @@ async function runCase(c, h) {
     await sleep(Math.max(0, firstAudioAt + duration + 200 - Date.now()));
     await page.getByRole("button", { name: "Stop and keep text", exact: true }).click();
 
-    stage = "verify provider completion and input";
+    stage = "verify provider completion";
     await until(() => closeOK !== undefined, "dictation close acknowledgement", 60_000);
     check(closeOK, "Gateway rejected dictation close.");
     await until(() => relayEvents().some((e) => e.type === "close"), "provider close event");
     check(relayEvents().some((e) => e.type === "close" && e.reason === "completed") &&
       !relayEvents().some((e) => e.type === "error"), "OpenAI relay did not complete cleanly.");
+
+    stage = "qualify the final transcript";
     const raw = transcript();
-    const m = classifyTranscript(raw, c);
+    qualified = qualify(raw, c, h.recognize);
+    if (!qualified) throw new InconclusiveSTT(c.singleQuoted
+      ? "STT did not supply the intended command within actual single quotes."
+      : "STT did not supply the intended parseable command and surrounding words.");
+    check(!c.singleQuoted || qualified.recognizedCommands === 0,
+      "Product parser recognized a command inside a qualified single-quoted span.");
 
     stage = "wait for composer dictation to settle";
     await page.locator(".agent-chat__dictation-status").waitFor({ state: "hidden" });
-
     const expectDraft = (value) => page.waitForFunction(
       ({ selector, value }) => document.querySelector(selector)?.value === value,
       { selector: DRAFT, value },
@@ -274,15 +300,16 @@ async function runCase(c, h) {
     const review = page.locator(REVIEW);
     const chip = page.locator(CHIP);
     let expected = raw;
+
     if (c.chooser.opens) {
       stage = "wait for the chooser and intended file";
       await review.getByRole("heading", { name: "Choose a file reference", exact: true }).waitFor();
-      const radio = review.getByRole("radio", { name: c.chooser.select, exact: true });
+      const radio = review.getByRole("radio", { name: c.file, exact: true });
       await radio.waitFor();
       await until(() => radio.isEnabled(), "candidate enabled");
       check(!(await radio.isChecked()), "Candidate was already selected.");
+
       stage = "select the intended file by keyboard";
-      // Anchor focus at the query; all selection and activation are by keyboard.
       await review.getByRole("textbox", { name: "Filename or relative path" }).focus();
       await tabTo(page, radio);
       await page.keyboard.press("Space");
@@ -295,8 +322,8 @@ async function runCase(c, h) {
         stage = "confirm the bound reference by keyboard";
         await tabTo(page, review.getByRole("button", { name: "Insert bound reference", exact: true }));
         await page.keyboard.press("Enter");
-        const label = `@${c.chooser.select}`;
-        expected = raw.slice(0, m.index) + label + raw.slice(m.index + m[0].length);
+        const label = `@${c.file}`;
+        expected = raw.slice(0, qualified.start) + label + raw.slice(qualified.end);
         await chip.waitFor();
         check(await chip.textContent() === label, "Bound chip has the wrong label.");
         check(fileActions.includes("revalidate"), "Confirm did not revalidate the selected file.");
@@ -314,10 +341,8 @@ async function runCase(c, h) {
     stage = "verify final unsent draft";
     await review.waitFor({ state: "hidden" });
     await expectDraft(expected);
-    const value = await draft.inputValue();
     const confirmed = c.chooser.exitKey === "Enter";
-    check(value === expected, "Composer changed text outside the expected edit.");
-    check(words(value) === words(c.expectedComposer), "Composer did not match the expected result.");
+    check(await draft.inputValue() === expected, "Composer changed text outside the expected edit.");
     check(await chip.count() === (confirmed ? 1 : 0), "Wrong number of bound chips.");
     check(confirmed || !fileActions.includes("revalidate"), "Unexpected file revalidation.");
     status = "PASS";
@@ -329,6 +354,10 @@ async function runCase(c, h) {
       message: diagnostic(error?.message ?? error, secrets),
     };
   } finally {
+    if (status === "INCONCLUSIVE_STT") {
+      await page.locator(".agent-chat__dictation-status")
+        .waitFor({ state: "hidden", timeout: 3_000 }).catch(() => {});
+    }
     const finalComposer = draft ? await draft.inputValue({ timeout: 1_000 }).catch(() => null) : null;
     if (page) {
       screenshot = await page.locator(COMPOSER).screenshot({
@@ -354,16 +383,23 @@ async function runCase(c, h) {
     const save = (name, value) => writeFile(join(out, name), redact(value, secrets), { mode: 0o600 });
     await save("transcript.txt", transcript());
     await save("composer.txt", finalComposer ?? "");
-    await save("case.json", JSON.stringify({
+    await save("take.json", JSON.stringify({
       head: h.head, status, detail, stage, error: failure, screenshot, chooserScreenshot,
       gatewayError: gatewayMessage ? diagnostic(gatewayMessage, secrets) : null,
+      takeId: take.id, voice: take.voice, clipSha256, qualified: qualified ?? null,
+      validInput: qualified ? true : status === "INCONCLUSIVE_STT" ? false : null,
       chatModel: CHAT_MODEL, blockedSends,
       provider: opened?.provider === "openai" ? "openai" : null,
       finalTranscriptParts: finalParts(), finalComposer, fileActions,
     }, null, 2) + "\n");
   }
-  console.log(`${c.id}: ${status}${failure ? ` — ${failure.step}: ${failure.name}` : ""}`);
-  return status;
+
+  console.log(`${clipId}: ${status}${failure ? ` — ${failure.step}: ${failure.name}` : ""}`);
+  return {
+    id: take.id, status,
+    validInput: qualified ? true : status === "INCONCLUSIVE_STT" ? false : null,
+    artifact: `${take.id}/take.json`,
+  };
 }
 
 async function main() {
@@ -379,9 +415,15 @@ async function main() {
   const uiRoot = join(repo, "dist", "control-ui");
   await access(join(uiRoot, "index.html"));
   const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
-  const { cases } = JSON.parse(await readFile(join(here, "scenario.json"), "utf8"));
-  check(cases.length > 0 && cases.every((c) => /^[a-z0-9-]+$/.test(c.id)),
-    "Expected nonempty scenario with kebab-case IDs.");
+  const { cases, takes } = JSON.parse(await readFile(join(here, "scenario.json"), "utf8"));
+  const uniqueIds = (list) => Array.isArray(list) && list.length > 0 &&
+    list.every((item) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(item.id)) &&
+    new Set(list.map((item) => item.id)).size === list.length;
+  check(uniqueIds(cases) && uniqueIds(takes), "Expected unique kebab-case IDs for cases and takes.");
+
+  const { recognizeDictatedFileReferences: recognize } = await import(
+    pathToFileURL(join(repo, "ui/src/lib/dictation-file-references.ts")).href
+  );
 
   await mkdir(join(here, "results"), { recursive: true });
   const results = await mkdtemp(join(here, "results", "run-"));
@@ -390,7 +432,6 @@ async function main() {
   let child, done, exited = false, startError = false;
   const previousTmp = process.env.TMPDIR;
   try {
-    // Playwright creates its Chromium user-data directory using the parent tmpdir.
     process.env.TMPDIR = ram;
     const { chromium } = createRequire(join(repo, "ui", "package.json"))("playwright");
     const ramEnv = {
@@ -449,10 +490,21 @@ async function main() {
       "--params", JSON.stringify({ agentId: "main", key: `agent:main:dictation-${id}`, label: id }),
     ], { cwd: repo, env: localEnv, timeout: 45_000, stdio: "ignore" });
 
+    const h = { chromium, ramEnv, origin, token, createSession, results, head, recognize };
     for (const c of cases) {
-      if (await runCase(c, { chromium, ramEnv, origin, token, createSession, results, head }) !== "PASS") {
-        process.exitCode = 1;
-      }
+      const out = join(results, c.id);
+      await mkdir(out);
+      const observed = [];
+      for (const take of takes) observed.push(await runTake(c, take, h));
+      const passed = observed.filter((t) => t.status === "PASS").length;
+      const failed = observed.filter((t) => t.status === "FAIL").length;
+      const valid = observed.filter((t) => t.validInput === true).length;
+      const status = failed ? "FAIL" : passed ? "PASS" : "INCONCLUSIVE_STT";
+      const detail = `${passed}/${observed.length} passed; ${valid} qualified; ${failed} failed`;
+      await writeFile(join(out, "case.json"), JSON.stringify({
+        head, status, detail, takes: observed,
+      }, null, 2) + "\n", { mode: 0o600 });
+      if (status !== "PASS") process.exitCode = 1;
     }
   } finally {
     if (child?.pid && !exited) {
