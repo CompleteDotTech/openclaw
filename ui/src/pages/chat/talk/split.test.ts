@@ -657,8 +657,12 @@ it.each(["transcription", "speech"] as const)(
     const calls = h.request.mock.calls.map(([method]) => method);
     expect(calls.filter((method) => method === "talk.session.create")).toHaveLength(1);
     expect(calls.filter((method) => method === "talk.session.close")).toHaveLength(1);
-    expect(calls.filter((method) => method === "chat.send")).toHaveLength(phase === "speech" ? 1 : 0);
-    expect(calls.filter((method) => method === "talk.speak")).toHaveLength(phase === "speech" ? 1 : 0);
+    expect(calls.filter((method) => method === "chat.send")).toHaveLength(
+      phase === "speech" ? 1 : 0,
+    );
+    expect(calls.filter((method) => method === "talk.speak")).toHaveLength(
+      phase === "speech" ? 1 : 0,
+    );
     expect(
       calls.filter((method) =>
         ["agent", "sessions.dispatch", "tools.invoke", "talk.client.create", "tts.speak"].includes(
