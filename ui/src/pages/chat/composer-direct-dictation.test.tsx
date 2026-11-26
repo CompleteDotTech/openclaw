@@ -108,9 +108,10 @@ function fixture(
   const onMessage = vi.fn();
   const onError = vi.fn();
   const onSubmit = vi.fn();
+  const client = createTestGatewayClient(async () => ({}));
   const control = new DirectDictationControl({
     textarea: { captureSelection, insertTranscript } as never,
-    getClient: () => ({}) as never,
+    getClient: () => client,
     isConnected: () => true,
     canCommit: () => true,
     onMessage,
@@ -166,6 +167,17 @@ describe("DirectDictationControl", () => {
 
     expect(insertTranscript).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects a delayed result after the connection changes before rendering catches up", () => {
+    let client = createTestGatewayClient(async () => ({}));
+    const { control, insertTranscript, onMessage } = fixture({ getClient: () => client });
+    control.prepare("same-draft");
+    client = createTestGatewayClient(async () => ({}));
+    dictationHarness.options?.onCommit("stale connection transcript");
+    expect(insertTranscript).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+    control.dispose();
   });
 
   it("starts canonical dictation from a plain microphone click", () => {

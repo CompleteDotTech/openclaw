@@ -12,10 +12,11 @@ export function DirectDictationView(props: {
   inputDeviceId?: string;
   idleLabel?: string;
   renderRevision?: object;
+  presented?: boolean;
 }) {
   const presentation = createMemo(() => {
     void props.renderRevision;
-    return props.control.prepare(props.ownerKey, props.inputDeviceId);
+    return props.control.prepare(props.ownerKey, props.inputDeviceId, props.presented !== false);
   });
   const microphonePicker = <MicrophonePicker {...presentation().voice.microphonePicker} />;
   return (

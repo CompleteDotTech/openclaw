@@ -294,6 +294,7 @@ describe("ChatSessionRailElement", () => {
     element.running = true;
     element.activeRunId = "run-1";
     element.connected = true;
+    element.presented = true;
     Object.assign(element, overrides);
     document.body.append(element);
     await element.updateComplete;
@@ -542,6 +543,27 @@ describe("ChatSessionRailElement", () => {
       expect(onSubmit).toHaveBeenCalledExactlyOnceWith("Summarize the spoken part"),
     );
     expect(finishActive).toHaveBeenCalledOnce();
+    expect(finishActive).toHaveBeenCalledWith({ forSend: true });
+  });
+
+  it("does not send a Side chat question after dictation confirmation was canceled", async () => {
+    const onSubmit = vi.fn();
+    const element = await mount({
+      onSubmit,
+      companion: { turns: [], loading: false, draft: "Keep for review" },
+    });
+    const finishActive = vi.fn(async () => false);
+    vi.spyOn(DirectDictationControl.prototype, "dictation", "get").mockReturnValue({
+      active: true,
+      finalizing: false,
+      finishActive,
+    } as never);
+    element
+      .querySelector("textarea")!
+      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await finishActive.mock.results[0]?.value;
+    await Promise.resolve();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(

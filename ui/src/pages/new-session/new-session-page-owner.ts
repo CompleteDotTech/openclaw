@@ -216,6 +216,7 @@ export class NewSessionPageOwner {
       getSessionKey: () => this.submission.sessionStartup.dictationSessionKey(),
       isConnected: () => this.gateway.connected,
       canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
+      readDraftRevision: () => this.submission.draftPersistence.editRevision,
       onMessage: (message) => this.setMessageFromUser(message),
       onError: (message) => {
         this.dictationError = message;
