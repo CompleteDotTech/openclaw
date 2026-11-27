@@ -1,0 +1,204 @@
+--- a/proof/205789/dictation-proof.mjs
++++ b/proof/205789/dictation-proof.mjs
+@@ -9,5 +9,7 @@
+ import { fileURLToPath } from 'node:url';
+ 
+-const HEAD = '7ea1297feb705b5ac8350bb45c93823837d659a3';
++const BEFORE = 'd95d852e054f61cb654c478511537e2562317c33';
++const PAIR_CASE = 'chat-review-and-send';
++const PAIR_TAKE = 'alloy';
+ const STT = 'gpt-4o-mini-transcribe';
+ const CHAT = 'openai/gpt-5.4-mini';
+@@ -119,14 +121,58 @@
+ }
+ 
+-async function runTake(chromium, base, env, out, c, take, sendOnce) {
+-  const e = c.expected, name = c.id + (take ? '--' + take.id : '');
++async function saveFrame(page, target, dir, which, label) {
++  const box = await target.boundingBox();
++  check(box && box.width > 0 && box.height > 0, 'Annotation target is not visible');
++  const png = await page.screenshot({ path: join(dir, which + '.png'), animations: 'disabled', scale: 'css' });
++  const marked = await page.evaluate(async ({ image, box, label }) => {
++    const bytes = Uint8Array.from(atob(image), (ch) => ch.charCodeAt(0));
++    const img = await createImageBitmap(new Blob([bytes], { type: 'image/png' }));
++    const canvas = document.createElement('canvas');
++    canvas.width = img.width;
++    canvas.height = img.height;
++    const ctx = canvas.getContext('2d');
++    ctx.drawImage(img, 0, 0);
++    img.close();
++    ctx.strokeStyle = '#ffd36b';
++    ctx.lineWidth = 3;
++    ctx.strokeRect(box.x - 2, box.y - 2, box.width + 4, box.height + 4);
++    ctx.font = 'bold 16px sans-serif';
++    const x = Math.max(2, box.x), y = Math.max(2, box.y - 30);
++    ctx.fillStyle = '#19130a';
++    ctx.fillRect(x, y, ctx.measureText(label).width + 16, 25);
++    ctx.fillStyle = '#ffd36b';
++    ctx.fillText(label, x + 8, y + 18);
++    return canvas.toDataURL().split(',')[1];
++  }, { image: png.toString('base64'), box, label });
++  await writeFile(join(dir, which + '-annotated.png'), Buffer.from(marked, 'base64'));
++}
++
++async function captureSafe(page) {
++  const visible = await page.locator('body').innerText();
++  const values = await page.locator('input:visible, textarea:visible').evaluateAll((els) => els.map((el) => el.value));
++  check(![visible, ...values].some((s) => s.includes(key) || /\b(?:sk-[\w-]{10,}|Bearer\s+\S+)/i.test(s)),
++    'Possible credential on screen; screenshot withheld');
++}
++
++async function runTake(chromium, base, env, out, c, take, sendOnce, { head, before, visual }) {
++  const e = before ? { ...c.expected, mode: 'off', action: 'keep' } : c.expected;
++  const name = c.id + (take ? '--' + take.id : '');
++  const paired = c.id === PAIR_CASE && take?.id === PAIR_TAKE;
+   const path = join(here, 'clips', name + '.wav'), dir = join(out, name);
+   await mkdir(dir);
+-  const s = { head: HEAD, case: c.id, take: take?.id ?? null, surface: e.surface, mode: e.mode,
++  const s = { head, case: c.id, take: take?.id ?? null, surface: e.surface, mode: e.mode,
+     probe: e.action, proof: 'Chromium fake-media capture with a prerecorded WAV', sttModel: STT,
+     status: 'ERROR', step: 'read-clip', expectedWords: e.words };
+   let browser, page, wire, input, transcript = '';
+   const pageErrors = [];
+-  const shot = (file) => page.screenshot({ path: join(dir, file), animations: 'disabled', timeout: 5000 });
++  const shot = async (file) => {
++    await captureSafe(page);
++    await page.screenshot({ path: join(dir, file), animations: 'disabled', timeout: 5000 });
++  };
++  const frame = async (target, side, label) => {
++    await captureSafe(page);
++    await saveFrame(page, target, visual, side, label);
++    s.frame = side + '.png';
++  };
+   const record = (err, status) => {
+     s.status = status;
+@@ -140,5 +186,5 @@
+     browser = await chromium.launch({ env, args: ['--use-fake-ui-for-media-stream',
+       '--use-fake-device-for-media-stream', '--use-file-for-fake-audio-capture=' + path + '%noloop'] });
+-    const context = await browser.newContext({ locale: 'en-US', viewport: { width: 1440, height: 900 },
++    const context = await browser.newContext({ locale: 'en-US', colorScheme: 'dark', viewport: { width: 1440, height: 900 },
+       serviceWorkers: 'block', acceptDownloads: false });
+     await context.grantPermissions(['microphone', 'clipboard-read', 'clipboard-write'], { origin: base });
+@@ -181,15 +227,19 @@
+     };
+     s.step = 'set-and-check-policy';
+-    await button(root, 'Dictation cleanup').click();
+-    check(await mode.inputValue() === 'off', 'Fresh browser did not default to Off');
+-    if (e.mode === 'conservative') await mode.selectOption('conservative');
+-    await closeDialog();
+-    if (e.action === 'edit-and-copy') {
+-      await page.reload();
+-      await connected();
+-      await ready();
++    if (before) {
++      check(await button(root, 'Dictation cleanup').count() === 0, 'Baseline already has cleanup');
++    } else {
+       await button(root, 'Dictation cleanup').click();
+-      check(await mode.inputValue() === 'conservative', 'Preference did not survive same-build reload');
++      check(await mode.inputValue() === 'off', 'Fresh browser did not default to Off');
++      if (e.mode === 'conservative') await mode.selectOption('conservative');
+       await closeDialog();
++      if (e.action === 'edit-and-copy') {
++        await page.reload();
++        await connected();
++        await ready();
++        await button(root, 'Dictation cleanup').click();
++        check(await mode.inputValue() === 'conservative', 'Preference did not survive same-build reload');
++        await closeDialog();
++      }
+     }
+     await input.fill(originalDraft);
+@@ -236,4 +286,5 @@
+       await until(async () => await input.inputValue() === transcript, 'Off changed Gateway text', 10_000, ProofFailure);
+       check(await review.count() === 0, 'Off unexpectedly offered review');
++      if (before && paired) await frame(input, 'before', 'Dictation enters the unsent draft');
+     } else {
+       await review.click();
+@@ -258,4 +309,5 @@
+       check(await original.inputValue() === transcript, 'Reopened review lost the original');
+       await shot('review.png');
++      if (paired) await frame(original, 'after', 'Original waits for a review decision');
+       if (e.action === 'edit-and-copy') {
+         s.step = 'assert-edit-and-copy';
+@@ -337,15 +389,11 @@
+ }
+ 
+-async function main() {
+-  if (process.argv.length !== 3 || !key) {
+-    throw new Error('Usage: set OPENAI_API_KEY and run node dictation-proof.mjs <built checkout>');
+-  }
+-  const checkout = resolve(process.argv[2]);
++async function runBuild(checkout, head, before, results, visual) {
+   const git = (...args) => execFileSync('git', ['-C', checkout, ...args], {
+     encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+   }).trim();
+-  if (git('rev-parse', 'HEAD') !== HEAD || git('status', '--porcelain', '--untracked-files=no') ||
+-      (await json(join(checkout, 'dist', 'build-info.json'))).commit !== HEAD) {
+-    throw new Error('Expected a clean build of the pinned PR SHA');
++  if (git('rev-parse', 'HEAD') !== head || git('status', '--porcelain', '--untracked-files=no') ||
++      (await json(join(checkout, 'dist', 'build-info.json'))).commit !== head) {
++    throw new Error('Expected a clean build of the pinned source: ' + head);
+   }
+   const ui = join(checkout, 'dist', 'control-ui');
+@@ -357,7 +405,8 @@
+   if (fixture.leadingSilenceMs !== 500 || !validIds(fixture.cases) ||
+       (fixture.takes && !validIds(fixture.takes))) throw new Error('Invalid scenario or take IDs');
+-  const results = join(here, 'results');
+-  await mkdir(results, { recursive: true });
+-  const out = await mkdtemp(join(results, 'run-'));
++  const pairCase = fixture.cases.find((c) => c.id === PAIR_CASE);
++  const pairTake = fixture.takes?.find((t) => t.id === PAIR_TAKE);
++  if (!pairCase || !pairTake) throw new Error('Missing paired visual scenario or take');
++  const out = await mkdtemp(join(results, before ? 'before-run-' : 'run-'));
+   const state = await mkdtemp(join(tmpdir(), 'dictation-gw-'));
+   let gateway, exited;
+@@ -398,15 +447,14 @@
+ 
+     const summary = [];
+-    for (const c of fixture.cases) {
++    for (const c of before ? [pairCase] : fixture.cases) {
+       const runs = [], sendOnce = { claimed: false };
+-      for (const take of fixture.takes ?? [null]) {
+-        runs.push(await runTake(chromium, base, env, out, c, take, sendOnce));
++      for (const take of before ? [pairTake] : fixture.takes) {
++        runs.push(await runTake(chromium, base, env, out, c, take, sendOnce, { head, before, visual }));
+       }
+-      summary.push({ id: c.id, status: caseStatus(runs, c.expected.action),
+-        takes: runs.map(({ take, status, sendAck }) => ({ take, status, sendAck })) });
++      summary.push({ id: c.id, status: caseStatus(runs, before ? 'keep' : c.expected.action),
++        takes: runs.map(({ take, status, sendAck, frame }) => ({ take, status, sendAck, frame })) });
+     }
+-    await writeFile(join(out, 'summary.json'), JSON.stringify({ head: HEAD, cases: summary }, null, 2) + '\n');
+-    process.exitCode = summary.some((x) => x.status === 'FAIL' || x.status === 'ERROR') ? 1 :
+-      summary.some((x) => x.status === 'INCONCLUSIVE_STT') ? 2 : 0;
++    await writeFile(join(out, 'summary.json'), JSON.stringify({ head, cases: summary }, null, 2) + '\n');
++    return summary;
+   } finally {
+     if (gateway?.pid) {
+@@ -424,3 +472,26 @@
+ }
+ 
++async function main() {
++  const beforePath = JSON.parse(process.env.PROOF_CHECKOUTS ?? '{}').before;
++  const head = process.env.SHA;
++  if (process.argv.length !== 3 || !key || !/^[a-f0-9]{40}$/.test(head ?? '') ||
++      !beforePath || !process.env.PROOF_RESULTS_DIR || head === BEFORE) {
++    throw new Error('Expected the scripted-proof workflow with a pinned SHA, built before checkout, and results directory');
++  }
++  const results = resolve(process.env.PROOF_RESULTS_DIR);
++  await mkdir(results, { recursive: true });
++  const visual = await mkdtemp(join(results, 'visual-'));
++  const after = await runBuild(resolve(process.argv[2]), head, false, results, visual);
++  const before = await runBuild(resolve(beforePath), BEFORE, true, results, visual);
++  const pairedTake = (cases) => cases.find((c) => c.id === PAIR_CASE)?.takes.find((t) => t.take === PAIR_TAKE);
++  const a = pairedTake(after), b = pairedTake(before);
++  const passed = a?.status === 'PASS' && a.frame === 'after.png' && b?.status === 'PASS' && b.frame === 'before.png';
++  await writeFile(join(visual, 'assertions.json'), JSON.stringify({
++    proof: 'Chromium fake-media capture with a prerecorded WAV', case: PAIR_CASE, take: PAIR_TAKE,
++    viewport: [1440, 900], colorScheme: 'dark', before: { head: BEFORE, ...b }, after: { head, ...a }, passed,
++  }, null, 2) + '\n');
++  process.exitCode = [...after, ...before].some((c) => c.status === 'FAIL' || c.status === 'ERROR') ? 1 :
++    !passed || [...after, ...before].some((c) => c.status === 'INCONCLUSIVE_STT') ? 2 : 0;
++}
++
+ main().catch((err) => { console.error(redacted(err?.message ?? err)); process.exitCode = 1; });
