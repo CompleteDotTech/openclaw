@@ -1,26 +1,79 @@
 {
-  "note": "#206273 rerun on fd47028 after its E2E expectation fix (Nov 27 21:45).",
+  "note": "#205875 native receipt proof on 42d18e8 (Xvfb, no secrets); #206273 rerun on fd47028 (Nov 27).",
   "runs": [
     {
       "pr": 206088,
       "sha": "fc9ffa44a96f196c71518d756b424f2bfc3b92d2",
       "dir": "proof/206088",
       "script": "dictation-proof.mjs",
-      "tests": ["ui/src/pages/chat/composer-file-reference-provider.integration.test.ts"],
-      "checks": [["ui:check-performance:base", "20b3afeccc4964fbd8a4a5bbe15fd8069ba4f6a5"], "ui:build"],
-      "checkouts": [{"name": "main", "repo": "openclaw/openclaw", "sha": "fbba71f65223e59068ebdb18293e8b1e9884074f", "build": true}, {"name": "parser-base", "repo": "CompleteDotTech/openclaw", "sha": "b92136b4e18178281804b91b8ca060db1ade2907", "build": false}, {"name": "budget-base", "repo": "openclaw/openclaw", "sha": "20b3afeccc4964fbd8a4a5bbe15fd8069ba4f6a5", "build": false}, {"name": "manifest", "repo": "CompleteDotTech/openclaw", "sha": "fc9ffa44a96f196c71518d756b424f2bfc3b92d2", "build": false}],
+      "tests": [
+        "ui/src/pages/chat/composer-file-reference-provider.integration.test.ts"
+      ],
+      "checks": [
+        [
+          "ui:check-performance:base",
+          "20b3afeccc4964fbd8a4a5bbe15fd8069ba4f6a5"
+        ],
+        "ui:build"
+      ],
+      "checkouts": [
+        {
+          "name": "main",
+          "repo": "openclaw/openclaw",
+          "sha": "fbba71f65223e59068ebdb18293e8b1e9884074f",
+          "build": true
+        },
+        {
+          "name": "parser-base",
+          "repo": "CompleteDotTech/openclaw",
+          "sha": "b92136b4e18178281804b91b8ca060db1ade2907",
+          "build": false
+        },
+        {
+          "name": "budget-base",
+          "repo": "openclaw/openclaw",
+          "sha": "20b3afeccc4964fbd8a4a5bbe15fd8069ba4f6a5",
+          "build": false
+        },
+        {
+          "name": "manifest",
+          "repo": "CompleteDotTech/openclaw",
+          "sha": "fc9ffa44a96f196c71518d756b424f2bfc3b92d2",
+          "build": false
+        }
+      ],
       "stable": "2026.11.10",
-      "offline": ["upgrade-recovery.mjs", "parser-red-green.mjs", "boot-manifest.mjs"]
+      "offline": [
+        "upgrade-recovery.mjs",
+        "parser-red-green.mjs",
+        "boot-manifest.mjs"
+      ]
     },
     {
       "pr": 205789,
       "sha": "0652d18f35384e5ce0989b9cf57ba755082e4bcf",
       "dir": "proof/205789",
       "script": "dictation-proof.mjs",
-      "tests": ["ui/src/pages/chat/dictation-cleanup.test.ts", "ui/src/pages/chat/dictation-refinement.test.ts", "ui/src/pages/chat/composer-dictation-source.test.ts", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/app/settings.node.test.ts"],
-      "checkouts": [{"name": "before", "repo": "openclaw/openclaw", "sha": "d95d852e054f61cb654c478511537e2562317c33", "build": true}],
+      "tests": [
+        "ui/src/pages/chat/dictation-cleanup.test.ts",
+        "ui/src/pages/chat/dictation-refinement.test.ts",
+        "ui/src/pages/chat/composer-dictation-source.test.ts",
+        "ui/src/pages/chat/composer-dictation.test.ts",
+        "ui/src/pages/chat/composer-direct-dictation.test.tsx",
+        "ui/src/app/settings.node.test.ts"
+      ],
+      "checkouts": [
+        {
+          "name": "before",
+          "repo": "openclaw/openclaw",
+          "sha": "d95d852e054f61cb654c478511537e2562317c33",
+          "build": true
+        }
+      ],
       "stable": "2026.11.10",
-      "offline": ["stable-upgrade.mjs"]
+      "offline": [
+        "stable-upgrade.mjs"
+      ]
     },
     {
       "pr": 205788,
@@ -33,24 +86,56 @@
       "sha": "0d0e90243cfa934de64fc19766d26faf5a41314b",
       "dir": "proof/205794",
       "script": "live-dictation-proof.mjs",
-      "checks": [["ui:check-performance:base", "86b6dfd531c0f04baec68457edcc67d036f3a927"]],
-      "checkouts": [{"name": "base", "repo": "openclaw/openclaw", "sha": "86b6dfd531c0f04baec68457edcc67d036f3a927", "build": false}]
+      "checks": [
+        [
+          "ui:check-performance:base",
+          "86b6dfd531c0f04baec68457edcc67d036f3a927"
+        ]
+      ],
+      "checkouts": [
+        {
+          "name": "base",
+          "repo": "openclaw/openclaw",
+          "sha": "86b6dfd531c0f04baec68457edcc67d036f3a927",
+          "build": false
+        }
+      ]
     },
     {
       "pr": 205876,
       "sha": "59dc2607f00df7b5acc1dc069b39f9b96f138c63",
       "dir": "proof/205876",
       "script": "live-dictation.mjs",
-      "tests": ["extensions/openai/realtime-transcription-authority.test.ts", "extensions/openai/realtime-transcription-provider.test.ts", "extensions/openai/realtime-voice-browser-auth.test.ts", "src/realtime-transcription/websocket-session.test.ts", "src/gateway/talk/transcription-relay.test.ts", "src/gateway/talk/client-authority.test.ts", "src/agents/agent-tools.prefix-stability.test.ts", "extensions/deepgram/realtime-transcription-provider.test.ts", "extensions/elevenlabs/realtime-transcription-provider.test.ts", "extensions/mistral/realtime-transcription-provider.test.ts", "extensions/xai/realtime-transcription-provider.test.ts"],
-      "checks": ["build"]
+      "tests": [
+        "extensions/openai/realtime-transcription-authority.test.ts",
+        "extensions/openai/realtime-transcription-provider.test.ts",
+        "extensions/openai/realtime-voice-browser-auth.test.ts",
+        "src/realtime-transcription/websocket-session.test.ts",
+        "src/gateway/talk/transcription-relay.test.ts",
+        "src/gateway/talk/client-authority.test.ts",
+        "src/agents/agent-tools.prefix-stability.test.ts",
+        "extensions/deepgram/realtime-transcription-provider.test.ts",
+        "extensions/elevenlabs/realtime-transcription-provider.test.ts",
+        "extensions/mistral/realtime-transcription-provider.test.ts",
+        "extensions/xai/realtime-transcription-provider.test.ts"
+      ],
+      "checks": [
+        "build"
+      ]
     },
     {
       "pr": 205880,
       "sha": "bf530fa3f500bbf3146d021f8731a1c782ed448c",
       "dir": "proof/205880",
       "script": "live-dictation.mjs",
-      "tests": ["src/realtime-transcription/personal-vocabulary-import.test.ts", "src/realtime-transcription/personal-vocabulary.test.ts", "src/realtime-transcription/vocabulary-terms.test.ts"],
-      "checks": ["tsgo:core"]
+      "tests": [
+        "src/realtime-transcription/personal-vocabulary-import.test.ts",
+        "src/realtime-transcription/personal-vocabulary.test.ts",
+        "src/realtime-transcription/vocabulary-terms.test.ts"
+      ],
+      "checks": [
+        "tsgo:core"
+      ]
     },
     {
       "pr": 205892,
@@ -63,8 +148,17 @@
       "sha": "1a1060d376d44835a4b49d765c4ae096e847c58a",
       "dir": "proof/205973",
       "script": "dictation-proof.mjs",
-      "checkouts": [{"name": "before", "repo": "openclaw/openclaw", "sha": "c7ea9f418610b2d5d336d0df191c8e4660202efb", "build": true}],
-      "offline": ["dictation-compare.mjs"],
+      "checkouts": [
+        {
+          "name": "before",
+          "repo": "openclaw/openclaw",
+          "sha": "c7ea9f418610b2d5d336d0df191c8e4660202efb",
+          "build": true
+        }
+      ],
+      "offline": [
+        "dictation-compare.mjs"
+      ],
       "live": false
     },
     {
@@ -72,18 +166,47 @@
       "sha": "4a413b07f78bd51bfc309e3c451de341bf7cac0f",
       "dir": "proof/205792",
       "script": "dictation-proof.mjs",
-      "tests": ["src/shared/dictation-writing-profiles.test.ts", "src/state/user-preferences.writing-profiles.test.ts", "ui/src/app/dictation-writing-profile-preferences.node.test.ts", "ui/src/pages/chat/chat-composer-solid.test.tsx", "ui/src/pages/chat/chat-pane-lifecycle.test.ts", "ui/src/pages/chat/components/chat-session-rail-dictation-intent.test.tsx", "ui/src/pages/chat/components/composer-dictation-send-action.test.tsx", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/pages/config/dictation-writing-profiles-section.test.tsx", "ui/src/pages/new-session/new-session-page.test.ts"],
-      "checks": ["tsgo:core", "tsgo:ui"],
-      "offline": ["offline-dictation-proof.mjs"],
+      "tests": [
+        "src/shared/dictation-writing-profiles.test.ts",
+        "src/state/user-preferences.writing-profiles.test.ts",
+        "ui/src/app/dictation-writing-profile-preferences.node.test.ts",
+        "ui/src/pages/chat/chat-composer-solid.test.tsx",
+        "ui/src/pages/chat/chat-pane-lifecycle.test.ts",
+        "ui/src/pages/chat/components/chat-session-rail-dictation-intent.test.tsx",
+        "ui/src/pages/chat/components/composer-dictation-send-action.test.tsx",
+        "ui/src/pages/chat/composer-dictation.test.ts",
+        "ui/src/pages/chat/composer-direct-dictation.test.tsx",
+        "ui/src/pages/config/dictation-writing-profiles-section.test.tsx",
+        "ui/src/pages/new-session/new-session-page.test.ts"
+      ],
+      "checks": [
+        "tsgo:core",
+        "tsgo:ui"
+      ],
+      "offline": [
+        "offline-dictation-proof.mjs"
+      ],
       "live": false
     },
     {
       "pr": 205820,
       "sha": "ab64087ebe3ce3155b57247dfb0f1007d8003264",
       "dir": "proof/205820",
-      "tests": ["src/realtime-transcription/vocabulary-terms.test.ts", "src/gateway/talk/transcription-relay.vocabulary.test.ts"],
-      "checkouts": [{"name": "pre-fix", "repo": "CompleteDotTech/openclaw", "sha": "af23a024cf8ef3e7793976ea54cb0191b03044ab", "build": false}],
-      "offline": ["red-green.mjs"],
+      "tests": [
+        "src/realtime-transcription/vocabulary-terms.test.ts",
+        "src/gateway/talk/transcription-relay.vocabulary.test.ts"
+      ],
+      "checkouts": [
+        {
+          "name": "pre-fix",
+          "repo": "CompleteDotTech/openclaw",
+          "sha": "af23a024cf8ef3e7793976ea54cb0191b03044ab",
+          "build": false
+        }
+      ],
+      "offline": [
+        "red-green.mjs"
+      ],
       "live": false
     },
     {
@@ -91,17 +214,88 @@
       "sha": "866b6bccabc4c565b33f6d5a579efb6ec3bd59ab",
       "dir": "proof/205791",
       "script": "proof.mjs",
-      "tests": ["ui/src/pages/chat/composer-dictation-review.test.ts", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-dictation-formatting.test.ts", "ui/src/pages/chat/composer-microphone-picker.test.ts", "ui/src/pages/chat/chat-composer-microphone.test.ts", "ui/src/pages/chat/components/chat-composer-status.test.tsx", "ui/src/pages/chat/composer-direct-dictation-formatting.test.tsx", "src/gateway/talk/transcription-relay.test.ts", "extensions/deepgram/realtime-transcription-provider.test.ts"],
-      "checks": ["tsgo:ui", "ui:i18n:verify", ["check:test-lines-ratchet", "--base", "e769c8ba051b21832d54ae7249c816f496a897d9", "--no-merge-base"], ["ui:check-performance:base", "e769c8ba051b21832d54ae7249c816f496a897d9"], "ui:build", ["test:ui:e2e", "ui/src/e2e/dictation-formatting.e2e.test.ts", "ui/src/e2e/settings-prefs-reconnect.e2e.test.ts", "--maxWorkers=1", "--project=ui-e2e-bundled"]],
-      "checkouts": [{"name": "budget-base", "repo": "openclaw/openclaw", "sha": "e769c8ba051b21832d54ae7249c816f496a897d9", "build": false}]
+      "tests": [
+        "ui/src/pages/chat/composer-dictation-review.test.ts",
+        "ui/src/pages/chat/composer-dictation.test.ts",
+        "ui/src/pages/chat/composer-dictation-formatting.test.ts",
+        "ui/src/pages/chat/composer-microphone-picker.test.ts",
+        "ui/src/pages/chat/chat-composer-microphone.test.ts",
+        "ui/src/pages/chat/components/chat-composer-status.test.tsx",
+        "ui/src/pages/chat/composer-direct-dictation-formatting.test.tsx",
+        "src/gateway/talk/transcription-relay.test.ts",
+        "extensions/deepgram/realtime-transcription-provider.test.ts"
+      ],
+      "checks": [
+        "tsgo:ui",
+        "ui:i18n:verify",
+        [
+          "check:test-lines-ratchet",
+          "--base",
+          "e769c8ba051b21832d54ae7249c816f496a897d9",
+          "--no-merge-base"
+        ],
+        [
+          "ui:check-performance:base",
+          "e769c8ba051b21832d54ae7249c816f496a897d9"
+        ],
+        "ui:build",
+        [
+          "test:ui:e2e",
+          "ui/src/e2e/dictation-formatting.e2e.test.ts",
+          "ui/src/e2e/settings-prefs-reconnect.e2e.test.ts",
+          "--maxWorkers=1",
+          "--project=ui-e2e-bundled"
+        ]
+      ],
+      "checkouts": [
+        {
+          "name": "budget-base",
+          "repo": "openclaw/openclaw",
+          "sha": "e769c8ba051b21832d54ae7249c816f496a897d9",
+          "build": false
+        }
+      ]
     },
     {
       "pr": 206273,
       "sha": "fd4702826c993ceec8b852cb57e33c1b482ab5af",
       "dir": "proof/206273",
       "script": "dictation-proof.mjs",
-      "tests": ["ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-dictation-placement.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/pages/chat/chat-composer-solid.test.tsx", "ui/src/pages/chat/chat-session-rail.test.ts", "ui/src/pages/chat/components/voice-snippets.test.tsx", "ui/src/pages/chat/components/voice-snippet-review.test.tsx", "ui/src/e2e/browser-dictation-status.e2e.test.ts"],
-      "checks": ["tsgo", "tsgo:ui"]
+      "tests": [
+        "ui/src/pages/chat/composer-dictation.test.ts",
+        "ui/src/pages/chat/composer-dictation-placement.test.ts",
+        "ui/src/pages/chat/composer-direct-dictation.test.tsx",
+        "ui/src/pages/chat/chat-composer-solid.test.tsx",
+        "ui/src/pages/chat/chat-session-rail.test.ts",
+        "ui/src/pages/chat/components/voice-snippets.test.tsx",
+        "ui/src/pages/chat/components/voice-snippet-review.test.tsx",
+        "ui/src/e2e/browser-dictation-status.e2e.test.ts"
+      ],
+      "checks": [
+        "tsgo",
+        "tsgo:ui"
+      ]
+    },
+    {
+      "pr": 205875,
+      "sha": "42d18e81a786e78774845471189a20274054557f",
+      "dir": "proof/205875",
+      "tests": [
+        "src/agents/tools/computer-tool.effect-receipt.test.ts",
+        "src/agents/tool-effect-receipt.test.ts",
+        "src/agents/tool-terminal-outcome.test.ts",
+        "src/agents/tools/computer-tool.gateway.test.ts"
+      ],
+      "checks": [
+        "tsgo:core",
+        "tsgo:scripts",
+        "build"
+      ],
+      "offline": [
+        "prereqs.mjs",
+        "receipt-proof.mjs"
+      ],
+      "live": false
     }
   ]
 }
