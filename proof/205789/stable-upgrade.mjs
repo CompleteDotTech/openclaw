@@ -10,8 +10,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 
 const STABLE = '2026.11.10';
-const DRAFT = 'Unsent upgrade fixture: confirm the blue folder.\nKeep this second line.';
-const EDIT = DRAFT + '\nCandidate edit: retain this line too.';
+const DRAFT = 'Unsent upgrade fixture: confirm the blue folder.\x0aKeep this second line.';
+const EDIT = DRAFT + '\x0aCandidate edit: retain this line too.';
 const SESSION = 'agent:main:upgrade-proof';
 const LABEL = 'Stored upgrade fixture';
 const exec = promisify(execFile);
@@ -26,6 +26,41 @@ async function until(test, message, ms = 30_000) {
     await sleep(100);
   } while (Date.now() < end);
   throw new Error(message);
+}
+
+async function waitForCommittedEdit(page) {
+  await until(() => page.evaluate(async (expected) => {
+    const target = document.querySelector('openclaw-app-shell');
+    if (!target) return false;
+    let context;
+    target.dispatchEvent(Object.assign(new Event('context-request', { bubbles: true, composed: true }), {
+      context: 'openclaw.application', contextTarget: target, subscribe: false,
+      callback: (value) => { context = value; },
+    }));
+    const gateway = context?.gateway;
+    const recoveryScope = gateway?.snapshot.client?.recoveryScope;
+    const name = 'openclaw-control-ui';
+    if (!recoveryScope || !(await indexedDB.databases()).some((db) => db.name === name)) return false;
+    const gatewayOwner = gateway.connection.gatewayUrl.trim() || 'default';
+    const scopeKey = 'chat:v3:agent:main:main\u0000agent:main';
+    const key = JSON.stringify([gatewayOwner, recoveryScope, scopeKey]);
+    const db = await new Promise((ok, fail) => {
+      const request = indexedDB.open(name);
+      request.onsuccess = () => ok(request.result);
+      request.onerror = () => fail(new Error('Could not open the candidate draft database'));
+    });
+    try {
+      if (!db.objectStoreNames.contains('composerDrafts')) return false;
+      return await new Promise((ok, fail) => {
+        const tx = db.transaction('composerDrafts', 'readonly');
+        const request = tx.objectStore('composerDrafts').get(key);
+        tx.oncomplete = () => ok(request.result?.text === expected);
+        tx.onabort = tx.onerror = () => fail(new Error('Could not read the candidate draft record'));
+      });
+    } finally {
+      db.close();
+    }
+  }, EDIT), 'Candidate did not commit the exact edited draft before navigation');
 }
 
 async function main(out) {
@@ -44,6 +79,7 @@ async function main(out) {
   const root = await mkdtemp(join(tmpdir(), 'dictation-upgrade-'));
   let gateway, browser;
   let blocked = 0;
+  let failed = false;
   const stop = async () => {
     if (!gateway) return;
     const { child, exited } = gateway;
@@ -220,28 +256,51 @@ async function main(out) {
       'Candidate defaulted to Off without changing the unsent draft',
       'Candidate read the stable-written session with the same identity and label');
 
-    stage = 'edit-existing-data';
+    stage = 'patch-stored-session-label';
     await call(pr, 'sessions.patch', { key: SESSION, label: LABEL + ' (edited)' });
+    stage = 'read-back-stored-session-label';
     await savedSession(pr, LABEL + ' (edited)', created.sessionId);
+    stage = 'fill-candidate-draft';
     await chatState.box.fill(EDIT);
+    // fill() fires input; it does not wait for the debounced IndexedDB write.
+    stage = 'commit-candidate-draft';
+    await waitForCommittedEdit(page);
+    stage = 'navigate-to-candidate-draft';
     await appearance(page, false);
     chatState = await chat(page);
+    stage = 'check-draft-after-navigation';
     await draftIs(chatState.box, EDIT);
+    stage = 'reopen-candidate-browser';
     await closeBrowser();
     page = await open();
     await appearance(page, false);
     chatState = await chat(page);
+    stage = 'check-draft-after-browser-restart';
     await draftIs(chatState.box, EDIT);
+    stage = 'close-candidate-browser';
     await closeBrowser();
+    stage = 'stop-candidate-gateway';
     await stop();
+    stage = 'check-no-send';
     assert.equal(blocked, 0, 'A test page attempted a send');
     report.checks.push('Candidate updated the saved session and draft; the edited draft survived browser restart',
       'No browser send attempts and no provider calls required');
     report.status = 'PASS';
+  } catch (error) {
+    failed = true;
+    throw error;
   } finally {
     report.blockedSendAttempts = blocked;
-    try { await browser?.close(); } finally {
-      try { await stop(); } finally { await rm(root, { recursive: true, force: true }); }
+    try {
+      try { await browser?.close(); } finally {
+        try { await stop(); } finally { await rm(root, { recursive: true, force: true }); }
+      }
+    } catch (error) {
+      report.cleanupFailed = true;
+      if (!failed) {
+        stage = 'cleanup';
+        throw error;
+      }
     }
   }
 }
@@ -256,8 +315,13 @@ try {
   // Keep CLI output/config and browser storage out of uploaded diagnostics.
   report.error = error.cmd ? 'Isolated Gateway/CLI command failed' :
     String(error.message).replace(/(?:https?|wss?):\/\/[^\s"'<>]+/g, '[url]').slice(0, 600);
+  if (error.cmd) {
+    report.cliFailure = error.killed ? 'killed' : Number.isInteger(error.code) ?
+      'exit-' + error.code : 'spawn-or-transport';
+  }
   process.exitCode = 1;
 } finally {
-  await writeFile(join(out, 'assertions.json'), JSON.stringify(report, null, 2) + '\n');
-  console.log('Stable upgrade: ' + report.status + (report.failedAt ? ' (' + report.failedAt + ')' : ''));
+  await writeFile(join(out, 'assertions.json'), JSON.stringify(report, null, 2) + '\x0a');
+  console.log('Stable upgrade: ' + report.status + (report.failedAt ? ' (' + report.failedAt + ')' : '') +
+    (report.cliFailure ? ' [CLI: ' + report.cliFailure + ']' : ''));
 }
