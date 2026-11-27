@@ -16,8 +16,7 @@ const seed = "Existing draft:";
 const blockedMethods = new Set(["chat.send", "chat.inject", "sessions.send", "agent", "send"]);
 const relayMethods = new Set(["talk.session.create", "talk.session.appendAudio", "talk.session.close"]);
 const words = (s) => (s.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
-const save = (p, data) => writeFile(p, JSON.stringify(data, null, 2) + "
-");
+const save = (p, data) => writeFile(p, JSON.stringify(data, null, 2) + "\n");
 let apiKey;
 
 function scrub(value) {
@@ -207,8 +206,7 @@ export async function runTake(c, take, { chromium, origin, results, commit, revi
   const waitUi = (check, message, ms) => waitFor(async () => {
     const ready = await check();
     const errors = await observeErrors();
-    if (errors.length && (expectsRecovery || !ready)) throw new VisibleUiError(errors.join("
-"));
+    if (errors.length && (expectsRecovery || !ready)) throw new VisibleUiError(errors.join("\n"));
     return ready;
   }, message, ms);
   try {
@@ -296,8 +294,7 @@ export async function runTake(c, take, { chromium, origin, results, commit, revi
       const until = Date.now() + 600;
       await waitUi(() => Date.now() >= until, "Checking empty transcription", 2000);
       const errors = await observeErrors();
-      if (errors.length) throw new VisibleUiError(errors.join("
-"));
+      if (errors.length) throw new VisibleUiError(errors.join("\n"));
       state.status = "INCONCLUSIVE_STT";
     } else {
       state.status = "FAIL"; // Grade the app against what the provider actually returned.
@@ -365,8 +362,7 @@ export async function runTake(c, take, { chromium, origin, results, commit, revi
     if (error instanceof VisibleUiError || errors.length) {
       state.status = "ERROR";
       state.error = { step: state.step, name: "VisibleUiError",
-        message: error instanceof VisibleUiError ? error.message : errors.join("
-") };
+        message: error instanceof VisibleUiError ? error.message : errors.join("\n") };
     } else state.error = diagnostic(state.step, error);
   } finally {
     try {
