@@ -41,8 +41,7 @@ function targetKind(value, s) {
 }
 // Keep the reason, not Playwright's DOM/call log, assert's value diff, or an embedded RPC dump.
 function consoleText(value, limit = 440) {
-  return require('node:util').stripVTControlCharacters(scrub(value)).trim().split(/[
-\u2028\u2029]/, 1)[0]
+  return require('node:util').stripVTControlCharacters(scrub(value)).trim().split(/[\r\n\u2028\u2029]/, 1)[0]
     .replace(/\b(?:Basic|Bearer)\s+\S+|\b(?:gh[pousr]_|github_pat_)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+/gi, '[redacted]')
     .replace(/\b(?:[\w-]*(?:token|password|secret)|api[_-]?key|authorization|cookie)\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi, '[redacted]')
     .replace(/\bagent:[^\s'"\],)]+|\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi, '[session]')
@@ -116,8 +115,7 @@ function checkExplicit(result, control) {
 // print a free-form ASR miss. JSON escapes whitespace on the single-line receipt.
 function explicitObservation(raw, intended, complete, qualified) {
   const lexicalMatch = words(raw) === intended;
-  const safeFixture = lexicalMatch && raw.length <= 128 && /^[a-zA-Z \t
-.,:;!?"'()\x60-]+$/.test(raw);
+  const safeFixture = lexicalMatch && raw.length <= 128 && /^[a-zA-Z \t\n.,:;!?"'()\x60-]+$/.test(raw);
   return { complete, lexicalMatch, qualified, ...(safeFixture ? { fixtureForm: raw } : {}) };
 }
 // Stub only inference, never the browser or Gateway. The real ask RPC returns after the
@@ -155,18 +153,14 @@ async function startCompanionFixture() {
         output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
       if (body.stream === false) return json(res, 200, response);
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
-      const emit = event => res.write('data: ' + JSON.stringify(event) + '
-
-');
+      const emit = event => res.write('data: ' + JSON.stringify(event) + '\n\n');
       const index = { item_id: item.id, output_index: 0, content_index: 0 };
       emit({ type: 'response.output_item.added', output_index: 0, item: { ...item, status: 'in_progress', content: [] } });
       emit({ type: 'response.output_text.delta', ...index, delta: answer });
       emit({ type: 'response.output_text.done', ...index, text: answer });
       emit({ type: 'response.output_item.done', output_index: 0, item });
       emit({ type: 'response.completed', response });
-      res.end('data: [DONE]
-
-');
+      res.end('data: [DONE]\n\n');
     })().catch(() => { if (!res.headersSent) res.writeHead(400); res.end(); });
   });
   server.listen(0, '127.0.0.1');
@@ -530,8 +524,7 @@ async function probeNewPendingEnter(field, review, raw, result, checkGuard) {
       t.trusted &&= event.isTrusted;
       if (type === 'keydown') { if (event.key === 'Enter') { t.keys++; key = event; } }
       else if (type === 'beforeinput') { t.beforeInputs++; before = event; t.beforeType = inputKind(event); }
-      else { t.inputs++; t.inputType = inputKind(event); t.inputWasSingleLF = el.value === seed + '
-'; }
+      else { t.inputs++; t.inputType = inputKind(event); t.inputWasSingleLF = el.value === seed + '\n'; }
     }, { capture: true, signal: ctrl.signal });
     return () => { ctrl.abort(); return { ...t, keyCanceled: key?.defaultPrevented ?? null,
       beforeCanceled: before?.defaultPrevented ?? null }; };
@@ -542,8 +535,7 @@ async function probeNewPendingEnter(field, review, raw, result, checkGuard) {
   } finally { await readTrace.dispose(); }
   checkGuard();
   const value = await field.inputValue();
-  probe.after = value === draft ? 'unchanged' : value === draft + '
-' ? 'one-trailing-LF' : 'other-edit';
+  probe.after = value === draft ? 'unchanged' : value === draft + '\n' ? 'one-trailing-LF' : 'other-edit';
   probe.reviewVisible = await review.isVisible();
   probe.originalIntact = probe.reviewVisible && await review.getByLabel('Original recognizer text').inputValue() === raw;
   probe.insertEnabled = probe.reviewVisible && await insert.isEnabled();
@@ -599,8 +591,7 @@ async function main() {
   const out = fs.mkdtempSync(path.join(output, 'run-'));
   const tmpParent = fs.realpathSync(process.env.PROOF_TMPFS || '/dev/shm');
   assert.equal(fs.statfsSync(tmpParent).type, 0x01021994, 'private runtime must be on Linux tmpfs');
-  assert.equal(fs.readFileSync('/proc/swaps', 'utf8').trim().split('
-').length, 1, 'turn off swap before proof');
+  assert.equal(fs.readFileSync('/proc/swaps', 'utf8').trim().split('\n').length, 1, 'turn off swap before proof');
   const tmp = fs.mkdtempSync(path.join(tmpParent, 'dictation-'));
   const originalTmp = process.env.TMPDIR;
   let gateway, fixture;
@@ -674,11 +665,9 @@ async function main() {
         }
         if (!diagnostic && !(subject && await subject.isVisible())) return;
         // Scan the whole visible document, including toasts that can overlay a crop.
-        const screenText = await body.evaluate(el => el.innerText + '
-' +
+        const screenText = await body.evaluate(el => el.innerText + '\n' +
           [...el.querySelectorAll('input,textarea,[contenteditable="true"]')]
-            .filter(e => e.getClientRects().length).map(e => e.value ?? e.innerText).join('
-'), undefined, { timeout: 2000 });
+            .filter(e => e.getClientRects().length).map(e => e.value ?? e.innerText).join('\n'), undefined, { timeout: 2000 });
         if (scrubSecrets(screenText) !== screenText) {
           (result.screenshotSkipped ??= []).push({ name, reason: 'possible visible secret' });
           return;
@@ -936,16 +925,13 @@ async function main() {
         result.finalAccepted = Boolean(s?.closed && s?.drained);
         collectWireEvidence(result, s, surface);
         result.screenshotAvailable = fs.readdirSync(folder).some(n => n.endsWith('.png'));
-        write(folder, 'transcript.txt', scrub(raw || s?.finals.join(' ')) + '
-');
-        write(folder, 'state.json', JSON.stringify(result, null, 2) + '
-');
+        write(folder, 'transcript.txt', scrub(raw || s?.finals.join(' ')) + '\n');
+        write(folder, 'state.json', JSON.stringify(result, null, 2) + '\n');
         tally.push(result);
         console.log(takeLine(c.name, result));
       }
     }
-    write(out, 'summary.json', JSON.stringify(tally, null, 2) + '
-');
+    write(out, 'summary.json', JSON.stringify(tally, null, 2) + '\n');
     process.exitCode = tally.some(x => x.status === 'FAIL' || x.status.startsWith('ERROR')) ? 1 :
       tally.some(x => x.status.startsWith('INCONCLUSIVE_')) ? 2 : 0;
   } finally {
