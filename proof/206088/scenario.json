@@ -54,7 +54,11 @@
       "id": "keyboard-confirm",
       "segments": [
         {
-          "text": "Please inspect reference file notes end reference tomorrow.",
+          "text": "Please inspect reference file notes.",
+          "pauseAfterMs": 250
+        },
+        {
+          "text": "End reference tomorrow.",
           "pauseAfterMs": 1500
         }
       ],
@@ -68,7 +72,11 @@
       "id": "keyboard-cancel",
       "segments": [
         {
-          "text": "Please inspect reference file checklist end reference before lunch.",
+          "text": "Please inspect reference file checklist.",
+          "pauseAfterMs": 250
+        },
+        {
+          "text": "End reference before lunch.",
           "pauseAfterMs": 1500
         }
       ],
