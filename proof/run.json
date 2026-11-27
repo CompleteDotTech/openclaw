@@ -1,5 +1,5 @@
 {
-  "note": "Round 4 for #205788 with RoboClaw's v4 harness and repaired escapes (05:33 UTC Nov 27).",
+  "note": "Run #205789 on fff9441 with its P2 fix, before/after captures and stable upgrade lane (05:46 UTC Nov 27).",
   "runs": [
     {
       "pr": 206088,
@@ -14,10 +14,13 @@
     },
     {
       "pr": 205789,
-      "sha": "7ea1297feb705b5ac8350bb45c93823837d659a3",
+      "sha": "fff944112b3b5bf65301c5c2cce3ad450ec87ac0",
       "dir": "proof/205789",
       "script": "dictation-proof.mjs",
-      "tests": ["ui/src/pages/chat/composer-dictation-source.test.ts"]
+      "tests": ["ui/src/pages/chat/dictation-cleanup.test.ts", "ui/src/pages/chat/dictation-refinement.test.ts", "ui/src/pages/chat/composer-dictation-source.test.ts", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/app/settings.node.test.ts"],
+      "checkouts": [{"name": "before", "repo": "openclaw/openclaw", "sha": "d95d852e054f61cb654c478511537e2562317c33", "build": true}],
+      "stable": "2026.11.10",
+      "offline": ["stable-upgrade.mjs"]
     },
     {
       "pr": 205788,
