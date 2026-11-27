@@ -1,12 +1,12 @@
 {
-  "note": "#205789 on 0a26348 with the waited edit and the plainer New Session sentence (Nov 27).",
+  "note": "#206088 boot manifest export on its pushed head 1e6dd77; the visual entry returns afterwards (Nov 27).",
   "runs": [
     {
       "pr": 206088,
-      "sha": "d81b89299fad581da9df2114800e6af049ecf6da",
+      "sha": "1e6dd7701883b11937cac1903c46255363498e93",
       "dir": "proof/206088",
-      "script": "dictation-proof.mjs",
-      "checkouts": [{"name": "main", "repo": "openclaw/openclaw", "sha": "fbba71f65223e59068ebdb18293e8b1e9884074f", "build": true}]
+      "offline": ["boot-manifest-export.mjs"],
+      "live": false
     },
     {
       "pr": 205789,
