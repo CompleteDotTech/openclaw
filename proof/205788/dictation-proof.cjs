@@ -8,6 +8,7 @@ const { createRequire } = require('node:module');
 const { pathToFileURL } = require('node:url');
 const { randomBytes, createHash } = require('node:crypto');
 const { spawn, spawnSync, execFileSync } = require('node:child_process');
+const { fixtureWindow, watchToolFilterWarning, probeCompanion, verifyClipBindings, recognizerReceipt } = require('./proof-receipts.cjs');
 const { once } = require('node:events');
 class ProofTimeout extends Error { name = 'ProofTimeout'; }
 class MissingControl extends Error { name = 'MissingControl'; }
@@ -41,7 +42,7 @@ function targetKind(value, s) {
 }
 // Keep the reason, not Playwright's DOM/call log, assert's value diff, or an embedded RPC dump.
 function consoleText(value, limit = 440) {
-  return require('node:util').stripVTControlCharacters(scrub(value)).trim().split(/[\r\n\u2028\u2029]/, 1)[0]
+  return require('node:util').stripVTControlCharacters(scrub(value)).trim().split(/[\x0d\x0a\u2028\u2029]/, 1)[0]
     .replace(/\b(?:Basic|Bearer)\s+\S+|\b(?:gh[pousr]_|github_pat_)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+/gi, '[redacted]')
     .replace(/\b(?:[\w-]*(?:token|password|secret)|api[_-]?key|authorization|cookie)\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi, '[redacted]')
     .replace(/\bagent:[^\s'"\],)]+|\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi, '[session]')
@@ -64,27 +65,29 @@ function collectWireEvidence(result, s, surface) {
     nonempty: Boolean(w.text), textMatches: w.textMatches, sameDictationSession: Boolean(w.target && w.target === s.target),
     returnedKey: Boolean(w.createdKey), keyOK: w.keyOK ?? null, runStarted: w.runStarted ?? null,
     rpcOK: w.rpcOK ?? null, responseMs: w.responseMs ?? null, answerPresent: w.answerPresent ?? null,
-    ...(w.fixtureStart ? { fixturePosts: w.fixturePosts ?? null, fixtureAnswer: w.fixtureAnswer ?? null } : {}),
+    ...(w.fixtureStart ? { fixturePosts: w.fixturePosts ?? null, fixtureAnswer: w.fixtureAnswer ?? null,
+      fixtureWindow: w.fixtureWindow ?? null } : {}),
     code: w.code ?? null, detail: w.detail ?? null, error: w.error ?? null }));
 }
 function takeLine(name, result) {
   if (result.status === 'PASS') {
-    if (result.pendingProbe) return name + ' PASS ' + JSON.stringify({ writeCount: result.writes?.length, pendingProbe: result.pendingProbe });
     const ask = result.writes?.find(w => w.method === 'sessions.companion.ask');
-    if (ask) return name + ' PASS ' + JSON.stringify({ method: ask.method, target: ask.target,
-      textMatches: ask.textMatches, rpcOK: ask.rpcOK, fixtureAnswer: ask.fixtureAnswer, render: result.render,
+    return name + ' PASS ' + JSON.stringify({ asr: result.recognizer,
+      ...(result.pendingProbe ? { writeCount: result.writes?.length, pendingProbe: result.pendingProbe } : {}),
+      ...(ask ? { method: ask.method, target: ask.target, textMatches: ask.textMatches, rpcOK: ask.rpcOK,
+        fixtureAnswer: ask.fixtureAnswer, fixtureWindow: ask.fixtureWindow, render: result.render } : {}),
       ...(result.explicitASR ? { explicitASR: result.explicitASR } : {}) });
-    return name + ' PASS';
   }
   const all = result.writes;
   const sample = all.length <= 4 ? all : [...all.slice(0, 2), ...all.slice(-2)];
   return name + ' ' + result.status + ' ' + JSON.stringify({
-    step: result.error.step, error: consoleText(result.error.message), routing: result.routing,
+    step: result.error.step, error: consoleText(result.error.message), routing: result.routing, asr: result.recognizer,
     writeCount: all.length, writes: sample.map(w => ({ method: w.method, target: w.target,
       textMatches: w.textMatches, blocked: w.blocked, ...(w.blocked ? { why: w.guardReason } : {}),
       rpcOK: w.rpcOK, accepted: w.accepted, responseMs: w.responseMs,
       ...(w.method === 'sessions.create' ? { keyOK: w.keyOK, runStarted: w.runStarted } : {}),
-      ...(w.method === 'sessions.companion.ask' ? { answerPresent: w.answerPresent, fixturePosts: w.fixturePosts, fixtureAnswer: w.fixtureAnswer } : {}),
+      ...(w.method === 'sessions.companion.ask' ? { answerPresent: w.answerPresent, fixturePosts: w.fixturePosts,
+        fixtureAnswer: w.fixtureAnswer, fixtureWindow: w.fixtureWindow } : {}),
       ...(w.code ? { code: w.code } : {}), ...(w.detail ? { detail: w.detail } : {}),
       ...(w.error ? { error: consoleText(w.error, 180) } : {}) })),
     ...(sample.length < all.length ? { omittedWrites: all.length - sample.length } : {}),
@@ -115,7 +118,7 @@ function checkExplicit(result, control) {
 // print a free-form ASR miss. JSON escapes whitespace on the single-line receipt.
 function explicitObservation(raw, intended, complete, qualified) {
   const lexicalMatch = words(raw) === intended;
-  const safeFixture = lexicalMatch && raw.length <= 128 && /^[a-zA-Z \t\n.,:;!?"'()\x60-]+$/.test(raw);
+  const safeFixture = lexicalMatch && raw.length <= 128 && /^[a-zA-Z \t\x0a.,:;!?"'()\x60-]+$/.test(raw);
   return { complete, lexicalMatch, qualified, ...(safeFixture ? { fixtureForm: raw } : {}) };
 }
 // Stub only inference, never the browser or Gateway. The real ask RPC returns after the
@@ -124,16 +127,19 @@ const fixtureProvider = 'dictation-fixture', fixtureId = 'side-receipt';
 const fixtureRef = fixtureProvider + '/' + fixtureId, fixtureKey = 'synthetic-loopback-only';
 async function startCompanionFixture() {
   const issued = new Map();
-  let posts = 0;
+  let posts = 0, otherPosts = 0, authRejects = 0, modelRejects = 0;
   const json = (res, code, body) => res.writeHead(code, { 'content-type': 'application/json' }).end(JSON.stringify(body));
   const server = http.createServer((req, res) => {
     void (async () => {
       if (req.method === 'GET' && req.url === '/v1/models') {
         return json(res, 200, { object: 'list', data: [{ id: fixtureId, object: 'model' }] });
       }
-      if (req.method !== 'POST' || req.url !== '/v1/responses') return res.writeHead(404).end();
+      if (req.method !== 'POST' || req.url !== '/v1/responses') {
+        if (req.method === 'POST') otherPosts++; // Count unexpected paths, never print them.
+        return res.writeHead(404).end();
+      }
       posts++;
-      if (req.headers.authorization !== 'Bearer ' + fixtureKey) return res.writeHead(401).end();
+      if (req.headers.authorization !== 'Bearer ' + fixtureKey) { authRejects++; return res.writeHead(401).end(); }
       let size = 0;
       const chunks = [];
       for await (const chunk of req) {
@@ -143,7 +149,9 @@ async function startCompanionFixture() {
       }
       // No headers, prompts, model traffic or credentials are logged, persisted or echoed.
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      if (body?.model !== fixtureId) return json(res, 400, { error: { message: 'wrong fixture model' } });
+      if (body?.model !== fixtureId) {
+        modelRejects++; return json(res, 400, { error: { message: 'wrong fixture model' } });
+      }
       const id = randomBytes(12).toString('hex');
       const answer = 'Local dictation receipt ' + id + '.';
       issued.set(answer, issued.size + 1);
@@ -153,20 +161,20 @@ async function startCompanionFixture() {
         output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
       if (body.stream === false) return json(res, 200, response);
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
-      const emit = event => res.write('data: ' + JSON.stringify(event) + '\n\n');
+      const emit = event => res.write('data: ' + JSON.stringify(event) + '\x0a\x0a');
       const index = { item_id: item.id, output_index: 0, content_index: 0 };
       emit({ type: 'response.output_item.added', output_index: 0, item: { ...item, status: 'in_progress', content: [] } });
       emit({ type: 'response.output_text.delta', ...index, delta: answer });
       emit({ type: 'response.output_text.done', ...index, text: answer });
       emit({ type: 'response.output_item.done', output_index: 0, item });
       emit({ type: 'response.completed', response });
-      res.end('data: [DONE]\n\n');
+      res.end('data: [DONE]\x0a\x0a');
     })().catch(() => { if (!res.headersSent) res.writeHead(400); res.end(); });
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   return { baseUrl: 'http://127.0.0.1:' + server.address().port + '/v1',
-    snapshot: () => ({ posts, issued: issued.size }),
+    snapshot: () => ({ posts, otherPosts, authRejects, modelRejects, issued: issued.size }),
     isFreshAnswer: (value, since) => (issued.get(value) ?? 0) > since,
     close: () => new Promise((resolve, reject) => {
       server.close(err => err ? reject(err) : resolve()); server.closeAllConnections();
@@ -320,7 +328,7 @@ function wavMs(file) {
   return bytes / 96;
 }
 
-async function watchGateway(page, origin, surface, step, knownKeys, chatModel, fixture) {
+async function watchGateway(page, origin, surface, step, knownKeys, chatModel, fixture, warningCount = () => 0) {
   const s = { hello: 0, audio: 0, finals: [], events: [], writes: [], closed: false };
   let socketNumber = 0;
   function parse(frame) {
@@ -334,12 +342,20 @@ async function watchGateway(page, origin, surface, step, knownKeys, chatModel, f
       const m = parse(frame);
       if (m?.type !== 'req') return server.send(frame);
       const p = m.params ?? {};
-      if (m.method === 'talk.session.appendAudio' && p.sessionId === s.sid) s.audio++;
+      if (m.method === 'talk.session.appendAudio' && s.sid && p.sessionId === (s.audioRpcId ?? s.sid)) {
+        s.audio++;
+        if (typeof p.audioBase64 === 'string') {
+          // Fingerprint bytes forwarded by the browser, not raw audio in logs or extra upload artifacts.
+          const bytes = Buffer.from(p.audioBase64, 'base64');
+          (s.audioHash ??= createHash('sha256')).update(bytes);
+          s.audioBytes = (s.audioBytes ?? 0) + bytes.length;
+        }
+      }
       if (m.method === 'talk.session.create' && p.mode === 'transcription') {
         s.allowStandby = false;
         pending.set(m.id, { kind: 'capture', target: p.sessionKey });
       }
-      if (m.method === 'talk.session.close' && p.sessionId === s.sid && !p.discard) {
+      if (m.method === 'talk.session.close' && s.sid && p.sessionId === (s.audioRpcId ?? s.sid) && !p.discard) {
         s.closeRequested = true;
         pending.set(m.id, { kind: 'close' });
       }
@@ -376,7 +392,7 @@ async function watchGateway(page, origin, surface, step, knownKeys, chatModel, f
             error: { code: 'UNAVAILABLE', message: 'Blocked by dictation proof send guard' } }));
           return;
         }
-        if (ask) w.fixtureStart = fixture.snapshot();
+        if (ask) { w.fixtureStart = fixture.snapshot(); w.warningsAtStart = warningCount(); }
         if (standby) s.standby = w;
         else s.sent = w;
         if (create && w.target !== undefined) knownKeys.add(w.target);
@@ -406,7 +422,8 @@ async function watchGateway(page, origin, surface, step, knownKeys, chatModel, f
       if (m.type === 'res' && pending.has(m.id)) {
         const r = pending.get(m.id); pending.delete(m.id);
         if (r.kind === 'capture') {
-          s.sid = p.transcriptionSessionId;
+          s.sid = p.transcriptionSessionId ?? p.sessionId; // Talk events key off the transcription id.
+          s.audioRpcId = p.sessionId ?? s.sid; // appendAudio and close use the capture RPC id.
           s.target = r.target;
           s.provider = p.provider;
           if (!m.ok) s.captureRejected = scrub(m.error?.message || 'Gateway rejected capture');
@@ -439,7 +456,9 @@ async function watchGateway(page, origin, surface, step, knownKeys, chatModel, f
           } else if (w.method === 'sessions.companion.ask') {
             // The RPC returns the completed answer, not a chat.send-style startup ack. Never retain it.
             w.answerPresent = typeof p.answer === 'string' && Boolean(p.answer.trim());
-            w.fixturePosts = fixture.snapshot().posts - w.fixtureStart.posts;
+            w.fixtureWindow = { ...fixtureWindow(w.fixtureStart, fixture.snapshot()),
+              emptyToolWarningObserved: warningCount() > w.warningsAtStart };
+            w.fixturePosts = w.fixtureWindow.posts;
             w.fixtureAnswer = fixture.isFreshAnswer(p.answer, w.fixtureStart.issued);
             problem ??= !w.answerPresent || !Number.isSafeInteger(p.ts) || p.ts < 0 ?
               'invalid companion answer receipt (expected nonempty answer and timestamp)' :
@@ -524,7 +543,7 @@ async function probeNewPendingEnter(field, review, raw, result, checkGuard) {
       t.trusted &&= event.isTrusted;
       if (type === 'keydown') { if (event.key === 'Enter') { t.keys++; key = event; } }
       else if (type === 'beforeinput') { t.beforeInputs++; before = event; t.beforeType = inputKind(event); }
-      else { t.inputs++; t.inputType = inputKind(event); t.inputWasSingleLF = el.value === seed + '\n'; }
+      else { t.inputs++; t.inputType = inputKind(event); t.inputWasSingleLF = el.value === seed + '\x0a'; }
     }, { capture: true, signal: ctrl.signal });
     return () => { ctrl.abort(); return { ...t, keyCanceled: key?.defaultPrevented ?? null,
       beforeCanceled: before?.defaultPrevented ?? null }; };
@@ -535,7 +554,7 @@ async function probeNewPendingEnter(field, review, raw, result, checkGuard) {
   } finally { await readTrace.dispose(); }
   checkGuard();
   const value = await field.inputValue();
-  probe.after = value === draft ? 'unchanged' : value === draft + '\n' ? 'one-trailing-LF' : 'other-edit';
+  probe.after = value === draft ? 'unchanged' : value === draft + '\x0a' ? 'one-trailing-LF' : 'other-edit';
   probe.reviewVisible = await review.isVisible();
   probe.originalIntact = probe.reviewVisible && await review.getByLabel('Original recognizer text').inputValue() === raw;
   probe.insertEnabled = probe.reviewVisible && await insert.isEnabled();
@@ -557,14 +576,17 @@ async function main() {
   const checkout = fs.realpathSync(process.argv[2]);
   const git = (...args) => execFileSync('git', args, { cwd: checkout, encoding: 'utf8', stdio: ['ignore','pipe','ignore'] }).trim();
   const head = git('rev-parse', 'HEAD'), tree = git('rev-parse', 'HEAD^{tree}');
-  const expectedHead = process.env.PROOF_EXPECTED_HEAD || 'a58e59097da0089adf1a59ba6c86002a2f407bc5';
-  assert.match(expectedHead, /^[0-9a-f]{40}$/);
+  const expectedHead = 'a58e59097da0089adf1a59ba6c86002a2f407bc5';
+  if (process.env.PROOF_EXPECTED_HEAD) assert.equal(process.env.PROOF_EXPECTED_HEAD, expectedHead);
+  assert.equal(tree, '46986ece5b94cfcfad805a8648ebc4ae96fc13e6', 'wrong #205788 source tree');
   assert.equal(head, expectedHead, 'build the pinned PR head, not the harness branch or merge ref');
   assert.equal(git('status', '--porcelain', '--untracked-files=no'), '', 'tracked checkout is dirty');
   const built = path.join(checkout, 'dist/control-ui');
   assert.ok(fs.existsSync(path.join(built, 'index.html')), 'missing built Control UI');
   const { chromium } = createRequire(path.join(checkout, 'ui/package.json'))('playwright');
-  const scenario = JSON.parse(fs.readFileSync(path.join(__dirname, 'scenario.json'), 'utf8'));
+  const scenarioBytes = fs.readFileSync(path.join(__dirname, 'scenario.json'));
+  assert.equal(sha256(scenarioBytes), '9b6ead98e1f13a210f5a23b12ba2d7970367bf2b58a5e630ec44a9f71161d82b', 'wrong #205788 scenario');
+  const scenario = JSON.parse(scenarioBytes.toString('utf8'));
   const { refineDictation } = await import(pathToFileURL(path.join(checkout, 'ui/src/lib/dictation-refinement.ts')).href);
   const refine = (rawTranscript, mode, captureId) => refineDictation({
     schemaVersion: 1, captureId, generation: 1, transcriptRevision: 1,
@@ -585,13 +607,14 @@ async function main() {
     return { ...c, take: take?.id ?? null, voice: take?.voice ?? scenario.tts?.voice ?? null,
       name, clip, ms, hash: sha256(fs.readFileSync(clip)) };
   }));
-  assert.ok(clips.length);
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'clips/manifest.json'), 'utf8'));
+  verifyClipBindings(clips, manifest, words);
   const output = path.join(__dirname, 'results');
   fs.mkdirSync(output, { recursive: true, mode: 0o700 });
   const out = fs.mkdtempSync(path.join(output, 'run-'));
   const tmpParent = fs.realpathSync(process.env.PROOF_TMPFS || '/dev/shm');
   assert.equal(fs.statfsSync(tmpParent).type, 0x01021994, 'private runtime must be on Linux tmpfs');
-  assert.equal(fs.readFileSync('/proc/swaps', 'utf8').trim().split('\n').length, 1, 'turn off swap before proof');
+  assert.equal(fs.readFileSync('/proc/swaps', 'utf8').trim().split('\x0a').length, 1, 'turn off swap before proof');
   const tmp = fs.mkdtempSync(path.join(tmpParent, 'dictation-'));
   const originalTmp = process.env.TMPDIR;
   let gateway, fixture;
@@ -623,7 +646,7 @@ async function main() {
     fs.writeFileSync(config, JSON.stringify({
       gateway: { mode: 'local', bind: 'loopback', port, auth: { mode: 'token' },
         controlUi: { enabled: true, root: built } },
-      logging: { level: 'silent', file: '/dev/null' }, cron: { enabled: false },
+      logging: { level: 'silent', file: '/dev/null', consoleLevel: 'warn' }, cron: { enabled: false },
       agents: { defaults: { workspace: path.join(tmp, 'work'), model: { primary: chatModel },
         utilityModel: { primary: fixtureRef, fallbacks: [] }, models: { [chatModel]: {},
           [fixtureRef]: { agentRuntime: { id: 'openclaw' }, params: { transport: 'sse' } } } } },
@@ -631,20 +654,26 @@ async function main() {
         request: { allowPrivateNetwork: true }, models: [{ id: fixtureId, name: 'Local dictation fixture',
           reasoning: false, input: ['text'], contextWindow: 128000, maxTokens: 4096,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } },
-      tools: { profile: 'minimal', media: { audio: { enabled: true, timeoutSeconds: 55 },
+      // Side chat's embedded runner demands at least one of read, sessions_history, sessions_search.
+      // The bare minimal profile supplies none. This adds one read-only tool in this disposable Gateway.
+      tools: { profile: 'minimal', alsoAllow: ['sessions_history'], media: { audio: { enabled: true, timeoutSeconds: 55 },
         models: [{ provider: 'openai', model: sttModel, capabilities: ['audio'] }] } },
     }), { mode: 0o600 });
     const env = { ...base, OPENCLAW_CONFIG_PATH: config, OPENCLAW_STATE_DIR: path.join(tmp, 'state'),
       OPENCLAW_INTERNAL_WORKER_TMPDIR: path.join(tmp, 'worker-tmp'), OPENCLAW_GATEWAY_TOKEN: token };
     gateway = spawn(process.execPath, ['openclaw.mjs', 'gateway', 'run'], {
-      cwd: checkout, env: { ...env, OPENAI_API_KEY: key }, stdio: 'ignore', detached: true,
+      cwd: checkout, env: { ...env, OPENAI_API_KEY: key }, stdio: ['ignore', 'pipe', 'pipe'], detached: true,
     });
+    const warningCount = watchToolFilterWarning([gateway.stdout, gateway.stderr]);
     gateway.on('error', () => {});
     await until(async () => {
       assert.ok(gateway.pid && gateway.exitCode === null && gateway.signalCode === null, 'Gateway exited during startup');
       try { return (await fetch(origin + '/readyz', { signal: AbortSignal.timeout(1500) })).ok; } catch { return false; }
     }, 'Gateway readyz timeout', 120000);
-    const tally = [], knownKeys = new Set(); // One private Gateway, all seed/create keys for this run.
+    const canary = await probeCompanion(checkout, env, fixture, fixtureRef, warningCount);
+    write(out, 'companion-preflight.json', JSON.stringify(canary, null, 2) + '\x0a');
+    console.log('companion-preflight ' + JSON.stringify(canary)); // Separate from the 33 scored audio takes.
+    const tally = [], knownKeys = new Set(); // One private Gateway, all seed/create keys for these takes.
     for (const c of clips) {
       const folder = path.join(out, c.name); fs.mkdirSync(folder, { mode: 0o700 });
       const { surface, policy, finish, after, words: intended } = c.expect;
@@ -665,9 +694,9 @@ async function main() {
         }
         if (!diagnostic && !(subject && await subject.isVisible())) return;
         // Scan the whole visible document, including toasts that can overlay a crop.
-        const screenText = await body.evaluate(el => el.innerText + '\n' +
+        const screenText = await body.evaluate(el => el.innerText + '\x0a' +
           [...el.querySelectorAll('input,textarea,[contenteditable="true"]')]
-            .filter(e => e.getClientRects().length).map(e => e.value ?? e.innerText).join('\n'), undefined, { timeout: 2000 });
+            .filter(e => e.getClientRects().length).map(e => e.value ?? e.innerText).join('\x0a'), undefined, { timeout: 2000 });
         if (scrubSecrets(screenText) !== screenText) {
           (result.screenshotSkipped ??= []).push({ name, reason: 'possible visible secret' });
           return;
@@ -699,7 +728,7 @@ async function main() {
         await context.grantPermissions(['microphone'], { origin });
         page = await context.newPage(); page.setDefaultTimeout(15000);
         await watchAlerts(page, result.alerts, () => phase);
-        s = await watchGateway(page, origin, surface, () => phase, knownKeys, chatModel, fixture);
+        s = await watchGateway(page, origin, surface, () => phase, knownKeys, chatModel, fixture, warningCount);
         await page.goto(origin + '/settings/appearance#token=' + token);
         await until(() => s.hello > 0, 'Control UI handshake', 30000);
         const src = await page.locator('script[type="module"][src]').first().getAttribute('src');
@@ -917,6 +946,7 @@ async function main() {
           result.error = { step: s.violation.step,
             ...errorInfo(new BlockedSubmit('Blocked ' + s.violation.method + ': ' + s.violation.reason)) };
         }
+        result.recognizer = recognizerReceipt(s, c, words); // Observational; never used to decide PASS.
         result.gatewayEvents = s?.events ?? [];
         result.gatewayError = s?.sttError ?? s?.captureRejected ?? s?.closeRejected ?? null;
         result.gatewayAudioFrames = s?.audio ?? 0;
@@ -925,14 +955,14 @@ async function main() {
         result.finalAccepted = Boolean(s?.closed && s?.drained);
         collectWireEvidence(result, s, surface);
         result.screenshotAvailable = fs.readdirSync(folder).some(n => n.endsWith('.png'));
-        write(folder, 'transcript.txt', scrub(raw || s?.finals.join(' ')) + '\n');
-        write(folder, 'state.json', JSON.stringify(result, null, 2) + '\n');
+        write(folder, 'transcript.txt', scrub(raw || s?.finals.join(' ')) + '\x0a');
+        write(folder, 'state.json', JSON.stringify(result, null, 2) + '\x0a');
         tally.push(result);
         console.log(takeLine(c.name, result));
       }
     }
-    write(out, 'summary.json', JSON.stringify(tally, null, 2) + '\n');
-    process.exitCode = tally.some(x => x.status === 'FAIL' || x.status.startsWith('ERROR')) ? 1 :
+    write(out, 'summary.json', JSON.stringify(tally, null, 2) + '\x0a');
+    process.exitCode = !canary.ok || tally.some(x => x.status === 'FAIL' || x.status.startsWith('ERROR')) ? 1 :
       tally.some(x => x.status.startsWith('INCONCLUSIVE_')) ? 2 : 0;
   } finally {
     try { try { await stop(); } finally { await fixture?.close(); } } finally {
