@@ -1,5 +1,5 @@
 {
-  "note": "#206273 first proof run on its synced head f92ee19, plus #205788 round 7 (Nov 27).",
+  "note": "#205789 on 0a26348 with the waited edit and the plainer New Session sentence (Nov 27).",
   "runs": [
     {
       "pr": 206088,
@@ -10,7 +10,7 @@
     },
     {
       "pr": 205789,
-      "sha": "fff944112b3b5bf65301c5c2cce3ad450ec87ac0",
+      "sha": "0a263485fbc1c32ad48f941bf768aef52cbadbc4",
       "dir": "proof/205789",
       "script": "dictation-proof.mjs",
       "tests": ["ui/src/pages/chat/dictation-cleanup.test.ts", "ui/src/pages/chat/dictation-refinement.test.ts", "ui/src/pages/chat/composer-dictation-source.test.ts", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/app/settings.node.test.ts"],
