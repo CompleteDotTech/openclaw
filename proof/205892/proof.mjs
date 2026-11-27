@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const head = '22347650b31422c227b64e39d0ec0ad8a6c038dc';
@@ -144,32 +144,40 @@ async function observe(page, origin, redact) {
   return log;
 }
 
-const words = s => (s.toLowerCase().match(/[\p{L}\p{M}\p{N}]+/gu) ?? []).join(' ');
+function wordSpans(text) {
+  return Array.from(text.matchAll(/[\p{L}\p{M}\p{N}]+/gu), m => ({
+    word: m[0].toLowerCase(), start: m.index, end: m.index + m[0].length,
+  }));
+}
 
-function qualify(raw, fixture, parser) {
-  const { lexDeveloperText, matchesPhrase, createDeveloperPlan, profile } = parser;
-  const { command, replaceWith, action } = fixture.expected;
-  if (words(raw) !== words(fixture.segments.map(s => s.text).join(' '))) return null;
+// Independent oracle: docs/experiments/developer-dictation.md, "Versioned grammar".
+// Compare word fidelity without punctuation, then require a documented whole-word
+// scope in the unmodified transcript. Never normalize input or consult the parser.
+function qualify(raw, fixture) {
+  const { command, opener, replaceWith, action } = fixture.expected;
+  const intended = wordSpans(fixture.segments.map(s => s.text).join(' '));
+  const scope = wordSpans(command ?? opener);
+  const sameAt = (tokens, start, reference) =>
+    reference.every((token, i) => tokens[start + i]?.word === token.word);
+  const offset = intended.findIndex((_, i) => sameAt(intended, i, scope));
+  check(scope.length && offset >= 0, 'Fixture scope does not match its authored utterance');
 
-  const tokens = lexDeveloperText(raw);
-  const width = matchesPhrase(tokens, 0, command ?? profile.grammar.snakeCase);
-  if (!width) return null;
-  const plan = createDeveloperPlan({
-    rawTranscript: raw, mode: 'developer', locale: 'en-US', profile,
-    captureId: 'proof', generation: 1, transcriptRevision: 1,
-  });
-  const blocking = plan.diagnostics.filter(d => d.severity === 'blocking');
-  if (action === 'blocked-cancel') {
-    check(plan.supported && plan.edits.length === 0 && blocking.some(d => d.code === 'incomplete'),
-      'Parser did not block the recognized incomplete command');
-    return { blocked: true };
+  const heard = wordSpans(raw);
+  if (heard.length !== intended.length || !sameAt(heard, 0, intended)) {
+    return { wordMatch: false, reason: 'Recognized words differ from the fixture' };
   }
-  const start = tokens[0].start, end = tokens[width - 1].end;
-  const edit = plan.edits[0];
-  check(plan.supported && !blocking.length && plan.edits.length === 1 &&
-    edit.start === start && edit.end === end && edit.text === replaceWith,
-  'Parser did not produce the fixture edit');
-  return { preview: raw.slice(0, start) + replaceWith + raw.slice(end) };
+  const matched = heard.slice(offset, offset + scope.length);
+  const start = matched[0].start, end = matched.at(-1).end;
+  const cleanScope = (start === 0 || /\s/u.test(raw[start - 1])) &&
+    (end === raw.length || /\s/u.test(raw[end])) &&
+    matched.slice(1).every((token, i) => /^\s+$/u.test(raw.slice(matched[i].end, token.start))) &&
+    // Fixtures use plain prose only. Do not guess whether a quote or slash opened an opaque span.
+    !/["'\x60“”‘’/]/u.test(raw.slice(0, start));
+  if (!cleanScope) {
+    return { wordMatch: true, reason: 'Words match, but punctuation makes the raw command scope ambiguous' };
+  }
+  if (action === 'blocked-cancel') return { wordMatch: true, blocked: true };
+  return { wordMatch: true, preview: raw.slice(0, start) + replaceWith + raw.slice(end) };
 }
 
 const value = l => l.evaluate(e => e.value ?? e.textContent, undefined, { timeout: 2500 });
@@ -184,7 +192,7 @@ async function readNotices(page) {
     })).filter(e => e.text), errors);
 }
 
-async function runTake({ chromium, env, origin, fixture, take, clip, scenario, parser, out, redact }) {
+async function runTake({ chromium, env, origin, fixture, take, clip, scenario, out, redact }) {
   const state = { case: fixture.id, take: take ?? null, head, model: stt, status: 'FAIL', step: 'validate WAV' };
   let browser, page, input, review, log;
   const raw = () => log?.finals.join('\n') ?? '';
@@ -317,19 +325,20 @@ async function runTake({ chromium, env, origin, fixture, take, clip, scenario, p
       await requireVisible(original, 'Recognized original missing', inReview);
       check(await value(original) === transcript, 'Review changed recognized original');
     }
-    const sample = qualify(transcript, fixture, parser);
+    const sample = qualify(transcript, fixture);
+    state.sttWordMatch = sample.wordMatch;
     const insert = button('Insert into draft', review), copy = button('Copy exact text', review);
     const cancel = button('Cancel review', review);
-    const allowed = sample === null ? inReview : sample.blocked ? incomplete : undefined;
+    const allowed = sample.reason ? inReview : sample.blocked ? incomplete : undefined;
 
-    if (sample === null) {
+    if (sample.reason) {
       await screenshot('screenshot.png', transcript.trim() ? review : input);
       if (transcript.trim()) {
         await requireEnabled(cancel, 'Cancel review unavailable', allowed);
         await cancel.click();
       }
       state.status = 'INCONCLUSIVE_STT';
-      state.reason = 'Successful transcription did not preserve the fixture words and command boundaries';
+      state.reason = sample.reason;
     } else if (sample.blocked) {
       await requireVisible(review.getByRole('alert').getByText(/^The spoken command is incomplete\./u),
         'Expected incomplete-command alert missing', allowed);
@@ -433,15 +442,6 @@ async function main(key) {
   const ui = join(checkout, 'dist/control-ui');
   await fs.access(join(ui, 'index.html'));
   const { chromium } = createRequire(join(checkout, 'ui/package.json'))('playwright');
-  const load = name => import(pathToFileURL(join(checkout, 'src/shared', name)).href);
-  const { createDeveloperPlan, builtinDeveloperProfiles } = await load('dictation-developer.ts');
-  const { lexDeveloperText, matchesPhrase } = await load('dictation-developer-lex.ts');
-  const parser = {
-    createDeveloperPlan, lexDeveloperText, matchesPhrase,
-    profile: builtinDeveloperProfiles.find(p => p.id === profileId),
-  };
-  check(parser.profile, 'Expected built-in grammar profile is missing');
-
   const scenario = JSON.parse(await fs.readFile(join(here, 'scenario.json'), 'utf8'));
   const takes = scenario.takes?.length ? scenario.takes.map(t => t.id) : [null];
   check(takes.every(t => t === null || id(t)) && new Set(takes).size === takes.length, 'Invalid take IDs');
@@ -449,7 +449,7 @@ async function main(key) {
   check(cases.length && cases.every(c => id(c.id) && actions.has(c.expected?.action)) &&
     new Set(cases.map(c => c.id)).size === cases.length, 'Invalid case IDs or actions');
   for (const c of cases) {
-    check(qualify(c.segments.map(s => s.text).join(' '), c, parser), 'Invalid canonical fixture: ' + c.id);
+    check(!qualify(c.segments.map(s => s.text).join(' '), c).reason, 'Invalid canonical fixture: ' + c.id);
   }
 
   check((await fs.statfs('/dev/shm')).type === 0x01021994, 'Linux /dev/shm tmpfs is required');
@@ -508,7 +508,7 @@ async function main(key) {
         const out = join(run, stem);
         await fs.mkdir(out, { mode: 0o700 });
         statuses[take ?? 'default'] = await runTake({
-          chromium, env, origin, fixture, take, scenario, parser, out, redact,
+          chromium, env, origin, fixture, take, scenario, out, redact,
           clip: join(here, 'clips', stem + '.wav'),
         });
       }
