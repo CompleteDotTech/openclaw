@@ -656,7 +656,7 @@ async function main() {
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } },
       // Side chat's embedded runner demands at least one of read, sessions_history, sessions_search.
       // The bare minimal profile supplies none. This adds one read-only tool in this disposable Gateway.
-      tools: { profile: 'minimal', alsoAllow: ['sessions_history'], media: { audio: { enabled: true, timeoutSeconds: 55 },
+      tools: { profile: 'minimal', alsoAllow: ['sessions_history'], media: { audio: { enabled: true, timeoutSeconds: 55, language: 'en' },
         models: [{ provider: 'openai', model: sttModel, capabilities: ['audio'] }] } },
     }), { mode: 0o600 });
     const env = { ...base, OPENCLAW_CONFIG_PATH: config, OPENCLAW_STATE_DIR: path.join(tmp, 'state'),
