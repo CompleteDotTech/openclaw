@@ -467,7 +467,12 @@ async function run(pr, stable, scratch) {
     await checkRef(page, EDITED_REF);
     const recoveredTab = tabRow(await tabRead(page), 'identity');
     check(recoveredTab?.store.version === 5 && equal(recoveredTab.row.draftFileReferences, REFS), 'compatible-format5-not-readable');
+    await checkDraft(page);
     await checkQueue(page);
+    pass('compatible-reopen-preserved-ordinary-draft-and-queue', {
+      draftAttachmentBytes: Buffer.byteLength(BYTES.draft),
+      queuedAttachmentBytes: Buffer.byteLength(BYTES.queue),
+    });
     await closeBrowser();
     // New Chromium context without the tab copy: v3 alone must hydrate the reference.
     page = await launch(upgradedProfile, oldTab.filter(([key]) => key === TAB), true);
