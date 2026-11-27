@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
+const http = require('node:http');
 const { createRequire } = require('node:module');
 const { pathToFileURL } = require('node:url');
 const { randomBytes, createHash } = require('node:crypto');
@@ -40,7 +41,8 @@ function targetKind(value, s) {
 }
 // Keep the reason, not Playwright's DOM/call log, assert's value diff, or an embedded RPC dump.
 function consoleText(value, limit = 440) {
-  return require('node:util').stripVTControlCharacters(scrub(value)).trim().split(/[\r\n\u2028\u2029]/, 1)[0]
+  return require('node:util').stripVTControlCharacters(scrub(value)).trim().split(/[
+\u2028\u2029]/, 1)[0]
     .replace(/\b(?:Basic|Bearer)\s+\S+|\b(?:gh[pousr]_|github_pat_)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+/gi, '[redacted]')
     .replace(/\b(?:[\w-]*(?:token|password|secret)|api[_-]?key|authorization|cookie)\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi, '[redacted]')
     .replace(/\bagent:[^\s'"\],)]+|\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi, '[session]')
@@ -63,10 +65,18 @@ function collectWireEvidence(result, s, surface) {
     nonempty: Boolean(w.text), textMatches: w.textMatches, sameDictationSession: Boolean(w.target && w.target === s.target),
     returnedKey: Boolean(w.createdKey), keyOK: w.keyOK ?? null, runStarted: w.runStarted ?? null,
     rpcOK: w.rpcOK ?? null, responseMs: w.responseMs ?? null, answerPresent: w.answerPresent ?? null,
+    ...(w.fixtureStart ? { fixturePosts: w.fixturePosts ?? null, fixtureAnswer: w.fixtureAnswer ?? null } : {}),
     code: w.code ?? null, detail: w.detail ?? null, error: w.error ?? null }));
 }
 function takeLine(name, result) {
-  if (result.status === 'PASS') return name + ' PASS';
+  if (result.status === 'PASS') {
+    if (result.pendingProbe) return name + ' PASS ' + JSON.stringify({ writeCount: result.writes?.length, pendingProbe: result.pendingProbe });
+    const ask = result.writes?.find(w => w.method === 'sessions.companion.ask');
+    if (ask) return name + ' PASS ' + JSON.stringify({ method: ask.method, target: ask.target,
+      textMatches: ask.textMatches, rpcOK: ask.rpcOK, fixtureAnswer: ask.fixtureAnswer, render: result.render,
+      ...(result.explicitASR ? { explicitASR: result.explicitASR } : {}) });
+    return name + ' PASS';
+  }
   const all = result.writes;
   const sample = all.length <= 4 ? all : [...all.slice(0, 2), ...all.slice(-2)];
   return name + ' ' + result.status + ' ' + JSON.stringify({
@@ -75,26 +85,100 @@ function takeLine(name, result) {
       textMatches: w.textMatches, blocked: w.blocked, ...(w.blocked ? { why: w.guardReason } : {}),
       rpcOK: w.rpcOK, accepted: w.accepted, responseMs: w.responseMs,
       ...(w.method === 'sessions.create' ? { keyOK: w.keyOK, runStarted: w.runStarted } : {}),
-      ...(w.method === 'sessions.companion.ask' ? { answerPresent: w.answerPresent } : {}),
+      ...(w.method === 'sessions.companion.ask' ? { answerPresent: w.answerPresent, fixturePosts: w.fixturePosts, fixtureAnswer: w.fixtureAnswer } : {}),
       ...(w.code ? { code: w.code } : {}), ...(w.detail ? { detail: w.detail } : {}),
       ...(w.error ? { error: consoleText(w.error, 180) } : {}) })),
     ...(sample.length < all.length ? { omittedWrites: all.length - sample.length } : {}),
     ...(result.render ? { render: result.render } : {}),
+    ...(result.explicitASR ? { explicitASR: result.explicitASR } : {}),
+    ...(result.pendingProbe ? { pendingProbe: result.pendingProbe } : {}),
     ...(result.alerts?.length ? { lastAlert: consoleText(result.alerts.at(-1).text, 180) } : {}),
   });
 }
-// Qualify the recognizer independently of the product parser. The nonempty prefix
-// suppresses sentence casing; either initial C is retained, not manufactured.
-function explicitProposal(raw) {
-  const match = /^([Cc]all[ \t]+[Mm]e)[ \t]+insert[ \t]+comma,?([ \t]+[Pp]lease)[ \t]+insert[ \t]+period\.?$/.exec(raw);
-  return match ? match[1] + ',' + match[2] + '.' : null;
+// Independent positive control for this one utterance, not the candidate parser. Retain
+// lexical casing and horizontal separators. Only a matching mark immediately AFTER its
+// command may already exist. Do not bless marks before commands or duplicate punctuation.
+function explicitControl(raw) {
+  const m = /^(call[ \t]+me)([ \t]+insert[ \t]+comma)(,?)([ \t]+please)([ \t]+insert[ \t]+period)(\.?)$/i.exec(raw);
+  if (!m) return null;
+  const first = m[1].length, second = first + m[2].length + m[3].length + m[4].length;
+  return { text: m[1] + ',' + m[4] + '.', edits: [
+    { start: first, end: first + m[2].length, text: m[3] ? '' : ',', reason: 'explicit-punctuation' },
+    { start: second, end: second + m[5].length, text: m[6] ? '' : '.', reason: 'explicit-punctuation' },
+  ] };
 }
-function checkExplicit(result, proposal) {
+function checkExplicit(result, control) {
   assert.equal(result.status, 'refined', 'qualified spoken commands were not refined');
-  assert.equal(result.edits.filter(e => e.reason === 'explicit-punctuation').length, 2,
-    'qualified comma and period must both have explicit-punctuation edits');
-  assert.equal(result.text, proposal, 'qualified spoken commands produced the wrong punctuation or casing');
+  assert.deepEqual(result.edits, control.edits, 'explicit edit source spans or replacements were wrong');
+  assert.equal(result.text, control.text, 'qualified spoken commands produced the wrong punctuation or casing');
 }
+// For an exact word match only, show the fixed script's casing and separators. Never
+// print a free-form ASR miss. JSON escapes whitespace on the single-line receipt.
+function explicitObservation(raw, intended, complete, qualified) {
+  const lexicalMatch = words(raw) === intended;
+  const safeFixture = lexicalMatch && raw.length <= 128 && /^[a-zA-Z \t
+.,:;!?"'()\x60-]+$/.test(raw);
+  return { complete, lexicalMatch, qualified, ...(safeFixture ? { fixtureForm: raw } : {}) };
+}
+// Stub only inference, never the browser or Gateway. The real ask RPC returns after the
+// answer. Each issued answer is distinct; a cached answer or optimistic turn cannot pass.
+const fixtureProvider = 'dictation-fixture', fixtureId = 'side-receipt';
+const fixtureRef = fixtureProvider + '/' + fixtureId, fixtureKey = 'synthetic-loopback-only';
+async function startCompanionFixture() {
+  const issued = new Map();
+  let posts = 0;
+  const json = (res, code, body) => res.writeHead(code, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+  const server = http.createServer((req, res) => {
+    void (async () => {
+      if (req.method === 'GET' && req.url === '/v1/models') {
+        return json(res, 200, { object: 'list', data: [{ id: fixtureId, object: 'model' }] });
+      }
+      if (req.method !== 'POST' || req.url !== '/v1/responses') return res.writeHead(404).end();
+      posts++;
+      if (req.headers.authorization !== 'Bearer ' + fixtureKey) return res.writeHead(401).end();
+      let size = 0;
+      const chunks = [];
+      for await (const chunk of req) {
+        size += chunk.length;
+        if (size > 4 * 1024 * 1024) return res.writeHead(413).end();
+        chunks.push(chunk);
+      }
+      // No headers, prompts, model traffic or credentials are logged, persisted or echoed.
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      if (body?.model !== fixtureId) return json(res, 400, { error: { message: 'wrong fixture model' } });
+      const id = randomBytes(12).toString('hex');
+      const answer = 'Local dictation receipt ' + id + '.';
+      issued.set(answer, issued.size + 1);
+      const item = { type: 'message', id: 'msg_' + id, role: 'assistant', status: 'completed',
+        content: [{ type: 'output_text', text: answer, annotations: [] }] };
+      const response = { id: 'resp_' + id, object: 'response', status: 'completed', model: fixtureId,
+        output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
+      if (body.stream === false) return json(res, 200, response);
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
+      const emit = event => res.write('data: ' + JSON.stringify(event) + '
+
+');
+      const index = { item_id: item.id, output_index: 0, content_index: 0 };
+      emit({ type: 'response.output_item.added', output_index: 0, item: { ...item, status: 'in_progress', content: [] } });
+      emit({ type: 'response.output_text.delta', ...index, delta: answer });
+      emit({ type: 'response.output_text.done', ...index, text: answer });
+      emit({ type: 'response.output_item.done', output_index: 0, item });
+      emit({ type: 'response.completed', response });
+      res.end('data: [DONE]
+
+');
+    })().catch(() => { if (!res.headersSent) res.writeHead(400); res.end(); });
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  return { baseUrl: 'http://127.0.0.1:' + server.address().port + '/v1',
+    snapshot: () => ({ posts, issued: issued.size }),
+    isFreshAnswer: (value, since) => (issued.get(value) ?? 0) > since,
+    close: () => new Promise((resolve, reject) => {
+      server.close(err => err ? reject(err) : resolve()); server.closeAllConnections();
+    }) };
+}
+
 const submits = new Set(['chat.send', 'sessions.send', 'agent', 'sessions.companion.ask', 'sessions.create', 'sessions.dispatch']);
 const runId = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const sttModel = 'gpt-4o-mini-transcribe';
@@ -242,7 +326,7 @@ function wavMs(file) {
   return bytes / 96;
 }
 
-async function watchGateway(page, origin, surface, step, knownKeys, chatModel) {
+async function watchGateway(page, origin, surface, step, knownKeys, chatModel, fixture) {
   const s = { hello: 0, audio: 0, finals: [], events: [], writes: [], closed: false };
   let socketNumber = 0;
   function parse(frame) {
@@ -284,10 +368,11 @@ async function watchGateway(page, origin, surface, step, knownKeys, chatModel) {
         const standby = surface === 'new' && s.expectStandby && s.allowStandby && !s.standby &&
           create && w.target === undefined && w.text === '';
         const unusedKey = typeof w.target === 'string' && dashboardKey.test(w.target) && !knownKeys.has(w.target);
+        const modelOK = !ask || (p.model === undefined || p.model === fixtureRef) && s.companionDefault === 'loopback-fixture';
         const reason = s.violation ? 'after an earlier blocked request' : !agentOK ? 'wrong agent' :
           !plain ? 'unexpected payload fields' : standby ? null : !s.allow ? 'not armed for explicit submit' :
           s.sent ? 'duplicate submit' : w.method !== s.allow.method ? 'wrong method; expected ' + s.allow.method :
-          !w.textMatches ? 'wrong submitted text' : s.allow.freshCreate ?
+          !w.textMatches ? 'wrong submitted text' : !modelOK ? 'side ask is not routed to the loopback fixture' : s.allow.freshCreate ?
             (w.target === undefined || unusedKey ? null : 'create key is not a fresh main dashboard UUID') :
             w.target === s.allow.target ? null : 'wrong session target';
         if (reason) {
@@ -297,6 +382,7 @@ async function watchGateway(page, origin, surface, step, knownKeys, chatModel) {
             error: { code: 'UNAVAILABLE', message: 'Blocked by dictation proof send guard' } }));
           return;
         }
+        if (ask) w.fixtureStart = fixture.snapshot();
         if (standby) s.standby = w;
         else s.sent = w;
         if (create && w.target !== undefined) knownKeys.add(w.target);
@@ -336,7 +422,7 @@ async function watchGateway(page, origin, surface, step, knownKeys, chatModel) {
         } else if (r.kind === 'sideState') {
           // Observe the UI's own hydration. Do not change the route or retain exchanges/model IDs.
           s.companionDefault = !m.ok ? 'state-rejected' : !p.defaultModel ? 'not-reported' :
-            p.defaultModel === chatModel ? 'same-as-primary' : 'different-from-primary';
+            p.defaultModel === fixtureRef ? 'loopback-fixture' : p.defaultModel === chatModel ? 'same-as-primary' : 'different-from-primary';
         } else {
           const w = r.w;
           w.rpcOK = m.ok === true;
@@ -359,8 +445,11 @@ async function watchGateway(page, origin, surface, step, knownKeys, chatModel) {
           } else if (w.method === 'sessions.companion.ask') {
             // The RPC returns the completed answer, not a chat.send-style startup ack. Never retain it.
             w.answerPresent = typeof p.answer === 'string' && Boolean(p.answer.trim());
+            w.fixturePosts = fixture.snapshot().posts - w.fixtureStart.posts;
+            w.fixtureAnswer = fixture.isFreshAnswer(p.answer, w.fixtureStart.issued);
             problem ??= !w.answerPresent || !Number.isSafeInteger(p.ts) || p.ts < 0 ?
-              'invalid companion answer receipt (expected nonempty answer and timestamp)' : null;
+              'invalid companion answer receipt (expected nonempty answer and timestamp)' :
+              !w.fixtureAnswer ? 'companion did not return an answer issued by the loopback fixture for this request window' : null;
           } else if (['error', 'timeout', 'rejected'].includes(p.status)) {
             problem ??= 'Gateway send status: ' + p.status;
           }
@@ -419,6 +508,58 @@ function renderedUserTurns(page, box, surface, text) {
     visibleUserGroups: await groups.count(), exactVisibleMatches: await exact.count() }) };
 }
 
+// A disabled New Session submit can leave a real textarea Enter native. Only this
+// negative control may count that physical keystroke as a user edit, never as dictation.
+async function probeNewPendingEnter(field, review, raw, result, checkGuard) {
+  const insert = button(review, 'Insert into draft');
+  const probe = result.pendingProbe = { button: result.pendingButton };
+  await sleep(400); checkGuard();
+  probe.beforeUnchanged = await field.inputValue() === draft;
+  assert.ok(probe.beforeUnchanged, 'pending draft changed before the Enter probe');
+  assert.ok(await review.isVisible() && await insert.isEnabled() && await field.isEditable(),
+    'expected an editable draft and a live uninserted review before pending Enter');
+  await field.press('End'); // No selection to replace; the seed is one line.
+  const readTrace = await field.evaluateHandle((el, seed) => {
+    let key, before;
+    const t = { beforeAtEnd: el.value === seed && el.selectionStart === seed.length && el.selectionEnd === seed.length,
+      keys: 0, beforeInputs: 0, inputs: 0, trusted: true, beforeType: null, inputType: null, inputWasSingleLF: false };
+    const ctrl = new AbortController();
+    const inputKind = event => ['insertLineBreak', 'insertParagraph', 'insertText'].includes(event.inputType) ? event.inputType : 'other';
+    for (const type of ['keydown', 'beforeinput', 'input']) el.ownerDocument.addEventListener(type, event => {
+      if (event.target !== el) return;
+      t.trusted &&= event.isTrusted;
+      if (type === 'keydown') { if (event.key === 'Enter') { t.keys++; key = event; } }
+      else if (type === 'beforeinput') { t.beforeInputs++; before = event; t.beforeType = inputKind(event); }
+      else { t.inputs++; t.inputType = inputKind(event); t.inputWasSingleLF = el.value === seed + '
+'; }
+    }, { capture: true, signal: ctrl.signal });
+    return () => { ctrl.abort(); return { ...t, keyCanceled: key?.defaultPrevented ?? null,
+      beforeCanceled: before?.defaultPrevented ?? null }; };
+  }, draft);
+  try {
+    await field.press('Enter'); await sleep(400);
+    Object.assign(probe, await readTrace.evaluate(sample => sample()));
+  } finally { await readTrace.dispose(); }
+  checkGuard();
+  const value = await field.inputValue();
+  probe.after = value === draft ? 'unchanged' : value === draft + '
+' ? 'one-trailing-LF' : 'other-edit';
+  probe.reviewVisible = await review.isVisible();
+  probe.originalIntact = probe.reviewVisible && await review.getByLabel('Original recognizer text').inputValue() === raw;
+  probe.insertEnabled = probe.reviewVisible && await insert.isEnabled();
+  assert.ok(probe.beforeAtEnd && probe.keys === 1 && probe.trusted, 'pending Enter did not hit the seeded caret as a trusted key');
+  assert.ok(probe.originalIntact, 'pending Enter dismissed or changed the review');
+  if (probe.after === 'unchanged') {
+    assert.ok(probe.inputs === 0 && probe.insertEnabled, 'pending Enter modified/reverted the draft or revoked an unchanged review');
+  } else {
+    assert.ok(probe.after === 'one-trailing-LF' && probe.keyCanceled === false && probe.beforeCanceled === false &&
+      probe.beforeInputs === 1 && probe.inputs === 1 && probe.beforeType === 'insertLineBreak' &&
+      probe.inputType === 'insertLineBreak' && probe.inputWasSingleLF,
+      'pending Enter changed the draft beyond one observed native line break');
+    assert.equal(probe.insertEnabled, false, 'editing the draft left the stale dictation insertion enabled');
+  }
+}
+
 async function main() {
   assert.ok(process.platform === 'linux' && key && process.argv.length === 3, 'Linux, OPENAI_API_KEY and one built checkout required');
   const checkout = fs.realpathSync(process.argv[2]);
@@ -458,10 +599,11 @@ async function main() {
   const out = fs.mkdtempSync(path.join(output, 'run-'));
   const tmpParent = fs.realpathSync(process.env.PROOF_TMPFS || '/dev/shm');
   assert.equal(fs.statfsSync(tmpParent).type, 0x01021994, 'private runtime must be on Linux tmpfs');
-  assert.equal(fs.readFileSync('/proc/swaps', 'utf8').trim().split('\n').length, 1, 'turn off swap before proof');
+  assert.equal(fs.readFileSync('/proc/swaps', 'utf8').trim().split('
+').length, 1, 'turn off swap before proof');
   const tmp = fs.mkdtempSync(path.join(tmpParent, 'dictation-'));
   const originalTmp = process.env.TMPDIR;
-  let gateway;
+  let gateway, fixture;
   const base = { PATH: process.env.PATH, LANG: 'C.UTF-8', HOME: tmp, TMPDIR: tmp, TEMP: tmp, TMP: tmp,
     XDG_CONFIG_HOME: path.join(tmp, 'config'), XDG_CACHE_HOME: path.join(tmp, 'cache'),
     XDG_DATA_HOME: path.join(tmp, 'data'), XDG_STATE_HOME: path.join(tmp, 'xdg-state') };
@@ -486,11 +628,18 @@ async function main() {
     const config = path.join(tmp, 'openclaw.json');
     const chatModel = process.env.PROOF_CHAT_MODEL || 'openai/gpt-5.4-mini';
     assert.match(chatModel, /^openai\/[a-z0-9.-]+$/);
+    fixture = await startCompanionFixture();
     fs.writeFileSync(config, JSON.stringify({
       gateway: { mode: 'local', bind: 'loopback', port, auth: { mode: 'token' },
         controlUi: { enabled: true, root: built } },
       logging: { level: 'silent', file: '/dev/null' }, cron: { enabled: false },
-      agents: { defaults: { workspace: path.join(tmp, 'work'), model: { primary: chatModel }, models: { [chatModel]: {} } } },
+      agents: { defaults: { workspace: path.join(tmp, 'work'), model: { primary: chatModel },
+        utilityModel: { primary: fixtureRef, fallbacks: [] }, models: { [chatModel]: {},
+          [fixtureRef]: { agentRuntime: { id: 'openclaw' }, params: { transport: 'sse' } } } } },
+      models: { providers: { [fixtureProvider]: { baseUrl: fixture.baseUrl, api: 'openai-responses', apiKey: fixtureKey,
+        request: { allowPrivateNetwork: true }, models: [{ id: fixtureId, name: 'Local dictation fixture',
+          reasoning: false, input: ['text'], contextWindow: 128000, maxTokens: 4096,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }] } } },
       tools: { profile: 'minimal', media: { audio: { enabled: true, timeoutSeconds: 55 },
         models: [{ provider: 'openai', model: sttModel, capabilities: ['audio'] }] } },
     }), { mode: 0o600 });
@@ -525,9 +674,11 @@ async function main() {
         }
         if (!diagnostic && !(subject && await subject.isVisible())) return;
         // Scan the whole visible document, including toasts that can overlay a crop.
-        const screenText = await body.evaluate(el => el.innerText + '\n' +
+        const screenText = await body.evaluate(el => el.innerText + '
+' +
           [...el.querySelectorAll('input,textarea,[contenteditable="true"]')]
-            .filter(e => e.getClientRects().length).map(e => e.value ?? e.innerText).join('\n'), undefined, { timeout: 2000 });
+            .filter(e => e.getClientRects().length).map(e => e.value ?? e.innerText).join('
+'), undefined, { timeout: 2000 });
         if (scrubSecrets(screenText) !== screenText) {
           (result.screenshotSkipped ??= []).push({ name, reason: 'possible visible secret' });
           return;
@@ -543,8 +694,9 @@ async function main() {
         if (policy === 'automatic' || policy === 'explicit') {
           const clean = refine(intended, policy, c.name + '-canary');
           if (policy === 'explicit') {
-            assert.equal(explicitProposal(intended), c.expect.proposal, 'bad explicit fixture');
-            checkExplicit(clean, c.expect.proposal);
+            const control = explicitControl(intended);
+            assert.equal(control?.text, c.expect.proposal, 'bad explicit fixture');
+            checkExplicit(clean, control);
           } else {
             assert.equal(clean.text, intended + '.', 'candidate parser failed the clean positive control');
             assert.equal(clean.status, 'refined');
@@ -558,7 +710,7 @@ async function main() {
         await context.grantPermissions(['microphone'], { origin });
         page = await context.newPage(); page.setDefaultTimeout(15000);
         await watchAlerts(page, result.alerts, () => phase);
-        s = await watchGateway(page, origin, surface, () => phase, knownKeys, chatModel);
+        s = await watchGateway(page, origin, surface, () => phase, knownKeys, chatModel, fixture);
         await page.goto(origin + '/settings/appearance#token=' + token);
         await until(() => s.hello > 0, 'Control UI handshake', 30000);
         const src = await page.locator('script[type="module"][src]').first().getAttribute('src');
@@ -652,6 +804,8 @@ async function main() {
         if (s.closeRejected || s.sttError) throw new Error(s.closeRejected || s.sttError);
         raw = s.finals.join(' ');
         const recognized = !s.laterPartial && words(raw) === intended;
+        const control = policy === 'explicit' && recognized ? explicitControl(raw) : null;
+        if (policy === 'explicit') result.explicitASR = explicitObservation(raw, intended, Boolean(raw && !s.laterPartial), Boolean(control));
         const sttReason = s.laterPartial ? 'a nonempty partial followed the last final' : !raw ?
           'no nonempty final transcript' : 'final recognizer words did not match the spoken fixture';
         const draftWith = text => draft + ' ' + text;
@@ -694,20 +848,24 @@ async function main() {
         result.pendingButton = !await send.isVisible() ? 'hidden' : await send.isDisabled() ? 'disabled' : 'clicked';
         if (result.pendingButton === 'clicked') await send.click();
         result.pendingEnterExercised = surface !== 'new' || after === 'blocked-enter';
-        if (result.pendingEnterExercised) await field.press('Enter');
-        await sleep(400); checkGuard();
-        assert.equal(await field.inputValue(), draft, 'pending review actions changed the unsent draft');
+        if (surface === 'new' && after === 'blocked-enter') {
+          phase = 'pending review: New Session Enter';
+          await probeNewPendingEnter(field, review, raw, result, checkGuard);
+        } else {
+          if (result.pendingEnterExercised) await field.press('Enter');
+          await sleep(400); checkGuard();
+          assert.equal(await field.inputValue(), draft, 'pending review actions changed the unsent draft');
+        }
         if (!recognized) { inconclusive('INCONCLUSIVE_STT', sttReason); continue; }
         if (policy === 'explicit') {
           phase = 'qualify spoken commands';
-          const proposal = explicitProposal(raw);
-          if (proposal === null) {
-            inconclusive('INCONCLUSIVE_FIXTURE', 'words matched, but ASR casing, separators or marks fell outside the explicit positive control');
+          if (!control) {
+            inconclusive('INCONCLUSIVE_FIXTURE', 'words matched, but the observed separators or marks were outside the explicit positive control');
             continue;
           }
           // A supported raw input with bad output is a failure, never a fixture miss.
-          checkExplicit(refined, proposal);
-          assert.equal(proposed, proposal, 'review did not propose the exact explicit edit');
+          checkExplicit(refined, control);
+          assert.equal(proposed, control.text, 'review did not propose the exact explicit edit');
         }
         if (after === 'blocked-enter') { result.status = 'PASS'; continue; }
         phase = 'Insert';
@@ -720,6 +878,12 @@ async function main() {
           await button(box, 'Undo dictation insertion').press('Enter');
           await until(async () => await field.inputValue() === draft, 'Undo did not restore exact draft');
           checkGuard(); result.status = 'PASS'; continue;
+        }
+        if (surface === 'side') {
+          phase = 'check companion fixture route';
+          await until(() => s.companionDefault !== undefined || s.violation, 'no owning companion state receipt', 15000);
+          checkGuard();
+          assert.equal(s.companionDefault, 'loopback-fixture', 'wrong utility route; refusing to send this CI question');
         }
         phase = 'explicit submit: ' + after;
         render = renderedUserTurns(page, box, surface, inserted);
@@ -772,17 +936,20 @@ async function main() {
         result.finalAccepted = Boolean(s?.closed && s?.drained);
         collectWireEvidence(result, s, surface);
         result.screenshotAvailable = fs.readdirSync(folder).some(n => n.endsWith('.png'));
-        write(folder, 'transcript.txt', scrub(raw || s?.finals.join(' ')) + '\n');
-        write(folder, 'state.json', JSON.stringify(result, null, 2) + '\n');
+        write(folder, 'transcript.txt', scrub(raw || s?.finals.join(' ')) + '
+');
+        write(folder, 'state.json', JSON.stringify(result, null, 2) + '
+');
         tally.push(result);
         console.log(takeLine(c.name, result));
       }
     }
-    write(out, 'summary.json', JSON.stringify(tally, null, 2) + '\n');
+    write(out, 'summary.json', JSON.stringify(tally, null, 2) + '
+');
     process.exitCode = tally.some(x => x.status === 'FAIL' || x.status.startsWith('ERROR')) ? 1 :
       tally.some(x => x.status.startsWith('INCONCLUSIVE_')) ? 2 : 0;
   } finally {
-    try { await stop(); } finally {
+    try { try { await stop(); } finally { await fixture?.close(); } } finally {
       if (originalTmp === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = originalTmp;
       fs.rmSync(tmp, { recursive: true, force: true });
       process.removeListener('SIGINT', abort); process.removeListener('SIGTERM', abort);
