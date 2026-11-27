@@ -1,5 +1,5 @@
 {
-  "note": "#205876 on 532c7d9 and #205794 on 432aa3b after their main syncs: #205876 2 suites, build and six takes; #205794 paired budget check vs d6d289e and six cases (Nov 27).",
+  "note": "#205973 compare lane on 194fcb3, offline only (live false), to check the new --compare mode before its next head (Nov 27).",
   "runs": [
     {
       "pr": 206088,
@@ -63,8 +63,9 @@
       "sha": "194fcb3f317e5d256d1c35e9a9a69a230c81a45e",
       "dir": "proof/205973",
       "script": "dictation-proof.mjs",
-      "tests": ["ui/src/pages/chat/composer-dictation-refinement.relay.test.ts", "ui/src/pages/chat/composer-dictation-session.finality.test.ts", "ui/src/pages/chat/composer-dictation-refinement.test.ts", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/pages/chat/talk/split.test.ts", "ui/src/pages/chat/chat-composer.test.ts", "src/shared/dictation-refinement/coordinator.test.ts", "src/talk/dictation-refinement-model.test.ts", "test/scripts/ci-ui-e2e-selection.test.ts", "ui/src/e2e/browser-dictation-refinement.e2e.test.ts", "ui/src/e2e/browser-dictation-refinement.real-gateway.e2e.test.ts"],
-      "checks": ["tsgo:core", "tsgo:ui", "tsgo:test:ui", "check:control-ui-controllers", "lint:ui:i18n", "lint", "format:check"]
+      "checkouts": [{"name": "before", "repo": "openclaw/openclaw", "sha": "9239eeb2df3779992fc6c2b8a4501c9ed79e98ae", "build": true}],
+      "offline": ["dictation-compare.mjs"],
+      "live": false
     },
     {
       "pr": 205792,
