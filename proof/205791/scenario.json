@@ -1,0 +1,29 @@
+{
+  "leadingSilenceMs": 350,
+  "takes": [
+    {
+      "id": "alloy",
+      "voice": "alloy"
+    }
+  ],
+  "cases": [
+    {
+      "id": "late-streaming-final",
+      "segments": [
+        {
+          "text": "Shopping list bullet milk",
+          "pauseAfterMs": 200
+        },
+        {
+          "text": "next item eggs",
+          "pauseAfterMs": 600
+        }
+      ],
+      "expected": {
+        "finalDelayMs": 4500,
+        "terminalDelayMs": 5000,
+        "markdown": "Shopping list\n\n- milk\n- eggs"
+      }
+    }
+  ]
+}
