@@ -1,0 +1,72 @@
+{
+  "leadingSilenceMs": 350,
+  "tts": {
+    "model": "gpt-4o-mini-tts"
+  },
+  "takes": [
+    {
+      "id": "alloy",
+      "voice": "alloy",
+      "instructions": "Say only the supplied words, evenly and clearly."
+    },
+    {
+      "id": "nova",
+      "voice": "nova",
+      "instructions": "Say only the supplied words, slowly and clearly."
+    }
+  ],
+  "cases": [
+    {
+      "id": "apply-and-undo",
+      "mode": "apply",
+      "segments": [
+        { "text": "Insert snippet support signature", "pauseAfterMs": 450 }
+      ]
+    },
+    {
+      "id": "send-opens-review",
+      "mode": "send",
+      "segments": [
+        { "text": "Insert snippet support signature", "pauseAfterMs": 450 }
+      ]
+    },
+    {
+      "id": "feature-off",
+      "mode": "off",
+      "segments": [
+        { "text": "Insert snippet support signature", "pauseAfterMs": 450 }
+      ]
+    },
+    {
+      "id": "ordered-stops",
+      "mode": "ordered",
+      "segments": [
+        { "text": "Insert snippet support signature", "pauseAfterMs": 450 }
+      ]
+    },
+    {
+      "id": "second-capture",
+      "mode": "clip-only",
+      "segments": [
+        { "text": "Insert snippet ticket footer", "pauseAfterMs": 450 }
+      ]
+    }
+  ],
+  "definitions": [
+    {
+      "name": "Proof signature",
+      "triggers": ["support signature", "support signature."],
+      "body": "\u000aThanks, Alex\u000aTicket 00017 — {{name}}\u000a"
+    },
+    {
+      "name": "Proof footer",
+      "triggers": ["ticket footer", "ticket footer."],
+      "body": "\u000aProof footer — $(literal)\u000a"
+    }
+  ],
+  "applyDraft": {
+    "text": "REPLACE tail",
+    "selection": "REPLACE",
+    "suffix": " tail"
+  }
+}
