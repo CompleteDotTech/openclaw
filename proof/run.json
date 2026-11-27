@@ -1,5 +1,5 @@
 {
-  "note": "#205788 round 7 on a58e590 with the English transcription hint, compared with round 6 (Nov 27).",
+  "note": "#206273 first proof run on its synced head f92ee19, plus #205788 round 7 (Nov 27).",
   "runs": [
     {
       "pr": 206088,
@@ -91,6 +91,14 @@
       "tests": ["ui/src/pages/chat/composer-dictation-review.test.ts", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-dictation-formatting.test.ts", "ui/src/pages/chat/composer-microphone-picker.test.ts", "ui/src/pages/chat/chat-composer-microphone.test.ts", "ui/src/pages/chat/components/chat-composer-status.test.tsx", "ui/src/pages/chat/composer-direct-dictation-formatting.test.tsx", "src/gateway/talk/transcription-relay.test.ts", "extensions/deepgram/realtime-transcription-provider.test.ts"],
       "checks": ["tsgo:ui", "ui:i18n:verify", ["check:test-lines-ratchet", "--base", "6d2cb0379cb66e9fc25584f978b71750e29b916a", "--no-merge-base"], ["ui:check-performance:base", "6d2cb0379cb66e9fc25584f978b71750e29b916a"], "ui:build", ["test:ui:e2e", "ui/src/e2e/dictation-formatting.e2e.test.ts", "ui/src/e2e/settings-prefs-reconnect.e2e.test.ts", "--maxWorkers=1", "--project=ui-e2e-bundled"]],
       "checkouts": [{"name": "budget-base", "repo": "openclaw/openclaw", "sha": "6d2cb0379cb66e9fc25584f978b71750e29b916a", "build": false}]
+    },
+    {
+      "pr": 206273,
+      "sha": "f92ee1901c5afb2bd90f31fd3cd66c722f8d8148",
+      "dir": "proof/206273",
+      "script": "dictation-proof.mjs",
+      "tests": ["ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-dictation-placement.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/pages/chat/chat-composer-solid.test.tsx", "ui/src/pages/chat/chat-session-rail.test.ts", "ui/src/pages/chat/components/voice-snippets.test.tsx", "ui/src/pages/chat/components/voice-snippet-review.test.tsx", "ui/src/e2e/browser-dictation-status.e2e.test.ts"],
+      "checks": ["lint", "tsgo", "tsgo:ui"]
     }
   ]
 }
