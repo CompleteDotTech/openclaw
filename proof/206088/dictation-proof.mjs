@@ -54,7 +54,7 @@ function diagnostic(text, secrets) {
   return redact(text, secrets)
     .replace(/\b(?:https?|wss?):\/\/[^\s"'<>]+/gi, "[redacted URL]")
     .replace(/\b(?:Bearer|Basic)\s+[^\s"',;<>]+/gi, "[redacted authorization]")
-    .replace(/\b(?:authorization|cookie|set-cookie)\s*:\s*[^\r\n]*/gi, "[redacted header]")
+    .replace(/\b(?:authorization|cookie|set-cookie)\s*:\s*[^\n]*/gi, "[redacted header]")
     .replace(/\bsk-[a-z0-9_-]{8,}\b/gi, "[redacted key]")
     .slice(0, 2400);
 }
@@ -85,17 +85,12 @@ function words(s) {
     .match(/[\p{L}\p{N}]+(?:'[\p{L}\p{N}]+)*/gu) ?? []).join(" ");
 }
 
-// Mirror the resolver's spoken matching for these synthetic fixtures.
-// Never use the browser's actual chooser outcome to qualify the input.
-function matchesFixture(query, expected) {
-  const path = query.trim().replaceAll("\\", "/");
-  if (/[:\u0000-\u001f\u007f]/u.test(path) ||
-      path.split("/").some((p) => !p || p.startsWith("."))) return false;
-  const tokens = (s) => s.replace(/([\p{Ll}\d])(\p{Lu})/gu, "$1 $2")
-    .normalize("NFC").toLocaleLowerCase("en-US").split(/[\s/._-]+/u).filter(Boolean);
-  const q = tokens(path), file = tokens(expected);
-  return path === expected || path === expected.split("/").at(-1) ||
-    (q.length > 0 && q.every((token) => file.includes(token)));
+// Qualify what the parser decoded, not what the resolver might find.
+function namesFixture(query, expected) {
+  const spoken = query.toLowerCase();
+  const fixture = expected.toLowerCase();
+  if (spoken === fixture) return true;
+  return spoken.startsWith(fixture) && /^[.,!?;:…]+$/u.test(spoken.slice(fixture.length));
 }
 
 function qualify(raw, c, recognize) {
@@ -105,7 +100,7 @@ function qualify(raw, c, recognize) {
     if (parsed.status !== "ready" || parsed.commands.length !== 1) return null;
     const cmd = parsed.commands[0];
     const start = cmd.start + offset, end = cmd.end + offset;
-    if (cmd.kind !== "file" || !matchesFixture(cmd.query, c.file) ||
+    if (cmd.kind !== "file" || !namesFixture(cmd.query, c.file) ||
         words(raw.slice(0, start)) !== words(c.before) ||
         words(raw.slice(end)) !== words(c.after)) return null;
     return { start, end, query: cmd.query, recognizedCommands: plan.commands.length };
