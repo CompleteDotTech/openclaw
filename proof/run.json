@@ -1,5 +1,5 @@
 {
-  "note": "#205820 stack after its main merge (ab64087): suites + provider-admission red/green; #205973 final round on 1a1060d; #206088 on fc9ffa4 (Nov 27 16:40).",
+  "note": "Final proofs on the 16:17-16:22 main merges: #205789 0652d18, #205792 4a413b0, #205794 0d0e902, #205876 59dc260, #205880 bf530fa, #205791 866b6bc; #206273 focus fix 1d928a6 (Nov 27 17:40).",
   "runs": [
     {
       "pr": 206088,
@@ -14,7 +14,7 @@
     },
     {
       "pr": 205789,
-      "sha": "0a263485fbc1c32ad48f941bf768aef52cbadbc4",
+      "sha": "0652d18f35384e5ce0989b9cf57ba755082e4bcf",
       "dir": "proof/205789",
       "script": "dictation-proof.mjs",
       "tests": ["ui/src/pages/chat/dictation-cleanup.test.ts", "ui/src/pages/chat/dictation-refinement.test.ts", "ui/src/pages/chat/composer-dictation-source.test.ts", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/app/settings.node.test.ts"],
@@ -30,15 +30,15 @@
     },
     {
       "pr": 205794,
-      "sha": "432aa3b022e43cdf87fde450efdd1c2844728665",
+      "sha": "0d0e90243cfa934de64fc19766d26faf5a41314b",
       "dir": "proof/205794",
       "script": "live-dictation-proof.mjs",
-      "checks": [["ui:check-performance:base", "d6d289ee13ff163c20e64b8cbb008312f3181d3f"]],
-      "checkouts": [{"name": "base", "repo": "openclaw/openclaw", "sha": "d6d289ee13ff163c20e64b8cbb008312f3181d3f", "build": false}]
+      "checks": [["ui:check-performance:base", "86b6dfd531c0f04baec68457edcc67d036f3a927"]],
+      "checkouts": [{"name": "base", "repo": "openclaw/openclaw", "sha": "86b6dfd531c0f04baec68457edcc67d036f3a927", "build": false}]
     },
     {
       "pr": 205876,
-      "sha": "532c7d9532a52cdcabfaf53f0f9bd2a40372af8a",
+      "sha": "59dc2607f00df7b5acc1dc069b39f9b96f138c63",
       "dir": "proof/205876",
       "script": "live-dictation.mjs",
       "tests": ["extensions/openai/realtime-transcription-authority.test.ts", "extensions/openai/realtime-transcription-provider.test.ts", "extensions/openai/realtime-voice-browser-auth.test.ts", "src/realtime-transcription/websocket-session.test.ts", "src/gateway/talk/transcription-relay.test.ts", "src/gateway/talk/client-authority.test.ts", "src/agents/agent-tools.prefix-stability.test.ts", "extensions/deepgram/realtime-transcription-provider.test.ts", "extensions/elevenlabs/realtime-transcription-provider.test.ts", "extensions/mistral/realtime-transcription-provider.test.ts", "extensions/xai/realtime-transcription-provider.test.ts"],
@@ -46,7 +46,7 @@
     },
     {
       "pr": 205880,
-      "sha": "e3a1b8ddfb649f2ccdb314c00e7ffc736d524eee",
+      "sha": "bf530fa3f500bbf3146d021f8731a1c782ed448c",
       "dir": "proof/205880",
       "script": "live-dictation.mjs",
       "tests": ["src/realtime-transcription/personal-vocabulary-import.test.ts", "src/realtime-transcription/personal-vocabulary.test.ts", "src/realtime-transcription/vocabulary-terms.test.ts"],
@@ -70,7 +70,7 @@
     },
     {
       "pr": 205792,
-      "sha": "10ea9589f0305145836d0d80c59c6d804b80a836",
+      "sha": "4a413b07f78bd51bfc309e3c451de341bf7cac0f",
       "dir": "proof/205792",
       "script": "dictation-proof.mjs",
       "tests": ["src/shared/dictation-writing-profiles.test.ts", "src/state/user-preferences.writing-profiles.test.ts", "ui/src/app/dictation-writing-profile-preferences.node.test.ts", "ui/src/pages/chat/chat-composer-solid.test.tsx", "ui/src/pages/chat/chat-pane-lifecycle.test.ts", "ui/src/pages/chat/components/chat-session-rail-dictation-intent.test.tsx", "ui/src/pages/chat/components/composer-dictation-send-action.test.tsx", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/pages/config/dictation-writing-profiles-section.test.tsx", "ui/src/pages/new-session/new-session-page.test.ts"],
@@ -89,16 +89,16 @@
     },
     {
       "pr": 205791,
-      "sha": "aff75fc28ec3172eb3a4d779ffb0e46c420c3536",
+      "sha": "866b6bccabc4c565b33f6d5a579efb6ec3bd59ab",
       "dir": "proof/205791",
       "script": "proof.mjs",
       "tests": ["ui/src/pages/chat/composer-dictation-review.test.ts", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-dictation-formatting.test.ts", "ui/src/pages/chat/composer-microphone-picker.test.ts", "ui/src/pages/chat/chat-composer-microphone.test.ts", "ui/src/pages/chat/components/chat-composer-status.test.tsx", "ui/src/pages/chat/composer-direct-dictation-formatting.test.tsx", "src/gateway/talk/transcription-relay.test.ts", "extensions/deepgram/realtime-transcription-provider.test.ts"],
-      "checks": ["tsgo:ui", "ui:i18n:verify", ["check:test-lines-ratchet", "--base", "6d2cb0379cb66e9fc25584f978b71750e29b916a", "--no-merge-base"], ["ui:check-performance:base", "6d2cb0379cb66e9fc25584f978b71750e29b916a"], "ui:build", ["test:ui:e2e", "ui/src/e2e/dictation-formatting.e2e.test.ts", "ui/src/e2e/settings-prefs-reconnect.e2e.test.ts", "--maxWorkers=1", "--project=ui-e2e-bundled"]],
-      "checkouts": [{"name": "budget-base", "repo": "openclaw/openclaw", "sha": "6d2cb0379cb66e9fc25584f978b71750e29b916a", "build": false}]
+      "checks": ["tsgo:ui", "ui:i18n:verify", ["check:test-lines-ratchet", "--base", "e769c8ba051b21832d54ae7249c816f496a897d9", "--no-merge-base"], ["ui:check-performance:base", "e769c8ba051b21832d54ae7249c816f496a897d9"], "ui:build", ["test:ui:e2e", "ui/src/e2e/dictation-formatting.e2e.test.ts", "ui/src/e2e/settings-prefs-reconnect.e2e.test.ts", "--maxWorkers=1", "--project=ui-e2e-bundled"]],
+      "checkouts": [{"name": "budget-base", "repo": "openclaw/openclaw", "sha": "e769c8ba051b21832d54ae7249c816f496a897d9", "build": false}]
     },
     {
       "pr": 206273,
-      "sha": "16883b085acd2af51ca1c36362a917da2d1b8ffc",
+      "sha": "1d928a6088f3857403a664cd9cc0452660af78fc",
       "dir": "proof/206273",
       "script": "dictation-proof.mjs",
       "tests": ["ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-dictation-placement.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/pages/chat/chat-composer-solid.test.tsx", "ui/src/pages/chat/chat-session-rail.test.ts", "ui/src/pages/chat/components/voice-snippets.test.tsx", "ui/src/pages/chat/components/voice-snippet-review.test.tsx", "ui/src/e2e/browser-dictation-status.e2e.test.ts"],
