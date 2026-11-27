@@ -1,5 +1,5 @@
 {
-  "note": "#206088 on d81b892 with the budget check and before/after, upgrade, parser and boot-manifest lanes (05:29 UTC Nov 27).",
+  "note": "Round 4 for #205788 with RoboClaw's v4 harness and repaired escapes (05:33 UTC Nov 27).",
   "runs": [
     {
       "pr": 206088,
