@@ -1,5 +1,5 @@
 {
-  "note": "#205892 round 5 on 2234765 with the escalated session's scenario and harness (Nov 27).",
+  "note": "#205791 on aff75fc (main merge + late-final fix): 9 test files, 6 checks incl. the paired budget vs 6d2cb03 and the e2e suites, then the late-final journey (Nov 27).",
   "runs": [
     {
       "pr": 206088,
@@ -82,6 +82,15 @@
       "checkouts": [{"name": "pre-fix", "repo": "CompleteDotTech/openclaw", "sha": "af23a024cf8ef3e7793976ea54cb0191b03044ab", "build": false}],
       "offline": ["red-green.mjs"],
       "live": false
+    },
+    {
+      "pr": 205791,
+      "sha": "aff75fc28ec3172eb3a4d779ffb0e46c420c3536",
+      "dir": "proof/205791",
+      "script": "proof.mjs",
+      "tests": ["ui/src/pages/chat/composer-dictation-review.test.ts", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-dictation-formatting.test.ts", "ui/src/pages/chat/composer-microphone-picker.test.ts", "ui/src/pages/chat/chat-composer-microphone.test.ts", "ui/src/pages/chat/components/chat-composer-status.test.tsx", "ui/src/pages/chat/composer-direct-dictation-formatting.test.tsx", "src/gateway/talk/transcription-relay.test.ts", "extensions/deepgram/realtime-transcription-provider.test.ts"],
+      "checks": ["tsgo:ui", "ui:i18n:verify", ["check:test-lines-ratchet", "--base", "6d2cb0379cb66e9fc25584f978b71750e29b916a", "--no-merge-base"], ["ui:check-performance:base", "6d2cb0379cb66e9fc25584f978b71750e29b916a"], "ui:build", ["test:ui:e2e", "ui/src/e2e/dictation-formatting.e2e.test.ts", "ui/src/e2e/settings-prefs-reconnect.e2e.test.ts", "--maxWorkers=1", "--project=ui-e2e-bundled"]],
+      "checkouts": [{"name": "budget-base", "repo": "openclaw/openclaw", "sha": "6d2cb0379cb66e9fc25584f978b71750e29b916a", "build": false}]
     }
   ]
 }
