@@ -1,5 +1,5 @@
 {
-  "note": "#205880 on e3a1b8d after its main sync: suites, tsgo:core and the six takes (06:05 UTC Nov 27).",
+  "note": "Round 4 for #205892: round-2 line-feed clips, whisper-1 for the identifier cases, per-take transcript lines (06:19 UTC Nov 27).",
   "runs": [
     {
       "pr": 206088,
