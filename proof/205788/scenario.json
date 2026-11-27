@@ -11,7 +11,7 @@
     {"id":"main-button","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"main","policy":"verbatim","finish":"send","after":"button","words":"archive the notes"}},
     {"id":"main-undo","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"main","policy":"automatic","finish":"stop","after":"undo","words":"archive the notes"}},
     {"id":"side-enter","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"side","policy":"automatic","finish":"enter","after":"enter","words":"archive the notes"}},
-    {"id":"side-button","segments":[{"text":"archive the notes","pauseAfterMs":120},{"text":"insert period","pauseAfterMs":1100}],"expect":{"surface":"side","policy":"explicit","finish":"send","after":"button","words":"archive the notes insert period"}},
+    {"id":"side-button","segments":[{"text":"call me insert comma please insert period","pauseAfterMs":1100}],"expect":{"surface":"side","policy":"explicit","finish":"send","after":"button","words":"call me insert comma please insert period","proposal":"call me, please."}},
     {"id":"side-undo","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"side","policy":"verbatim","finish":"stop","after":"undo","words":"archive the notes"}},
     {"id":"new-pending-enter","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"new","policy":"verbatim","finish":"stop","after":"blocked-enter","words":"archive the notes"}},
     {"id":"new-enter","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"new","policy":"automatic","finish":"stop","after":"enter","words":"archive the notes"}},
