@@ -1,5 +1,5 @@
 {
-  "note": "Final proofs on the 16:17-16:22 main merges: #205789 0652d18, #205792 4a413b0, #205794 0d0e902, #205876 59dc260, #205880 bf530fa, #205791 866b6bc; #206273 focus fix 1d928a6 (Nov 27 17:40).",
+  "note": "#205973 comparison-only rerun against its main parent c7ea9f4 (tests, checks and live takes passed on 1a1060d at 16:54); final proofs on the main merges for six PRs and #206273 on 1d928a6 (Nov 27 17:40).",
   "runs": [
     {
       "pr": 206088,
@@ -63,10 +63,9 @@
       "sha": "1a1060d376d44835a4b49d765c4ae096e847c58a",
       "dir": "proof/205973",
       "script": "dictation-proof.mjs",
-      "tests": ["ui/src/pages/chat/composer-dictation-refinement.relay.test.ts", "ui/src/pages/chat/composer-dictation-session.finality.test.ts", "ui/src/pages/chat/composer-dictation-refinement.test.ts", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/pages/chat/talk/split.test.ts", "ui/src/pages/chat/chat-composer.test.ts", "src/shared/dictation-refinement/coordinator.test.ts", "src/talk/dictation-refinement-model.test.ts", "test/scripts/ci-ui-e2e-selection.test.ts", "ui/src/e2e/browser-dictation-refinement.e2e.test.ts", "ui/src/e2e/browser-dictation-refinement.real-gateway.e2e.test.ts"],
-      "checks": ["tsgo:core", "tsgo:ui", "tsgo:test:ui", "check:control-ui-controllers", "lint:ui:i18n"],
-      "checkouts": [{"name": "before", "repo": "openclaw/openclaw", "sha": "66b2e244acf2666690741d0e04140087b4570100", "build": true}],
-      "offline": ["dictation-compare.mjs"]
+      "checkouts": [{"name": "before", "repo": "openclaw/openclaw", "sha": "c7ea9f418610b2d5d336d0df191c8e4660202efb", "build": true}],
+      "offline": ["dictation-compare.mjs"],
+      "live": false
     },
     {
       "pr": 205792,
