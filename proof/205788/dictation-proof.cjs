@@ -30,7 +30,72 @@ const scrubSecrets = s => String(s ?? '').split(key || '\0').join('[redacted]')
 const scrub = s => scrubSecrets(s).replace(/https?:\/\/\S+/gi, '[url]');
 const words = s => (s.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(' ');
 const draft = 'Proof note:';
-class PrematureSubmit extends Error { name = 'PrematureSubmit'; }
+class BlockedSubmit extends Error { name = 'BlockedSubmit'; }
+const dashboardKey = /^agent:main:dashboard:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+function targetKind(value, s) {
+  if (value === undefined) return 'absent';
+  if (s?.owner && value === s.owner) return 'seeded-owner';
+  if (s?.standby?.createdKey && value === s.standby.createdKey) return 'standby';
+  return typeof value === 'string' && dashboardKey.test(value) ? 'main-dashboard-uuid' : 'other';
+}
+// Keep the reason, not Playwright's DOM/call log, assert's value diff, or an embedded RPC dump.
+function consoleText(value, limit = 440) {
+  return require('node:util').stripVTControlCharacters(scrub(value)).trim().split(/[
+\u2028\u2029]/, 1)[0]
+    .replace(/\b(?:Basic|Bearer)\s+\S+|\b(?:gh[pousr]_|github_pat_)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+/gi, '[redacted]')
+    .replace(/\b(?:[\w-]*(?:token|password|secret)|api[_-]?key|authorization|cookie)\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi, '[redacted]')
+    .replace(/\bagent:[^\s'"\],)]+|\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi, '[session]')
+    .replace(/\{.*|\[\s*["{].*/u, '[structured data omitted]')
+    .replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, ' ').slice(0, limit);
+}
+function collectWireEvidence(result, s, surface) {
+  result.routing = {
+    standaloneTalk: s?.hasAuth ? s.hasTalk : null,
+    recoveryScopePresent: s?.hasAuth ? s.hasRecoveryScope : null,
+    dictationHasTarget: s?.sid ? Boolean(s.target) : null,
+    captureTarget: s?.sid ? targetKind(s.target, s) : 'not-observed', expectedStandby: s?.expectStandby ?? null,
+    standbyReused: Boolean(s?.standby?.accepted && s.standby.createdKey === s.target),
+    ...(surface === 'side' ? { companionDefault: s?.companionDefault ?? 'not-observed' } : {}),
+    expectedMethod: s?.allow?.method ?? null,
+    expectedTarget: !s?.allow ? 'not-armed' : s.allow.freshCreate ? 'absent-or-fresh-main-dashboard-uuid' : targetKind(s.allow.target, s),
+  };
+  result.writes = (s?.writes ?? []).map(w => ({ method: w.method, target: w.targetKind,
+    accepted: w.accepted ?? null, blocked: Boolean(w.blocked), ...(w.blocked ? { guardReason: w.blocked } : {}),
+    nonempty: Boolean(w.text), textMatches: w.textMatches, sameDictationSession: Boolean(w.target && w.target === s.target),
+    returnedKey: Boolean(w.createdKey), keyOK: w.keyOK ?? null, runStarted: w.runStarted ?? null,
+    rpcOK: w.rpcOK ?? null, responseMs: w.responseMs ?? null, answerPresent: w.answerPresent ?? null,
+    code: w.code ?? null, detail: w.detail ?? null, error: w.error ?? null }));
+}
+function takeLine(name, result) {
+  if (result.status === 'PASS') return name + ' PASS';
+  const all = result.writes;
+  const sample = all.length <= 4 ? all : [...all.slice(0, 2), ...all.slice(-2)];
+  return name + ' ' + result.status + ' ' + JSON.stringify({
+    step: result.error.step, error: consoleText(result.error.message), routing: result.routing,
+    writeCount: all.length, writes: sample.map(w => ({ method: w.method, target: w.target,
+      textMatches: w.textMatches, blocked: w.blocked, ...(w.blocked ? { why: w.guardReason } : {}),
+      rpcOK: w.rpcOK, accepted: w.accepted, responseMs: w.responseMs,
+      ...(w.method === 'sessions.create' ? { keyOK: w.keyOK, runStarted: w.runStarted } : {}),
+      ...(w.method === 'sessions.companion.ask' ? { answerPresent: w.answerPresent } : {}),
+      ...(w.code ? { code: w.code } : {}), ...(w.detail ? { detail: w.detail } : {}),
+      ...(w.error ? { error: consoleText(w.error, 180) } : {}) })),
+    ...(sample.length < all.length ? { omittedWrites: all.length - sample.length } : {}),
+    ...(result.render ? { render: result.render } : {}),
+    ...(result.alerts?.length ? { lastAlert: consoleText(result.alerts.at(-1).text, 180) } : {}),
+  });
+}
+// Qualify the recognizer independently of the product parser. The nonempty prefix
+// suppresses sentence casing; either initial C is retained, not manufactured.
+function explicitProposal(raw) {
+  const match = /^([Cc]all[ \t]+[Mm]e)[ \t]+insert[ \t]+comma,?([ \t]+[Pp]lease)[ \t]+insert[ \t]+period\.?$/.exec(raw);
+  return match ? match[1] + ',' + match[2] + '.' : null;
+}
+function checkExplicit(result, proposal) {
+  assert.equal(result.status, 'refined', 'qualified spoken commands were not refined');
+  assert.equal(result.edits.filter(e => e.reason === 'explicit-punctuation').length, 2,
+    'qualified comma and period must both have explicit-punctuation edits');
+  assert.equal(result.text, proposal, 'qualified spoken commands produced the wrong punctuation or casing');
+}
 const submits = new Set(['chat.send', 'sessions.send', 'agent', 'sessions.companion.ask', 'sessions.create', 'sessions.dispatch']);
 const runId = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const sttModel = 'gpt-4o-mini-transcribe';
@@ -178,7 +243,7 @@ function wavMs(file) {
   return bytes / 96;
 }
 
-async function watchGateway(page, origin, surface, step) {
+async function watchGateway(page, origin, surface, step, knownKeys, chatModel) {
   const s = { hello: 0, audio: 0, finals: [], events: [], writes: [], closed: false };
   let socketNumber = 0;
   function parse(frame) {
@@ -201,24 +266,41 @@ async function watchGateway(page, origin, surface, step) {
         s.closeRequested = true;
         pending.set(m.id, { kind: 'close' });
       }
+      if (surface === 'side' && m.method === 'sessions.companion.state' && s.owner && p.sessionKey === s.owner) {
+        pending.set(m.id, { kind: 'sideState' });
+      }
       if (submits.has(m.method)) {
-        const w = { method: m.method, text: p.message ?? p.question ?? '', target: p.sessionKey ?? p.key };
+        const create = m.method === 'sessions.create', ask = m.method === 'sessions.companion.ask';
+        const w = { method: m.method, text: (ask ? p.question : p.message) ?? '',
+          target: create ? p.key : p.sessionKey, at: Date.now() };
         s.writes.push(w);
-        const empty = !p.attachments?.length && !p.mentions?.length && !p.deliver;
-        const draftCreate = m.method === 'sessions.create' && p.agentId === 'main' &&
-          w.target === undefined && !p.fork && !p.parentSessionKey;
-        if (surface === 'new' && s.allowStandby && !s.standby && draftCreate && !w.text && empty) {
-          s.standby = w;
-        } else if (s.allow && !s.sent && w.method === s.allow.method && w.text === s.allow.text &&
-                   w.target === s.allow.target && empty && (w.method !== 'sessions.create' || draftCreate)) {
-          s.sent = w;
-        } else {
-          w.blocked = true;
-          s.violation ??= { method: m.method, step: step() };
+        w.targetKind = targetKind(w.target, s);
+        w.textMatches = s.allow ? w.text === s.allow.text : null;
+        const agentOK = p.agentId === 'main' || (!create && p.agentId === undefined);
+        const emptyList = a => a === undefined || (Array.isArray(a) && a.length === 0);
+        const plain = emptyList(p.attachments) && emptyList(p.mentions) && !p.deliver && !p.task &&
+          !p.selectionContext && (ask ? p.message === undefined : p.question === undefined) &&
+          (create ? p.sessionKey === undefined && !p.fork && !p.forkFrom && !p.parentSessionKey &&
+            !p.incognito && !p.catalogId : p.key === undefined);
+        const standby = surface === 'new' && s.expectStandby && s.allowStandby && !s.standby &&
+          create && w.target === undefined && w.text === '';
+        const unusedKey = typeof w.target === 'string' && dashboardKey.test(w.target) && !knownKeys.has(w.target);
+        const reason = s.violation ? 'after an earlier blocked request' : !agentOK ? 'wrong agent' :
+          !plain ? 'unexpected payload fields' : standby ? null : !s.allow ? 'not armed for explicit submit' :
+          s.sent ? 'duplicate submit' : w.method !== s.allow.method ? 'wrong method; expected ' + s.allow.method :
+          !w.textMatches ? 'wrong submitted text' : s.allow.freshCreate ?
+            (w.target === undefined || unusedKey ? null : 'create key is not a fresh main dashboard UUID') :
+            w.target === s.allow.target ? null : 'wrong session target';
+        if (reason) {
+          w.blocked = reason;
+          s.violation ??= { method: m.method, step: step(), reason };
           socket.send(JSON.stringify({ type: 'res', id: m.id, ok: false,
             error: { code: 'UNAVAILABLE', message: 'Blocked by dictation proof send guard' } }));
           return;
         }
+        if (standby) s.standby = w;
+        else s.sent = w;
+        if (create && w.target !== undefined) knownKeys.add(w.target);
         pending.set(m.id, { kind: 'write', w });
       }
       server.send(frame);
@@ -232,12 +314,14 @@ async function watchGateway(page, origin, surface, step) {
         if (p.auth) {
           const scopes = p.auth.scopes ?? [];
           s.hasAuth = true;
+          s.hasRecoveryScope = Boolean(p.auth.recoveryScope);
           // At the pinned head, operator.write and operator.admin imply operator.talk.
           s.hasTalk = p.auth.role === 'operator' &&
             ['operator.talk', 'operator.write', 'operator.admin'].some(scope => scopes.includes(scope));
         } else {
           s.hasAuth = false;
           s.hasTalk = false;
+          s.hasRecoveryScope = false;
         }
       }
       if (m.type === 'res' && pending.has(m.id)) {
@@ -250,18 +334,39 @@ async function watchGateway(page, origin, surface, step) {
         } else if (r.kind === 'close') {
           s.closed = m.ok === true;
           if (!m.ok) s.closeRejected = scrub(m.error?.message || 'Gateway rejected finalization');
+        } else if (r.kind === 'sideState') {
+          // Observe the UI's own hydration. Do not change the route or retain exchanges/model IDs.
+          s.companionDefault = !m.ok ? 'state-rejected' : !p.defaultModel ? 'not-reported' :
+            p.defaultModel === chatModel ? 'same-as-primary' : 'different-from-primary';
         } else {
           const w = r.w;
-          w.createdKey = p.key;
-          w.error = scrub(m.error?.message || p.runError?.message).slice(0, 1200) || null;
+          w.rpcOK = m.ok === true;
+          w.responseMs = Date.now() - w.at;
+          const fault = m.error ?? p.runError;
+          w.code = typeof fault?.code === 'string' ? consoleText(fault.code, 64) : null;
+          const detail = fault?.details?.reason ?? fault?.details?.code;
+          w.detail = typeof detail === 'string' ? consoleText(detail, 80) : null;
+          let problem = !w.rpcOK || fault !== undefined ?
+            (typeof fault?.message === 'string' && fault.message || 'Gateway rejected the request') : null;
           if (w.method === 'sessions.create') {
-            w.runStarted = p.runStarted === true;
-            w.accepted = m.ok === true && p.ok === true && typeof p.key === 'string' &&
-              p.key.startsWith('agent:main:dashboard:') &&
-              p.runError === undefined && p.runStarted === (w !== s.standby);
-          } else {
-            w.accepted = m.ok === true && !['error', 'timeout', 'rejected'].includes(p.status);
+            w.createdKey = p.key;
+            w.runStarted = typeof p.runStarted === 'boolean' ? p.runStarted : null;
+            w.keyOK = typeof p.key === 'string' && dashboardKey.test(p.key) &&
+              (w.target === undefined ? !knownKeys.has(p.key) : p.key === w.target);
+            if (typeof p.key === 'string') knownKeys.add(p.key);
+            problem ??= p.ok !== true ? 'sessions.create returned ok != true' :
+              !w.keyOK ? 'sessions.create returned a missing, reused, or different key' :
+              p.runStarted !== (w !== s.standby) ? 'unexpected sessions.create runStarted' : null;
+          } else if (w.method === 'sessions.companion.ask') {
+            // The RPC returns the completed answer, not a chat.send-style startup ack. Never retain it.
+            w.answerPresent = typeof p.answer === 'string' && Boolean(p.answer.trim());
+            problem ??= !w.answerPresent || !Number.isSafeInteger(p.ts) || p.ts < 0 ?
+              'invalid companion answer receipt (expected nonempty answer and timestamp)' : null;
+          } else if (['error', 'timeout', 'rejected'].includes(p.status)) {
+            problem ??= 'Gateway send status: ' + p.status;
           }
+          w.accepted = problem === null;
+          w.error = problem === null ? null : scrub(problem).slice(0, 1200);
         }
       }
       if (m.event === 'talk.event' && s.sid && p.transcriptionSessionId === s.sid) {
@@ -300,9 +405,19 @@ function checkCaptureTarget(surface, s, target) {
 }
 
 function expectedSubmit(surface, s, target, text) {
-  if (surface === 'new' && !s.expectStandby) return { method: 'sessions.create', text, target: undefined };
+  if (surface === 'new' && !s.expectStandby) return { method: 'sessions.create', text, freshCreate: true };
   return { method: surface === 'side' ? 'sessions.companion.ask' : 'chat.send', text,
     target: surface === 'new' ? s.standby.createdKey : target };
+}
+
+function renderedUserTurns(page, box, surface, text) {
+  const side = surface === 'side';
+  const thread = side ? box.locator('xpath=ancestor::section[contains(@class,"chat-session-rail")][1]')
+    .locator('.chat-session-rail__thread') : page.locator('.chat-thread');
+  const groups = thread.locator('.chat-group.user').filter({ visible: true });
+  const exact = groups.getByText(text, { exact: true }).filter({ visible: true });
+  return { exact, sample: async () => ({ scope: side ? 'owning-side-rail' : 'main-thread',
+    visibleUserGroups: await groups.count(), exactVisibleMatches: await exact.count() }) };
 }
 
 async function main() {
@@ -344,7 +459,8 @@ async function main() {
   const out = fs.mkdtempSync(path.join(output, 'run-'));
   const tmpParent = fs.realpathSync(process.env.PROOF_TMPFS || '/dev/shm');
   assert.equal(fs.statfsSync(tmpParent).type, 0x01021994, 'private runtime must be on Linux tmpfs');
-  assert.equal(fs.readFileSync('/proc/swaps', 'utf8').trim().split('\n').length, 1, 'turn off swap before proof');
+  assert.equal(fs.readFileSync('/proc/swaps', 'utf8').trim().split('
+').length, 1, 'turn off swap before proof');
   const tmp = fs.mkdtempSync(path.join(tmpParent, 'dictation-'));
   const originalTmp = process.env.TMPDIR;
   let gateway;
@@ -390,13 +506,17 @@ async function main() {
       assert.ok(gateway.pid && gateway.exitCode === null && gateway.signalCode === null, 'Gateway exited during startup');
       try { return (await fetch(origin + '/readyz', { signal: AbortSignal.timeout(1500) })).ok; } catch { return false; }
     }, 'Gateway readyz timeout', 120000);
-    const tally = [];
+    const tally = [], knownKeys = new Set(); // One private Gateway, all seed/create keys for this run.
     for (const c of clips) {
       const folder = path.join(out, c.name); fs.mkdirSync(folder, { mode: 0o700 });
       const { surface, policy, finish, after, words: intended } = c.expect;
       const result = { id: c.id, take: c.take, voice: c.voice, head, tree, chatModel, clipSha256: c.hash, surface, policy, finish, after,
         expectedWords: intended, input: 'Chromium fake mic; synthesized WAV', sttModel, alerts: [] };
-      let browser, page, box, field, s, raw = '', phase = 'connect and configure UI', setup = true;
+      let browser, page, box, field, s, render, raw = '', phase = 'connect and configure UI', setup = true;
+      const inconclusive = (status, message) => {
+        result.status = status;
+        result.error = { step: phase, name: 'FixtureQualification', message };
+      };
       const capture = async (name, diagnostic = false, subject = box) => {
         if (!page || page.isClosed()) return;
         const body = page.locator('body');
@@ -407,9 +527,11 @@ async function main() {
         }
         if (!diagnostic && !(subject && await subject.isVisible())) return;
         // Scan the whole visible document, including toasts that can overlay a crop.
-        const screenText = await body.evaluate(el => el.innerText + '\n' +
+        const screenText = await body.evaluate(el => el.innerText + '
+' +
           [...el.querySelectorAll('input,textarea,[contenteditable="true"]')]
-            .filter(e => e.getClientRects().length).map(e => e.value ?? e.innerText).join('\n'), undefined, { timeout: 2000 });
+            .filter(e => e.getClientRects().length).map(e => e.value ?? e.innerText).join('
+'), undefined, { timeout: 2000 });
         if (scrubSecrets(screenText) !== screenText) {
           (result.screenshotSkipped ??= []).push({ name, reason: 'possible visible secret' });
           return;
@@ -424,8 +546,13 @@ async function main() {
         phase = 'check known parser input';
         if (policy === 'automatic' || policy === 'explicit') {
           const clean = refine(intended, policy, c.name + '-canary');
-          assert.equal(clean.text, 'archive the notes.', 'candidate parser failed the clean positive control');
-          assert.equal(clean.status, 'refined');
+          if (policy === 'explicit') {
+            assert.equal(explicitProposal(intended), c.expect.proposal, 'bad explicit fixture');
+            checkExplicit(clean, c.expect.proposal);
+          } else {
+            assert.equal(clean.text, intended + '.', 'candidate parser failed the clean positive control');
+            assert.equal(clean.status, 'refined');
+          }
         }
         phase = 'connect and configure UI';
         browser = await chromium.launch({ env: base, args: ['--disable-breakpad', '--use-fake-ui-for-media-stream',
@@ -435,7 +562,7 @@ async function main() {
         await context.grantPermissions(['microphone'], { origin });
         page = await context.newPage(); page.setDefaultTimeout(15000);
         await watchAlerts(page, result.alerts, () => phase);
-        s = await watchGateway(page, origin, surface, () => phase);
+        s = await watchGateway(page, origin, surface, () => phase, knownKeys, chatModel);
         await page.goto(origin + '/settings/appearance#token=' + token);
         await until(() => s.hello > 0, 'Control UI handshake', 30000);
         const src = await page.locator('script[type="module"][src]').first().getAttribute('src');
@@ -460,6 +587,7 @@ async function main() {
         if (surface !== 'new') {
           phase = 'seed chat session (sessions.create)';
           createProofSession(checkout, env, target, slug, result);
+          s.owner = target; knownKeys.add(target);
         }
         phase = 'open composer';
         const previousHello = s.hello;
@@ -491,7 +619,7 @@ async function main() {
         const sendButton = () => button(box, { main: /^(Send|Send message)$/, side: 'Ask', new: 'Start session' }[surface]);
         const review = box.getByRole('region', { name: 'Review dictation', exact: true });
         const checkGuard = () => {
-          if (s.violation) throw new PrematureSubmit('Blocked ' + s.violation.method + ' at ' + s.violation.step);
+          if (s.violation) throw new BlockedSubmit('Blocked ' + s.violation.method + ': ' + s.violation.reason);
         };
         if (surface !== 'main') {
           assert.ok(s.hasAuth, 'composer Gateway hello did not report granted scopes');
@@ -528,13 +656,19 @@ async function main() {
         if (s.closeRejected || s.sttError) throw new Error(s.closeRejected || s.sttError);
         raw = s.finals.join(' ');
         const recognized = !s.laterPartial && words(raw) === intended;
+        const sttReason = s.laterPartial ? 'a nonempty partial followed the last final' : !raw ?
+          'no nonempty final transcript' : 'final recognizer words did not match the spoken fixture';
         const draftWith = text => draft + ' ' + text;
         if (policy === 'off') {
           phase = 'Off direct insertion';
-          if (!recognized) { result.status = 'INCONCLUSIVE_STT'; continue; }
-          await until(async () => await field.inputValue() === draftWith(raw), 'Off draft did not receive original transcript');
+          if (raw && !s.laterPartial) {
+            await until(async () => await field.inputValue() === draftWith(raw), 'Off draft did not receive the exact final transcript');
+          }
           assert.equal(await review.isVisible(), false, 'Off must not show review');
-          checkGuard(); result.status = 'PASS'; continue;
+          checkGuard();
+          if (!recognized) inconclusive('INCONCLUSIVE_STT', sttReason);
+          else result.status = 'PASS';
+          continue;
         }
         phase = 'pending review';
         if (!raw || s.laterPartial) {
@@ -545,7 +679,7 @@ async function main() {
             for (const text of errors) recordAlert(result.alerts, phase, text);
             if (errors.length) throw new MissingControl('No review was shown');
           }
-          result.status = 'INCONCLUSIVE_STT'; continue;
+          inconclusive('INCONCLUSIVE_STT', sttReason); continue;
         }
         await review.waitFor();
         assert.equal(await field.inputValue(), draft, 'review must not modify draft');
@@ -566,10 +700,18 @@ async function main() {
         result.pendingEnterExercised = surface !== 'new' || after === 'blocked-enter';
         if (result.pendingEnterExercised) await field.press('Enter');
         await sleep(400); checkGuard();
-        if (!recognized) { result.status = 'INCONCLUSIVE_STT'; continue; }
-        if (policy === 'explicit' && !(refined.edits.some(e => e.reason === 'explicit-punctuation') &&
-            words(expected) === 'archive the notes' && expected.endsWith('.'))) {
-          result.status = 'INCONCLUSIVE_FIXTURE'; continue;
+        assert.equal(await field.inputValue(), draft, 'pending review actions changed the unsent draft');
+        if (!recognized) { inconclusive('INCONCLUSIVE_STT', sttReason); continue; }
+        if (policy === 'explicit') {
+          phase = 'qualify spoken commands';
+          const proposal = explicitProposal(raw);
+          if (proposal === null) {
+            inconclusive('INCONCLUSIVE_FIXTURE', 'words matched, but ASR casing, separators or marks fell outside the explicit positive control');
+            continue;
+          }
+          // A supported raw input with bad output is a failure, never a fixture miss.
+          checkExplicit(refined, proposal);
+          assert.equal(proposed, proposal, 'review did not propose the exact explicit edit');
         }
         if (after === 'blocked-enter') { result.status = 'PASS'; continue; }
         phase = 'Insert';
@@ -583,20 +725,29 @@ async function main() {
           await until(async () => await field.inputValue() === draft, 'Undo did not restore exact draft');
           checkGuard(); result.status = 'PASS'; continue;
         }
-        phase = 'explicit submit';
+        phase = 'explicit submit: ' + after;
+        render = renderedUserTurns(page, box, surface, inserted);
         s.allow = expectedSubmit(surface, s, target, inserted);
         if (after === 'enter') await field.press('Enter');
         else await sendButton().click();
-        await until(() => s.violation || s.sent?.accepted !== undefined, 'no completed submit RPC', 150000);
+        phase = 'explicit submit: dispatch';
+        await until(() => s.violation || s.sent, 'no outbound ' + s.allow.method + ' after explicit input', 150000);
         checkGuard();
-        assert.equal(s.sent.accepted, true, s.sent.error || 'Gateway did not acknowledge the explicit submission');
-        const turn = (surface === 'side' ? page.locator('.chat-session-rail__thread .chat-group.user') :
-          page.locator('.chat-group.user').filter({ visible: true })).getByText(inserted, { exact: true });
-        await turn.first().waitFor();
-        await sleep(600);
+        phase = 'explicit submit: RPC response';
+        // At the pinned head: companion ask = 5 min + 10 s; New Session startup = 5 min.
+        const replyMs = surface === 'side' ? 315000 : surface === 'new' ? 305000 : 150000;
+        await until(() => s.violation || s.sent.accepted !== undefined,
+          s.sent.method + ' was forwarded but returned no response in ' + replyMs + ' ms', replyMs);
         checkGuard();
-        assert.equal(await turn.count(), 1, 'expected one rendered user turn');
-        await capture('submitted', false, turn.first());
+        assert.ok(s.sent.accepted, s.sent.method + ': ' + (s.sent.error || 'invalid Gateway acknowledgment'));
+        phase = 'explicit submit: render';
+        await until(async () => s.violation || await render.exact.count() > 0,
+          'accepted RPC but no visible exact user turn on the intended surface', 15000);
+        checkGuard(); await sleep(600); checkGuard();
+        result.render = await render.sample();
+        assert.equal(result.render.exactVisibleMatches, 1, 'expected one visible exact user turn; got ' + result.render.exactVisibleMatches);
+        phase = 'capture submitted turn';
+        await capture('submitted', false, render.exact.first());
         result.status = 'PASS';
       } catch (error) {
         const now = await visibleAlerts(page).catch(() => []);
@@ -604,6 +755,7 @@ async function main() {
         Object.assign(result, classifyError(error, s, setup, phase, result.alerts, now));
       } finally {
         result.finalDraft = await field?.inputValue({ timeout: 500 }).then(scrub, () => null) ?? null;
+        if (render && !result.render) result.render = await render.sample().catch(() => ({ unavailable: true }));
         const onFailure = Boolean(s?.violation) || result.status !== 'PASS';
         try { await capture(onFailure ? 'diagnostic' : 'final', onFailure); } catch {}
         for (const text of await visibleAlerts(page).catch(() => [])) recordAlert(result.alerts, phase, text);
@@ -613,7 +765,8 @@ async function main() {
         // A blocked request always wins, including on the inconclusive exit paths.
         if (s?.violation) {
           result.status = 'FAIL';
-          result.error = { step: s.violation.step, ...errorInfo(new PrematureSubmit('Blocked ' + s.violation.method)) };
+          result.error = { step: s.violation.step,
+            ...errorInfo(new BlockedSubmit('Blocked ' + s.violation.method + ': ' + s.violation.reason)) };
         }
         result.gatewayEvents = s?.events ?? [];
         result.gatewayError = s?.sttError ?? s?.captureRejected ?? s?.closeRejected ?? null;
@@ -621,23 +774,18 @@ async function main() {
         result.gatewayAcceptedAudioFrames = s?.audioAccepted ?? 0;
         result.gatewayProvider = s?.provider === 'openai' ? 'openai' : null;
         result.finalAccepted = Boolean(s?.closed && s?.drained);
-        result.routing = {
-          standaloneTalk: s?.hasAuth ? s.hasTalk : null,
-          dictationHasTarget: Boolean(s?.target), expectedStandby: s?.expectStandby ?? null,
-          standbyReused: Boolean(s?.standby?.accepted && s.standby.createdKey === s.target),
-        };
-        result.writes = (s?.writes ?? []).map(w => ({ method: w.method, accepted: w.accepted ?? null,
-          blocked: Boolean(w.blocked), nonempty: Boolean(w.text), sameDictationSession: Boolean(w.target && w.target === s.target),
-          returnedKey: Boolean(w.createdKey), runStarted: w.runStarted ?? null, error: w.error ?? null }));
+        collectWireEvidence(result, s, surface);
         result.screenshotAvailable = fs.readdirSync(folder).some(n => n.endsWith('.png'));
-        write(folder, 'transcript.txt', scrub(raw || s?.finals.join(' ')) + '\n');
-        write(folder, 'state.json', JSON.stringify(result, null, 2) + '\n');
+        write(folder, 'transcript.txt', scrub(raw || s?.finals.join(' ')) + '
+');
+        write(folder, 'state.json', JSON.stringify(result, null, 2) + '
+');
         tally.push(result);
-        console.log(c.name, result.status, result.error?.step ?? '',
-          result.status === 'ERROR' ? JSON.stringify(result.error.message) : '');
+        console.log(takeLine(c.name, result));
       }
     }
-    write(out, 'summary.json', JSON.stringify(tally, null, 2) + '\n');
+    write(out, 'summary.json', JSON.stringify(tally, null, 2) + '
+');
     process.exitCode = tally.some(x => x.status === 'FAIL' || x.status.startsWith('ERROR')) ? 1 :
       tally.some(x => x.status.startsWith('INCONCLUSIVE_')) ? 2 : 0;
   } finally {
