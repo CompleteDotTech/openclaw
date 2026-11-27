@@ -1,12 +1,16 @@
 {
-  "note": "#205973 final round on 268da4f without lint/format:check (runner lost twice after them); #206273 on its stack 16883b0 without lint (Nov 27 16:10).",
+  "note": "#206088 full proof on fc9ffa4 (manifest refreshed); #205973 final round on 268da4f without lint/format:check; #206273 on its stack 16883b0 without lint (Nov 27 16:25).",
   "runs": [
     {
       "pr": 206088,
-      "sha": "1e6dd7701883b11937cac1903c46255363498e93",
+      "sha": "fc9ffa44a96f196c71518d756b424f2bfc3b92d2",
       "dir": "proof/206088",
-      "offline": ["boot-manifest-export.mjs"],
-      "live": false
+      "script": "dictation-proof.mjs",
+      "tests": ["ui/src/pages/chat/composer-file-reference-provider.integration.test.ts"],
+      "checks": [["ui:check-performance:base", "20b3afeccc4964fbd8a4a5bbe15fd8069ba4f6a5"], "ui:build"],
+      "checkouts": [{"name": "main", "repo": "openclaw/openclaw", "sha": "fbba71f65223e59068ebdb18293e8b1e9884074f", "build": true}, {"name": "parser-base", "repo": "CompleteDotTech/openclaw", "sha": "b92136b4e18178281804b91b8ca060db1ade2907", "build": false}, {"name": "budget-base", "repo": "openclaw/openclaw", "sha": "20b3afeccc4964fbd8a4a5bbe15fd8069ba4f6a5", "build": false}, {"name": "manifest", "repo": "CompleteDotTech/openclaw", "sha": "fc9ffa44a96f196c71518d756b424f2bfc3b92d2", "build": false}],
+      "stable": "2026.11.10",
+      "offline": ["upgrade-recovery.mjs", "parser-red-green.mjs", "boot-manifest.mjs"]
     },
     {
       "pr": 205789,
