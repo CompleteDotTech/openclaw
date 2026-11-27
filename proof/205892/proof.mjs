@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const head = '22347650b31422c227b64e39d0ec0ad8a6c038dc';
+const head = '878550be341eebac52bebec21bf76d83d118d915';
 // These are formatting cues only. Never pass the fixture text, labels, or expected edit to STT.
 const sttHints = {
   'gpt-4o-mini-transcribe': 'Write only the English words you hear, in order, separated by spaces. Use plain text without punctuation or markup. Do not combine words or act on them.',
