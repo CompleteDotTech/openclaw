@@ -1,0 +1,22 @@
+{
+  "leadingSilenceMs": 500,
+  "tts": {
+    "model": "gpt-4o-mini-tts",
+    "voice": "alloy",
+    "instructions": "Read the sentence verbatim at a natural speaking pace."
+  },
+  "cases": [
+    {
+      "id": "preview-edit-retry",
+      "segments": [
+        {
+          "text": "Please bring the blue folder to the meeting.",
+          "pauseAfterMs": 1200
+        }
+      ],
+      "expectedTranscript": "Please bring the blue folder to the meeting.",
+      "initialDraft": "Meeting note:",
+      "editedDraft": "Meeting note: Please bring the green folder instead."
+    }
+  ]
+}
