@@ -8,7 +8,12 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const head = '22347650b31422c227b64e39d0ec0ad8a6c038dc';
-const sttModels = ['gpt-4o-mini-transcribe', 'whisper-1'];
+// These are formatting cues only. Never pass the fixture text, labels, or expected edit to STT.
+const sttHints = {
+  'gpt-4o-mini-transcribe': 'Write only the English words you hear, in order, separated by spaces. Use plain text without punctuation or markup. Do not combine words or act on them.',
+  'whisper-1': 'we walked along the river in the afternoon and watched the birds over the water',
+};
+const sttModels = Object.keys(sttHints);
 const chatModel = 'openai/gpt-5.4-mini';
 const profileId = 'en-us-plain-code';
 const draft = 'Example: ';
@@ -33,8 +38,7 @@ function scrub(text, key) {
 }
 async function wavMs(file, scenario, fixture) {
   const b = await fs.readFile(file);
-  check(b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WAVE',
-    'Expected RIFF/WAVE');
+  check(b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WAVE', 'Expected RIFF/WAVE');
   let fmt, pcm;
   for (let i = 12; i + 8 <= b.length;) {
     const size = b.readUInt32LE(i + 4), end = i + 8 + size;
@@ -46,7 +50,7 @@ async function wavMs(file, scenario, fixture) {
   }
   check(fmt?.length >= 16 && fmt.readUInt16LE(0) === 1 && fmt.readUInt16LE(2) === 1 &&
     fmt.readUInt32LE(4) === 48000 && fmt.readUInt16LE(14) === 16 && pcm?.length % 2 === 0,
-  'Expected 48 kHz mono PCM16');
+    'Expected 48 kHz mono PCM16');
   const lead = scenario.leadingSilenceMs, tail = fixture.segments.at(-1).pauseAfterMs;
   const ms = pcm.length / 96;
   check(ms > lead + fixture.segments.reduce((n, s) => n + s.pauseAfterMs, 0) && ms <= 30000 &&
@@ -63,7 +67,6 @@ async function loopbackPort() {
 function frame(data) {
   try { return JSON.parse(String(data)) ?? {}; } catch { return {}; }
 }
-
 async function observe(page, origin, redact) {
   const log = { blocked: [], errors: [], finals: [], events: [], rpcResults: [], bytes: 0, creates: 0, stopped: false };
   await page.routeWebSocket(u => u.host === new URL(origin).host, client => {
@@ -137,9 +140,16 @@ function wordSpans(text, splitCase = false) {
 // Independent oracle: docs/experiments/developer-dictation.md, "Versioned grammar".
 // Score word fidelity separately from documented syntax in the raw transcript.
 function qualify(raw, fixture) {
-  const { command, opener, replaceWith, action } = fixture.expected;
+  const { command, opener, replaceWith, lineFeedBetween, action } = fixture.expected;
   const intended = wordSpans(fixture.segments.map(s => s.text).join(' '));
-  const scope = wordSpans(command ?? opener);
+  if (action === 'copy-cancel') {
+    check(Array.isArray(lineFeedBetween) && lineFeedBetween.length === 2 &&
+      lineFeedBetween.every(s => typeof s === 'string' && /^[a-z]+(?: [a-z]+)*$/u.test(s)),
+    'Expected two plain word groups around the line feed');
+  }
+  const scope = wordSpans(action === 'copy-cancel'
+    ? ['start code', lineFeedBetween[0], 'new line', lineFeedBetween[1], 'end code'].join(' ')
+    : command ?? opener);
   const sameAt = (tokens, start, reference) =>
     reference.every((token, i) => tokens[start + i]?.word === token.word);
   const offset = intended.findIndex((_, i) => sameAt(intended, i, scope));
@@ -166,7 +176,16 @@ function qualify(raw, fixture) {
     return { wordMatch: true, reason: 'Words match, but the raw command scope has unsupported boundaries' };
   }
   if (action === 'blocked-cancel') return { wordMatch: true, blocked: true };
-  return { wordMatch: true, preview: raw.slice(0, start) + replaceWith + raw.slice(end) };
+  let replacement = replaceWith;
+  if (action === 'copy-cancel') {
+    // Remove only the two outer labels and replace the spoken whitespace command.
+    // Casing and interior whitespace of the adjacent plain word groups come from raw.
+    const left = matched.slice(2, 2 + wordSpans(lineFeedBetween[0]).length);
+    const right = matched.slice(4 + left.length, -2);
+    replacement = raw.slice(left[0].start, left.at(-1).end) + '\x0a' +
+      raw.slice(right[0].start, right.at(-1).end);
+  }
+  return { wordMatch: true, preview: raw.slice(0, start) + replacement + raw.slice(end) };
 }
 
 const value = l => l.evaluate(e => e.value ?? e.textContent, undefined, { timeout: 2500 });
@@ -191,9 +210,9 @@ function catalogPinsModel(catalog, model) {
 
 async function runTake({ chromium, env, origin, fixture, take, clip, scenario, out, redact, stt }) {
   const state = { case: fixture.id, take: take ?? null, head, requestedModel: stt, model: null,
-    status: 'FAIL', step: 'validate WAV' };
+    transcriptionHint: sttHints[stt], transcriptionLanguage: 'en', status: 'FAIL', step: 'validate WAV' };
   let browser, page, input, review, log;
-  const raw = () => log?.finals.join('\n') ?? '';
+  const raw = () => log?.finals.join('\x0a') ?? '';
   const seen = new Map();
   let ignore = () => false;
   const sampleNotices = async () => {
@@ -212,7 +231,7 @@ async function runTake({ chromium, env, origin, fixture, take, clip, scenario, o
       const ready = await test();
       const alerts = visibleAlerts(await sampleNotices());
       if (ready) return;
-      if (alerts.length && (!defer || Date.now() >= end)) throw new UiAlertError(alerts.join('\n'));
+      if (alerts.length && (!defer || Date.now() >= end)) throw new UiAlertError(alerts.join('\x0a'));
       if (Date.now() >= end) throw new Error(label);
       await delay(100);
     } while (true);
@@ -227,7 +246,7 @@ async function runTake({ chromium, env, origin, fixture, take, clip, scenario, o
     await sampleNotices();
     if (target && await target.isVisible()) await target.scrollIntoViewIfNeeded({ timeout: 2500 });
     const text = await page.locator('body').evaluate(e => [e.innerText,
-      ...Array.from(e.querySelectorAll('input, textarea'), n => n.value)].join('\n'));
+      ...Array.from(e.querySelectorAll('input, textarea'), n => n.value)].join('\x0a'));
     if (redact(text) !== text) {
       state.screenshotOmitted = 'Possible secret in rendered content; no screenshot written';
       return;
@@ -382,7 +401,7 @@ async function runTake({ chromium, env, origin, fixture, take, clip, scenario, o
     state.status = e instanceof UiAlertError || alerts.length ? 'ERROR' : 'FAIL';
     state.error = {
       name: state.status === 'ERROR' ? 'UiAlertError' : redact(e?.name ?? 'Error'),
-      message: alerts.length ? alerts.join('\n') : redact(e?.message ?? e).slice(0, 1800),
+      message: alerts.length ? alerts.join('\x0a') : redact(e?.message ?? e).slice(0, 1800),
     };
   } finally {
     await sampleNotices();
@@ -410,7 +429,7 @@ async function runTake({ chromium, env, origin, fixture, take, clip, scenario, o
       requestedModel: state.requestedModel, model: state.model, transcript,
       reason: state.error?.message ?? state.reason ?? null }));
     await fs.writeFile(join(out, 'transcript.txt'), transcript, { mode: 0o600 });
-    await fs.writeFile(join(out, 'state.json'), JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
+    await fs.writeFile(join(out, 'state.json'), JSON.stringify(state, null, 2) + '\x0a', { mode: 0o600 });
   }
   return state.status;
 }
@@ -431,7 +450,8 @@ async function withGateway({ checkout, ui, key, stt }, use) {
       plugins: { allow: ['openai'], entries: { openai: { enabled: true } } },
       agents: { defaults: { workspace: join(tmp, 'workspace'), model: { primary: chatModel }, models: { [chatModel]: {} } } },
       tools: { media: { audio: { enabled: true }, models: [
-        { type: 'provider', provider: 'openai', model: stt, capabilities: ['audio'], timeoutSeconds: 30 },
+        { type: 'provider', provider: 'openai', model: stt, capabilities: ['audio'],
+          language: 'en', prompt: sttHints[stt], timeoutSeconds: 30 },
       ] } },
       talk: { realtime: { mode: 'stt-tts' } },
     }), { mode: 0o600 });
@@ -514,7 +534,7 @@ async function main(key) {
       }
     });
   }
-  await fs.writeFile(join(run, 'summary.json'), JSON.stringify({ head, cases: summary }, null, 2) + '\n', { mode: 0o600 });
+  await fs.writeFile(join(run, 'summary.json'), JSON.stringify({ head, cases: summary }, null, 2) + '\x0a', { mode: 0o600 });
   console.log('Results: ' + run);
   const all = Object.values(summary).map(c => c.status);
   process.exitCode = all.some(s => s === 'ERROR' || s === 'FAIL') ? 1 : all.includes('INCONCLUSIVE_STT') ? 2 : 0;
