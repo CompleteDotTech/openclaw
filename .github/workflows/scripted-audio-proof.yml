@@ -297,6 +297,27 @@ jobs:
           if [[ -d "harness/$DIR/results" ]]; then (cd "harness/$DIR" && find results -type f | sort | sed -n '1,80p'); else echo "(no result files)"; fi
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
+    - name: Print the result details (public log, so sessions can read them)
+      if: always()
+      run: |
+        # Prints what the proof bundle holds in a form anyone can read in this log:
+        # key fields of each JSON result, transcripts, and the tail of each lane log.
+        shopt -s nullglob globstar
+        keys='^(id|case|take|variant|status|step|error|errorName|failure|failedAt|reason|detail|message|expectedWords|proposed|finalDraft|transcript|writes|checks|candidate|stable|routing|refinementStatus)$'
+        budget=262144
+        for f in harness/"$DIR"/results/**/*.json harness/"$DIR"/results/**/*.txt harness/"$DIR"/results/**/*.log; do
+          (( budget > 0 )) || { echo "(stopped: 256 KiB of details printed)"; break; }
+          echo "::group::${f#harness/"$DIR"/}"
+          case "$f" in
+            *.json) out=$(jq -c --arg k "$keys" 'if type == "object" and (keys | any(test($k))) then with_entries(select(.key | test($k))) else . end' "$f" 2>/dev/null) || out=$(head -c 2000 "$f")
+                    out=${out:0:4000} ;;
+            *.txt) out=$(head -c 1500 "$f") ;;
+            *.log) out=$(tail -c 4000 "$f") ;;
+          esac
+          printf '%s\n' "$out"
+          budget=$(( budget - ${#out} ))
+          echo "::endgroup::"
+        done
     - name: Upload the proof bundle
       if: always()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
