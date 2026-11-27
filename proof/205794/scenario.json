@@ -1,0 +1,59 @@
+{
+  "leadingSilenceMs": 500,
+  "tts": {
+    "model": "gpt-4o-mini-tts",
+    "voice": "alloy",
+    "instructions": "Read the supplied words verbatim in a natural, clear US English speaking voice. Do not paraphrase or resolve a self-correction."
+  },
+  "takes": [
+    {
+      "id": "alloy",
+      "voice": "alloy",
+      "instructions": "Read the supplied words verbatim in a natural, clear US English speaking voice. Do not paraphrase or resolve a self-correction."
+    },
+    {
+      "id": "nova",
+      "voice": "nova",
+      "instructions": "Read the supplied words verbatim in a natural, clear US English speaking voice. Do not paraphrase or resolve a self-correction."
+    },
+    {
+      "id": "sage",
+      "voice": "sage",
+      "instructions": "Read the supplied words verbatim in a natural, clear US English speaking voice. Do not paraphrase or resolve a self-correction."
+    }
+  ],
+  "cases": [
+    {
+      "id": "off-keeps-recognized-words",
+      "segments": [
+        { "text": "The meeting is Tuesday", "pauseAfterMs": 240 },
+        { "text": "no make that Thursday", "pauseAfterMs": 1400 }
+      ],
+      "expected": { "mode": "off", "action": "insert" }
+    },
+    {
+      "id": "review-keep-original",
+      "segments": [
+        { "text": "The meeting is Tuesday", "pauseAfterMs": 240 },
+        { "text": "no make that Thursday", "pauseAfterMs": 1400 }
+      ],
+      "expected": { "mode": "explicit", "action": "keep" }
+    },
+    {
+      "id": "review-cancel-preserves-draft",
+      "segments": [
+        { "text": "Please reserve the blue room", "pauseAfterMs": 240 },
+        { "text": "actually reserve the green room", "pauseAfterMs": 1400 }
+      ],
+      "expected": { "mode": "explicit", "action": "cancel" }
+    },
+    {
+      "id": "literal-keeps-correction-words",
+      "segments": [
+        { "text": "The meeting is Tuesday", "pauseAfterMs": 240 },
+        { "text": "no make that Thursday", "pauseAfterMs": 1400 }
+      ],
+      "expected": { "mode": "explicit", "literal": true, "action": "insert" }
+    }
+  ]
+}
