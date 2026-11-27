@@ -1,5 +1,5 @@
 {
-  "note": "Run #205789 on fff9441 with its P2 fix, before/after captures and stable upgrade lane (05:46 UTC Nov 27).",
+  "note": "#205880 on e3a1b8d after its main sync: suites, tsgo:core and the six takes (06:05 UTC Nov 27).",
   "runs": [
     {
       "pr": 206088,
@@ -44,7 +44,7 @@
     },
     {
       "pr": 205880,
-      "sha": "34eb161f573465301820e44a42d0e1c215a3e79d",
+      "sha": "e3a1b8ddfb649f2ccdb314c00e7ffc736d524eee",
       "dir": "proof/205880",
       "script": "live-dictation.mjs",
       "tests": ["src/realtime-transcription/personal-vocabulary-import.test.ts", "src/realtime-transcription/personal-vocabulary.test.ts", "src/realtime-transcription/vocabulary-terms.test.ts"],
