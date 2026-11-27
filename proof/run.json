@@ -1,5 +1,5 @@
 {
-  "note": "Third round for #205892 with paused command words (05:09 UTC Nov 27).",
+  "note": "#205880 and #205973 with their test suites and checks (05:15 UTC Nov 27).",
   "runs": [
     {
       "pr": 206088,
@@ -37,7 +37,9 @@
       "pr": 205880,
       "sha": "34eb161f573465301820e44a42d0e1c215a3e79d",
       "dir": "proof/205880",
-      "script": "live-dictation.mjs"
+      "script": "live-dictation.mjs",
+      "tests": ["src/realtime-transcription/personal-vocabulary-import.test.ts", "src/realtime-transcription/personal-vocabulary.test.ts", "src/realtime-transcription/vocabulary-terms.test.ts"],
+      "checks": ["tsgo:core"]
     },
     {
       "pr": 205892,
@@ -49,7 +51,9 @@
       "pr": 205973,
       "sha": "194fcb3f317e5d256d1c35e9a9a69a230c81a45e",
       "dir": "proof/205973",
-      "script": "dictation-proof.mjs"
+      "script": "dictation-proof.mjs",
+      "tests": ["ui/src/pages/chat/composer-dictation-refinement.relay.test.ts", "ui/src/pages/chat/composer-dictation-session.finality.test.ts", "ui/src/pages/chat/composer-dictation-refinement.test.ts", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/pages/chat/talk/split.test.ts", "ui/src/pages/chat/chat-composer.test.ts", "src/shared/dictation-refinement/coordinator.test.ts", "src/talk/dictation-refinement-model.test.ts", "test/scripts/ci-ui-e2e-selection.test.ts", "ui/src/e2e/browser-dictation-refinement.e2e.test.ts", "ui/src/e2e/browser-dictation-refinement.real-gateway.e2e.test.ts"],
+      "checks": ["tsgo:core", "tsgo:ui", "tsgo:test:ui", "check:control-ui-controllers", "lint:ui:i18n", "lint", "format:check"]
     }
   ]
 }
