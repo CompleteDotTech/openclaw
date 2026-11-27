@@ -22,6 +22,8 @@
 #                not skip the live proof.
 #   "live"       false skips clip generation and the browser proof, so the job never
 #                sees OPENAI_API_KEY (for build, test and secretless-lane-only runs).
+#                Such an entry needs no script or scenario.json, but must list at
+#                least one test, check or offline lane.
 # The harness and lane scripts get the PR checkout path as argv[2] and the
 # environment variables PROOF_PR_DIR, PROOF_RESULTS_DIR, PROOF_CHECKOUTS (JSON
 # object, name -> path) and PROOF_STABLE_DIR (empty when there is no stable install).
@@ -72,7 +74,9 @@ jobs:
         runs=$(jq -c "$normalize" harness/proof/run.json)
         jq -e 'length > 0 and all(.[];
             (.pr | test("^[0-9]+$")) and (.sha | type == "string" and test("^[0-9a-f]{40}$")) and
-            (.dir | type == "string" and test("^proof/[A-Za-z0-9._-]+$")) and (.script | type == "string" and test("^[A-Za-z0-9._-]+\\.[cm]?js$")) and
+            (.dir | type == "string" and test("^proof/[A-Za-z0-9._-]+$")) and
+            (if .live == false then (.script == null or (.script | type == "string" and test("^[A-Za-z0-9._-]+\\.[cm]?js$"))) and ((.tests | length) + (.checks | length) + (.offline | length) > 0)
+             else (.script | type == "string" and test("^[A-Za-z0-9._-]+\\.[cm]?js$")) end) and
             (.tests | type == "array" and all(.[]; type == "string" and test("^[A-Za-z0-9_][A-Za-z0-9._/-]*\\.test\\.[cm]?[jt]sx?$") and (contains("..") | not))) and
             (.checks | type == "array" and all(.[]; type == "array" and length > 0 and (.[0] | type == "string" and test("^[a-z][a-z0-9:_-]*$")) and all(.[1:][]; type == "string" and test("^[A-Za-z0-9._:/=@+-]+$")))) and
             (.checkouts | type == "array" and all(.[]; type == "object" and (.name | type == "string" and test("^[a-z][a-z0-9-]{0,30}$")) and (.repo | IN("openclaw/openclaw", "CompleteDotTech/openclaw")) and (.sha | type == "string" and test("^[0-9a-f]{40}$")) and (.build | type == "boolean")) and (map(.name) | length == (unique | length))) and
@@ -80,10 +84,10 @@ jobs:
             (.offline | type == "array" and all(.[]; type == "string" and test("^[A-Za-z0-9._-]+\\.[cm]?js$")) and (length == (unique | length))) and
             (.live | type == "boolean"))
           and (map(.pr) | length == (unique | length))' <<<"$runs" >/dev/null \
-          || { echo "run.json: every entry needs a numeric pr, a full 40-character sha, dir proof/<name> and a .js/.mjs/.cjs script, with no duplicate PRs. Optional: tests as relative *.test.* paths; checks as script names or [name, args...]; checkouts as {name, repo (openclaw/openclaw or CompleteDotTech/openclaw), full sha, build true/false} with unique names; stable as a version like 2026.11.10; offline as script file names; live as true or false."; exit 1; }
+          || { echo "run.json: every entry needs a numeric pr, a full 40-character sha, dir proof/<name> and a .js/.mjs/.cjs script (optional with live false, if the entry lists a test, check or offline lane), with no duplicate PRs. Optional: tests as relative *.test.* paths; checks as script names or [name, args...]; checkouts as {name, repo (openclaw/openclaw or CompleteDotTech/openclaw), full sha, build true/false} with unique names; stable as a version like 2026.11.10; offline as script file names; live as true or false."; exit 1; }
         while read -r dir script; do
           test -f "harness/$dir/scenario.json" && test -f "harness/$dir/$script" || { echo "Missing scenario.json or $script in $dir"; exit 1; }
-        done < <(jq -r '.[] | "\(.dir) \(.script)"' <<<"$runs")
+        done < <(jq -r '.[] | select(.live) | "\(.dir) \(.script)"' <<<"$runs")
         while read -r dir lane; do
           test -f "harness/$dir/$lane" || { echo "Missing offline lane $lane in $dir"; exit 1; }
         done < <(jq -r '.[] | .dir as $d | .offline[] | "\($d) \(.)"' <<<"$runs")
