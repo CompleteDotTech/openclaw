@@ -220,15 +220,42 @@ jobs:
       id: checks
       if: join(matrix.checks, ' ') != ''
       continue-on-error: true
+      timeout-minutes: 75
       working-directory: pr
       run: |
+        # Each check stops after 45 minutes (the full lint takes about 35 on a 4-core runner).
+        # After each check, one line in this log and in checks.log gives its exit code, time,
+        # and the runner's peak memory and swap use while it ran.
+        log="$GITHUB_WORKSPACE/harness/$DIR/checks.log"
         mapfile -t entries < <(jq -c '.[]' <<<"$CHECKS")
         status=0
         for entry in "${entries[@]}"; do
           mapfile -t args < <(jq -r '.[]' <<<"$entry")
           echo "::group::pnpm run ${args[*]}"
-          echo "== pnpm run ${args[*]}" >> "$GITHUB_WORKSPACE/harness/$DIR/checks.log"
-          pnpm run "${args[@]}" < /dev/null 2>&1 | tee -a "$GITHUB_WORKSPACE/harness/$DIR/checks.log" || status=1
+          echo "== pnpm run ${args[*]}" >> "$log"
+          peak="$RUNNER_TEMP/check-peak"
+          echo "0 0" > "$peak"
+          ( while sleep 10; do
+              free -m | awk -v f="$peak" 'NR == 2 { m = $3 } NR == 3 { s = $3 } END {
+                getline old < f; split(old, p, " ");
+                if (m > p[1]) p[1] = m; if (s > p[2]) p[2] = s;
+                print p[1], p[2] > f }'
+            done ) > /dev/null 2>&1 &
+          sampler=$!
+          start=$SECONDS
+          rc=0
+          timeout --kill-after=60 45m pnpm run "${args[@]}" < /dev/null 2>&1 | tee -a "$log" || rc=$?
+          kill "$sampler" 2>/dev/null || true
+          wait "$sampler" 2>/dev/null || true
+          read -r peak_mem peak_swap < "$peak" || true
+          case "$rc" in
+            0) note="passed" ;;
+            124) note="stopped after 45 minutes" ;;
+            137) note="killed (likely out of memory)" ;;
+            *) note="failed" ;;
+          esac
+          echo "== ${args[0]}: $note, exit $rc after $(( SECONDS - start ))s; peak memory ${peak_mem:-unknown} MB, peak swap ${peak_swap:-unknown} MB" | tee -a "$log"
+          [ "$rc" -eq 0 ] || status=1
           echo "::endgroup::"
         done
         exit "$status"
