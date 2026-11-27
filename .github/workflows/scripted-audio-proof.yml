@@ -275,7 +275,7 @@ jobs:
           if [[ "$TESTS_OUTCOME" == failure || "$CHECKS_OUTCOME" == failure ]]; then
             echo "- live proof skipped because a listed test or check failed"
           fi
-          if [[ -n "$OFFLINE_OUTCOME" ]]; then
+          if [[ "$OFFLINE_OUTCOME" == success || "$OFFLINE_OUTCOME" == failure ]]; then
             echo "- offline lanes ($(jq -r 'join(", ")' <<<"$OFFLINE")): $OFFLINE_OUTCOME"
           fi
           for f in harness/"$DIR"/results/run-*/*/case.json; do
@@ -284,7 +284,7 @@ jobs:
           echo
           echo "Result files:"
           echo '```'
-          (cd "harness/$DIR" && find results -type f 2>/dev/null | sort | head -n 80)
+          if [[ -d "harness/$DIR/results" ]]; then (cd "harness/$DIR" && find results -type f | sort | sed -n '1,80p'); else echo "(no result files)"; fi
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
     - name: Upload the proof bundle
