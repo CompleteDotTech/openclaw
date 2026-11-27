@@ -12,6 +12,42 @@
       "sha": "8b9b1489296846a05300227a2670a14df8cd67a8",
       "dir": "proof/205789",
       "script": "dictation-proof.mjs"
+    },
+    {
+      "pr": 205788,
+      "sha": "a58e59097da0089adf1a59ba6c86002a2f407bc5",
+      "dir": "proof/205788",
+      "script": "dictation-proof.cjs"
+    },
+    {
+      "pr": 205794,
+      "sha": "8d399bf4575d40a12146b68616974b99defbcfa0",
+      "dir": "proof/205794",
+      "script": "live-dictation-proof.mjs"
+    },
+    {
+      "pr": 205876,
+      "sha": "45971d0305bfaf4a7096d14ba7dbfe3e28b18b3a",
+      "dir": "proof/205876",
+      "script": "live-dictation.mjs"
+    },
+    {
+      "pr": 205880,
+      "sha": "34eb161f573465301820e44a42d0e1c215a3e79d",
+      "dir": "proof/205880",
+      "script": "live-dictation.mjs"
+    },
+    {
+      "pr": 205892,
+      "sha": "22347650b31422c227b64e39d0ec0ad8a6c038dc",
+      "dir": "proof/205892",
+      "script": "proof.mjs"
+    },
+    {
+      "pr": 205973,
+      "sha": "194fcb3f317e5d256d1c35e9a9a69a230c81a45e",
+      "dir": "proof/205973",
+      "script": "dictation-proof.mjs"
     }
   ]
 }
