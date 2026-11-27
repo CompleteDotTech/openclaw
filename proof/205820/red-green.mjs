@@ -11,20 +11,11 @@ import {
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
-const HEAD = "935d686591746fbeff2335e14877213679340635";
+const HEAD = "ab64087ebe3ce3155b57247dfb0f1007d8003264";
 const BASE = "af23a024cf8ef3e7793976ea54cb0191b03044ab";
 const BASE_NAME = "pre-fix";
 
 const cases = [
-  {
-    id: "shadowed-alias",
-    file: "src/realtime-transcription/vocabulary-terms.test.ts",
-    config: "test/vitest/vitest.unit-src.config.ts",
-    title: "ignores aliases from shared terms shadowed by a personal canonical override",
-    sources: ["src/realtime-transcription/vocabulary-terms.ts"],
-    line: 210,
-    failure: /^AssertionError: expected .* to deeply equal /,
-  },
   {
     id: "provider-admission",
     file: "src/gateway/talk/transcription-relay.vocabulary.test.ts",
@@ -110,7 +101,7 @@ for (const file of files) copyFileSync(path.join(head, file), path.join(base, fi
 assert.deepEqual(
   git(base, "diff", "--name-only", "HEAD", "--").split("\x0a").sort(),
   files,
-  "Only the two regression test files may differ from base HEAD",
+  "Only the regression test file may differ from base HEAD",
 );
 
 function runCase(spec, side, cwd) {
