@@ -1,12 +1,16 @@
 {
-  "note": "#205794 on ab0ad5c with the paired UI budget check against 2fda93c (05:18 UTC Nov 27).",
+  "note": "#206088 on d81b892 with the budget check and before/after, upgrade, parser and boot-manifest lanes (05:29 UTC Nov 27).",
   "runs": [
     {
       "pr": 206088,
-      "sha": "5166e8aa8ff61c209dde9a06dd69b4f5678819c9",
+      "sha": "d81b89299fad581da9df2114800e6af049ecf6da",
       "dir": "proof/206088",
       "script": "dictation-proof.mjs",
-      "tests": ["ui/src/pages/chat/composer-file-reference-provider.integration.test.ts"]
+      "tests": ["ui/src/pages/chat/composer-file-reference-provider.integration.test.ts"],
+      "checks": [["ui:check-performance:base", "20b3afeccc4964fbd8a4a5bbe15fd8069ba4f6a5"], "ui:build"],
+      "checkouts": [{"name": "main", "repo": "openclaw/openclaw", "sha": "fbba71f65223e59068ebdb18293e8b1e9884074f", "build": true}, {"name": "parser-base", "repo": "CompleteDotTech/openclaw", "sha": "b92136b4e18178281804b91b8ca060db1ade2907", "build": false}, {"name": "budget-base", "repo": "openclaw/openclaw", "sha": "20b3afeccc4964fbd8a4a5bbe15fd8069ba4f6a5", "build": false}, {"name": "manifest", "repo": "CompleteDotTech/openclaw", "sha": "d81b89299fad581da9df2114800e6af049ecf6da", "build": false}],
+      "stable": "2026.11.10",
+      "offline": ["upgrade-recovery.mjs", "parser-red-green.mjs", "boot-manifest.mjs"]
     },
     {
       "pr": 205789,
