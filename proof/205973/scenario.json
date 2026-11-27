@@ -1,0 +1,46 @@
+{
+  "leadingSilenceMs": 500,
+  "tts": {
+    "model": "gpt-4o-mini-tts",
+    "voice": "alloy",
+    "instructions": "Read only the supplied words, as natural English dictation. Do not add words, introductions, or sound effects."
+  },
+  "takes": [
+    { "id": "alloy", "voice": "alloy" },
+    { "id": "nova", "voice": "nova" },
+    { "id": "sage", "voice": "sage" }
+  ],
+  "cases": [
+    {
+      "id": "realtime-review-and-insert",
+      "route": "realtime",
+      "action": "use-reviewed",
+      "initialDraft": "Existing draft.",
+      "segments": [
+        { "text": "Do not delete the blue folder.", "pauseAfterMs": 1300 },
+        { "text": "Keep the original copy.", "pauseAfterMs": 180 }
+      ],
+      "expectedText": "Do not delete the blue folder. Keep the original copy."
+    },
+    {
+      "id": "file-review-and-keep-raw",
+      "route": "file",
+      "action": "keep-raw",
+      "initialDraft": "Existing draft.",
+      "segments": [
+        { "text": "Leave the side door closed until Friday.", "pauseAfterMs": 500 }
+      ],
+      "expectedText": "Leave the side door closed until Friday."
+    },
+    {
+      "id": "realtime-cancel-during-finalization",
+      "route": "realtime",
+      "action": "cancel-finishing",
+      "initialDraft": "Existing draft.",
+      "segments": [
+        { "text": "This sentence belongs only in the recording.", "pauseAfterMs": 1700 }
+      ],
+      "expectedText": "This sentence belongs only in the recording."
+    }
+  ]
+}
