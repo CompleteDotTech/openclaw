@@ -248,8 +248,7 @@ async function runCase({ c, take, clip, out, ram, checkout, chromium, build, sce
     try {
       if (!wholePage && !await shell?.isVisible()) return;
       const rendered = await page.evaluate(() => [document.body?.innerText ?? '',
-        ...Array.from(document.querySelectorAll('input, textarea'), (el) => el.value)].join('
-'));
+        ...Array.from(document.querySelectorAll('input, textarea'), (el) => el.value)].join('\n'));
       // Never mask UI. If a credential is rendered, withhold this image.
       if (redact(rendered) !== rendered) {
         report.artifactWarning = 'Withheld ' + name + ': potential credential in the page';
@@ -275,8 +274,7 @@ async function runCase({ c, take, clip, out, ram, checkout, chromium, build, sce
     const duration = wavMs(wav);
     check(duration > scenario.leadingSilenceMs && duration < 30_000, 'Clip outside test duration');
     report.clipMs = Math.round(duration);
-    await writeFile(path.join(out, 'clip.sha256'), createHash('sha256').update(wav).digest('hex') + '
-');
+    await writeFile(path.join(out, 'clip.sha256'), createHash('sha256').update(wav).digest('hex') + '\n');
     step('gateway-startup');
     dir = await mkdtemp(path.join(ram, 'case-'));
     const port = await freePort();
@@ -462,9 +460,7 @@ async function runCase({ c, take, clip, out, ram, checkout, chromium, build, sce
   } catch (error) {
     // Keep the underlying action error alongside any visible notice, not the raw call log.
     const cause = { name: redact(error?.name ?? 'Error'),
-      message: redact(String(error?.message ?? error).split(/
-?
-/u, 1)[0]).slice(0, 400) };
+      message: redact(String(error?.message ?? error).split(/\r?\n/u, 1)[0]).slice(0, 400) };
     const alert = await findError(m.providerError || m.createRejected ? 750 : 0);
     if (alert) {
       await markUiError(alert);
@@ -522,10 +518,8 @@ async function runCase({ c, take, clip, out, ram, checkout, chromium, build, sce
       report.result = 'ERROR_ARTIFACT';
       report.failure = { step: 'artifacts', name: 'ArtifactError', message: report.artifactWarning };
     }
-    await writeFile(path.join(out, 'transcript.txt'), redact(transcript(m)) + '
-');
-    await writeFile(path.join(out, 'state.json'), JSON.stringify(report, null, 2) + '
-');
+    await writeFile(path.join(out, 'transcript.txt'), redact(transcript(m)) + '\n');
+    await writeFile(path.join(out, 'state.json'), JSON.stringify(report, null, 2) + '\n');
   }
   return report.result;
 }
@@ -594,8 +588,7 @@ async function runComparison({ side, viewport, checkout, build, chromium, ram, o
   let stage = 'startup', speech, gateway, exited, browser, page, draft;
   const safeUi = async () => {
     const rendered = await page.evaluate(() => [document.body?.innerText ?? '',
-      ...Array.from(document.querySelectorAll('input, textarea'), (el) => el.value)].join('
-'));
+      ...Array.from(document.querySelectorAll('input, textarea'), (el) => el.value)].join('\n'));
     check(redact(rendered) === rendered, 'Withheld frame: possible credential in the page');
   };
   const snap = async (name, focus, label) => {
@@ -792,9 +785,7 @@ async function runComparison({ side, viewport, checkout, build, chromium, ram, o
     const ui = await page?.evaluate(() => window.readProofNotices?.()).catch(() => null);
     const notice = ui && blockingNotice(ui, Date.now() - 8000);
     report.failure = { stage, message: redact(notice?.text ??
-      String(error?.message ?? error).split(/
-?
-/u, 1)[0]).slice(0, 400) };
+      String(error?.message ?? error).split(/\r?\n/u, 1)[0]).slice(0, 400) };
     if (page) await snap('error', null).catch(() => {});
   } finally {
     const redactNotice = (n) => ({ ...n, text: redact(n.text) });
@@ -820,8 +811,7 @@ async function runComparison({ side, viewport, checkout, build, chromium, ram, o
         await annotationPage.locator('img').evaluate((img) => img.decode());
         await annotationPage.screenshot({ path: path.join(out, annotated), scale: 'css' });
         await writeFile(path.join(out, name + '-annotations.json'),
-          JSON.stringify({ viewport, scale: 1, outline }, null, 2) + '
-');
+          JSON.stringify({ viewport, scale: 1, outline }, null, 2) + '\n');
         report.screenshots.push(annotated);
       }
     } catch {
@@ -851,8 +841,7 @@ async function runComparison({ side, viewport, checkout, build, chromium, ram, o
               report.result = 'FAIL';
               report.failure = { stage: m.blockedAt, message: 'Unexpected outbound send or agent request' };
             }
-            await writeFile(path.join(out, 'state.json'), JSON.stringify(report, null, 2) + '
-');
+            await writeFile(path.join(out, 'state.json'), JSON.stringify(report, null, 2) + '\n');
             await rm(dir, { recursive: true, force: true });
           }
         }
@@ -917,8 +906,7 @@ async function compare() {
     }
   } finally {
     await rm(ram, { recursive: true, force: true });
-    await writeFile(path.join(run, 'manifest.json'), JSON.stringify({ cases }, null, 2) + '
-');
+    await writeFile(path.join(run, 'manifest.json'), JSON.stringify({ cases }, null, 2) + '\n');
   }
 }
 
@@ -929,8 +917,7 @@ async function main() {
   check(process.platform === 'linux' && (await statfs('/dev/shm')).type === 0x01021994,
     'Run on a Linux CI VM with tmpfs at /dev/shm');
   if (comparison) return compare();
-  check((await readFile('/proc/swaps', 'utf8')).trim().split('
-').length === 1, 'Turn swap off before running the proof');
+  check((await readFile('/proc/swaps', 'utf8')).trim().split('\n').length === 1, 'Turn swap off before running the proof');
   const { checkout, build } = await pinnedBuild(process.argv[2], expectedHead, 'PR');
   const scenario = JSON.parse(await readFile(path.join(here, 'scenario.json'), 'utf8'));
   const { chromium } = createRequire(path.join(checkout, 'ui/package.json'))('playwright');
