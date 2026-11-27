@@ -1,0 +1,45 @@
+{
+  "leadingSilenceMs": 500,
+  "tts": {
+    "model": "gpt-4o-mini-tts",
+    "voice": "alloy",
+    "instructions": "Read the text verbatim in clear conversational English. Do not add any words."
+  },
+  "takes": [
+    {
+      "id": "alloy",
+      "voice": "alloy",
+      "instructions": "Read the text verbatim in clear conversational English. Do not add any words."
+    },
+    {
+      "id": "nova",
+      "voice": "nova",
+      "instructions": "Read the text verbatim in clear conversational English. Do not add any words."
+    },
+    {
+      "id": "sage",
+      "voice": "sage",
+      "instructions": "Read the text verbatim in clear conversational English. Do not add any words."
+    }
+  ],
+  "cases": [
+    {
+      "id": "single-utterance",
+      "segments": [
+        { "text": "The rehearsal starts after lunch.", "pauseAfterMs": 1300 }
+      ],
+      "expected": { "words": "The rehearsal starts after lunch", "sends": 0 }
+    },
+    {
+      "id": "two-utterances",
+      "segments": [
+        { "text": "Please save the rehearsal notes.", "pauseAfterMs": 1100 },
+        { "text": "We can review them tomorrow.", "pauseAfterMs": 1300 }
+      ],
+      "expected": {
+        "words": "Please save the rehearsal notes. We can review them tomorrow",
+        "sends": 0
+      }
+    }
+  ]
+}
