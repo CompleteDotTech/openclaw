@@ -1,5 +1,5 @@
 {
-  "note": "#205792 rerun on 10ea958 with its CI fixes; lint dropped from the entry (Nov 27).",
+  "note": "#205892 final proof on its synced head 878550b (Nov 27).",
   "runs": [
     {
       "pr": 206088,
@@ -50,7 +50,7 @@
     },
     {
       "pr": 205892,
-      "sha": "22347650b31422c227b64e39d0ec0ad8a6c038dc",
+      "sha": "878550be341eebac52bebec21bf76d83d118d915",
       "dir": "proof/205892",
       "script": "proof.mjs"
     },
