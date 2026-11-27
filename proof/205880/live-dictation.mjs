@@ -15,6 +15,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const chatModel = 'openai/gpt-5.4-mini', sttModel = 'gpt-4o-transcribe';
 const key = process.env.OPENAI_API_KEY?.trim();
 delete process.env.OPENAI_API_KEY;
+
 const words = (s) =>
   s.normalize('NFKC').toLowerCase().match(/[\p{L}\p{M}\p{N}]+/gu)?.join(' ') ?? '';
 const redact = (s) => (key ? s.replaceAll(key, '[redacted]') : s)
@@ -52,7 +53,8 @@ function loadClip(path) {
     i = p + n + (n % 2);
   }
   const ms = Math.ceil(bytes / 96);
-  check(pcm && bytes % 2 === 0 && ms >= 500 && ms <= 20000, 'Need 0.5–20 s of 48 kHz mono PCM16.');
+  check(pcm && bytes % 2 === 0 && ms >= 500 && ms <= 20000,
+    'Need 0.5–20 s of 48 kHz mono PCM16.');
   return { ms, sha256: createHash('sha256').update(b).digest('hex') };
 }
 
@@ -64,6 +66,11 @@ async function until(fn, ms, message) {
   } while (Date.now() < deadline);
   throw new CheckError(message);
 }
+
+const observedRpc = new Set(['connect', 'talk.catalog', 'talk.config', 'sessions.create', 'talk.session.create']);
+const cleanString = (value) => typeof value === 'string' ? redact(value).slice(0, 1000) : null;
+const rpcError = (receipt) =>
+  [receipt.method, receipt.error?.code, receipt.error?.message].filter(Boolean).join(': ');
 
 const forbidden = new Set(['chat.send', 'sessions.send', 'sessions.dispatch', 'agent']);
 function blockedMethod(f) {
@@ -84,7 +91,7 @@ async function guard(page, origin, o) {
   };
   await page.routeWebSocket((url) => url.host === new URL(origin).host, (client) => {
     const server = client.connectToServer();
-    let createId;
+    const pending = new Map(), latest = new Map();
     const parse = (message) => { try { return JSON.parse(message.toString()); } catch { return null; } };
     client.onMessage((message) => {
       const f = parse(message), blocked = blockedMethod(f);
@@ -96,13 +103,41 @@ async function guard(page, origin, o) {
         }));
         return;
       }
-      if (f?.type === 'req' && f.method === 'talk.session.create') createId = f.id;
+      if (f?.type === 'req' && observedRpc.has(f.method)) {
+        if (f.method === 'connect') { o.latest = latest; o.admission = undefined; }
+        const receipt = {
+          method: f.method,
+          phase: o.dictateRequested ? 'afterDictate' : 'beforeDictate',
+          sentMs: Math.round(performance.now() - o.started),
+          ok: null,
+        };
+        pending.set(f.id, receipt);
+        latest.set(f.method, receipt);
+        o.rpc.push(receipt);
+      }
       server.send(message);
     });
     server.onMessage((message) => {
       const f = parse(message), p = f?.payload;
-      if (f?.type === 'res' && createId && f.id === createId) {
-        o.admission = f.ok ? { id: p?.transcriptionSessionId, provider: p?.provider } : {};
+      const receipt = f?.type === 'res' ? pending.get(f.id) : undefined;
+      if (receipt) {
+        pending.delete(f.id);
+        receipt.replyMs = Math.round(performance.now() - o.started);
+        receipt.ok = f.ok === true;
+        if (!receipt.ok) {
+          receipt.error = {
+            code: cleanString(f.error?.code),
+            message: cleanString(f.error?.message),
+            retryable: f.error?.retryable === true,
+          };
+        }
+        if (receipt.method === 'talk.catalog' && receipt.ok) {
+          receipt.transcriptionReady = p?.transcription?.ready === true;
+        }
+        if (receipt.method === 'talk.session.create' && latest === o.latest &&
+            latest.get(receipt.method) === receipt) {
+          o.admission = { receipt, id: p?.transcriptionSessionId, provider: p?.provider };
+        }
       }
       if (f?.type === 'event' && f.event === 'talk.event' && p?.transcriptionSessionId) {
         const t = o.track(p.transcriptionSessionId);
@@ -134,7 +169,7 @@ async function runCase(chromium, origin, env, run, source, c, take) {
   const id = c.id + (take ? '--' + take.id : '');
   const out = join(run, id), path = join(here, 'clips', id + '.wav');
   mkdirSync(out);
-  const o = { blocked: [], stopRequested: false };
+  const o = { blocked: [], rpc: [], started: performance.now(), dictateRequested: false, stopRequested: false };
   const visibleAlerts = [];
   let browser, page, draft, t, clip, failure = null, screenshotFailure = null, screenshot = false;
   let step = 'read-clip', status = 'FAIL', value = '', editable = false;
@@ -185,12 +220,41 @@ async function runCase(chromium, origin, env, run, source, c, take) {
     30000, 'Model setup did not clear or composer/mic stayed disabled.');
     check(await draft.inputValue() === '', 'Starting draft was not empty.');
 
-    step = 'admit-openai-transcription';
+    step = 'wait-for-transcription-catalog';
+    await uiUntil(() => {
+      const catalog = o.latest?.get('talk.catalog'), config = o.latest?.get('talk.config');
+      if (catalog?.ok === false) throw new CheckError(rpcError(catalog));
+      if (config?.ok === false) throw new CheckError(rpcError(config));
+      if (catalog?.ok) check(catalog.transcriptionReady, 'The browser Talk catalog says transcription is not ready.');
+      return catalog?.transcriptionReady && (!config || config.ok === true);
+    }, 15000, 'The browser did not receive a ready Talk catalog/config response.');
+
+    step = 'wait-for-admission-request';
+    o.dictateRequested = true;
     await dictate.click();
-    await uiUntil(() => o.admission, 15000, 'No transcription admission response.');
-    check(o.admission.id && o.admission.provider === 'openai',
-      'Gateway did not admit the OpenAI transcription relay.');
-    t = o.track(o.admission.id);
+    const afterClick = (method) => {
+      const receipt = o.latest?.get(method);
+      return receipt?.phase === 'afterDictate' ? receipt : undefined;
+    };
+    const draftRequest = () => afterClick('sessions.create');
+    const talkRequest = () => afterClick('talk.session.create');
+    await uiUntil(() => talkRequest() || draftRequest(), 15000,
+      'Dictate was clicked, but the browser sent neither sessions.create nor talk.session.create.');
+    if (!talkRequest()) {
+      step = 'allocate-draft-session';
+      // The product allows up to 300 s for sessions.create startup admission.
+      await uiUntil(() => {
+        const draftRpc = draftRequest();
+        if (draftRpc?.ok === false && !draftRpc.error?.retryable) throw new CheckError(rpcError(draftRpc));
+        return talkRequest();
+      }, 305000, 'Draft-session allocation did not lead to talk.session.create.');
+    }
+    step = 'admit-openai-transcription';
+    await uiUntil(() => o.admission, 35000, 'talk.session.create was sent but no matching response arrived.');
+    const a = o.admission;
+    if (!a.receipt.ok) throw new CheckError(rpcError(a.receipt));
+    check(a.id && a.provider === 'openai', 'Gateway did not admit the OpenAI transcription relay.');
+    t = o.track(a.id);
 
     step = 'capture-clip';
     // The relay accepts 8 kHz G.711 u-law (one byte per sample).
@@ -227,8 +291,8 @@ async function runCase(chromium, origin, env, run, source, c, take) {
           value = await draft.inputValue({ timeout: 2000 });
           editable = await draft.isEditable({ timeout: 2000 });
         }
-        // Capture the actual page, even when the composer never rendered. No masking.
-        // Suppress the PNG rather than publishing a frame containing a detected secret.
+        // Capture the actual page even when the composer never rendered. No masking.
+        // Withhold the PNG rather than publishing a frame containing a detected secret.
         const text = await page.locator('body').evaluate((body) => [body.innerText,
           ...Array.from(body.querySelectorAll('input, textarea'), (el) => el.value),
         ].join('\n'), undefined, { timeout: 2000 });
@@ -260,7 +324,7 @@ async function runCase(chromium, origin, env, run, source, c, take) {
       provider: o.admission?.provider === 'openai' ? 'openai' : null, expectedWords: c.expected.words,
       clip: clip ?? null, relayReady: t?.ready ?? false, audioBytes: t?.bytes ?? 0,
       finalEvents: t?.finals.length ?? 0, relayClose: t?.closed ?? null,
-      gatewayEvents: t?.events ?? [], visibleAlerts, stopRequested: o.stopRequested,
+      gatewayRpc: o.rpc, gatewayEvents: t?.events ?? [], visibleAlerts, stopRequested: o.stopRequested,
       blockedRequests: o.blocked, editable, screenshot, screenshotFailure, draft: redact(value),
     }, null, 2) + '\n');
   }
