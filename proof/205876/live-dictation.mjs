@@ -9,7 +9,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
-const head = "45971d0305bfaf4a7096d14ba7dbfe3e28b18b3a";
+const head = "532c7d9532a52cdcabfaf53f0f9bd2a40372af8a";
 const key = process.env.OPENAI_API_KEY?.trim();
 delete process.env.OPENAI_API_KEY;
 const token = randomBytes(32).toString("hex");
