@@ -3,9 +3,13 @@
 # Playwright harness plays it to Chromium as a fake microphone while the PR's own
 # Gateway uses live OpenAI transcription. Every run hears exactly the same words.
 #
-# Runs only on pushes to this branch. To prove a PR, add proof/<pr>/scenario.json
-# and its harness script, then point proof/run.json at the PR, its exact head SHA,
-# that directory and the script name.
+# Runs only on pushes to this branch. Each PR has proof/<pr>/scenario.json and its
+# harness script, and an entry in proof/run.json: { "runs": [ { "pr", "sha", "dir",
+# "script" } ] } (an entry with "enabled": false is skipped). A push proves only the
+# PRs whose proof/<pr>/ files or run.json entry changed; a change to the clip
+# builder or this workflow proves all of them. Put "[proof: all]" or
+# "[proof: 206088,205788]" in the pushed commit message to choose explicitly.
+# Each PR runs as its own job; a newer push for the same PR cancels the older job.
 name: Scripted audio dictation proof
 'on':
   push:
@@ -16,52 +20,96 @@ name: Scripted audio dictation proof
     - .github/workflows/scripted-audio-proof.yml
 permissions:
   contents: read
-concurrency:
-  group: scripted-audio-proof-${{ github.ref }}
-  cancel-in-progress: true
 defaults:
   run:
     shell: bash --noprofile --norc -e -o pipefail {0}
 jobs:
-  proof:
-    name: Scripted audio proof
+  plan:
+    name: Pick the PRs to prove
     if: github.repository == 'CompleteDotTech/openclaw'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      CI: 'true'
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-      PNPM_CONFIG_FROZEN_LOCKFILE: 'true'
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+      count: ${{ steps.pick.outputs.count }}
     steps:
     - name: Check out the harness branch
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         path: harness
         persist-credentials: 'false'
-    - name: Read the run config
-      id: cfg
+    - name: Read run.json and pick the changed PRs
+      id: pick
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BEFORE: ${{ github.event.before }}
+        AFTER: ${{ github.sha }}
+        HEAD_MESSAGE: ${{ github.event.head_commit.message }}
       run: |
-        cfg=harness/proof/run.json
-        pr=$(jq -r '.pr' "$cfg"); sha=$(jq -r '.sha' "$cfg"); dir=$(jq -r '.dir' "$cfg"); script=$(jq -r '.script' "$cfg")
-        [[ "$pr" =~ ^[0-9]+$ ]] || { echo "run.json: pr must be a number"; exit 1; }
-        [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "run.json: sha must be a full 40-character commit SHA"; exit 1; }
-        [[ "$dir" =~ ^proof/[A-Za-z0-9._-]+$ ]] || { echo "run.json: dir must be proof/<name>"; exit 1; }
-        [[ "$script" =~ ^[A-Za-z0-9._-]+\.m?js$ ]] || { echo "run.json: bad script name"; exit 1; }
-        test -f "harness/$dir/scenario.json" && test -f "harness/$dir/$script"
-        { echo "pr=$pr"; echo "sha=$sha"; echo "dir=$dir"; echo "script=$script"; } >> "$GITHUB_OUTPUT"
+        normalize='if type == "object" and has("runs") then .runs else [.] end | map(select(.enabled != false) | {pr: (.pr | tostring), sha, dir, script})'
+        runs=$(jq -c "$normalize" harness/proof/run.json)
+        jq -e 'length > 0 and all(.[];
+            (.pr | test("^[0-9]+$")) and (.sha | test("^[0-9a-f]{40}$")) and
+            (.dir | test("^proof/[A-Za-z0-9._-]+$")) and (.script | test("^[A-Za-z0-9._-]+\\.[cm]?js$")))
+          and (map(.pr) | length == (unique | length))' <<<"$runs" >/dev/null \
+          || { echo "run.json: every entry needs a numeric pr, a full 40-character sha, dir proof/<name> and a .js/.mjs/.cjs script, with no duplicate PRs"; exit 1; }
+        while read -r dir script; do
+          test -f "harness/$dir/scenario.json" && test -f "harness/$dir/$script" || { echo "Missing scenario.json or $script in $dir"; exit 1; }
+        done < <(jq -r '.[] | "\(.dir) \(.script)"' <<<"$runs")
+
+        pick=$(grep -o '\[proof: *[a-z0-9, ]*\]' <<<"$HEAD_MESSAGE" | head -n1 | sed 's/^\[proof: *//; s/\]$//; s/ //g' || true)
+        if [[ "$pick" == all ]] || [[ "$BEFORE" =~ ^0+$ ]]; then
+          selected=$runs
+        elif [[ -n "$pick" ]]; then
+          selected=$(jq -c --arg pick "$pick" '($pick | split(",")) as $want | map(select(.pr as $p | $want | index($p)))' <<<"$runs")
+        elif ! changed=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$AFTER" --jq '[.files[].filename]'); then
+          echo "Could not list the changed files, so every PR runs."
+          selected=$runs
+        elif jq -e 'any(.[]; . == "proof/make-clips.mjs" or . == ".github/workflows/scripted-audio-proof.yml")' <<<"$changed" >/dev/null; then
+          selected=$runs
+        else
+          previous=$(gh api "repos/$GITHUB_REPOSITORY/contents/proof/run.json?ref=$BEFORE" -H "Accept: application/vnd.github.raw" 2>/dev/null | jq -c "$normalize" 2>/dev/null || echo '[]')
+          selected=$(jq -c --argjson changed "$changed" --argjson previous "$previous" \
+            'map(. as $r | select(($changed | any(startswith($r.dir + "/"))) or (($previous | index($r)) == null)))' <<<"$runs")
+        fi
+        echo "Proving: $(jq -r 'map("#" + .pr) | join(", ")' <<<"$selected")"
+        { echo "matrix=$(jq -c . <<<"$selected")"; echo "count=$(jq length <<<"$selected")"; } >> "$GITHUB_OUTPUT"
+  proof:
+    name: 'Scripted audio proof #${{ matrix.pr }}'
+    needs: plan
+    if: needs.plan.outputs.count != '0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    concurrency:
+      group: scripted-audio-proof-pr${{ matrix.pr }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      CI: 'true'
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+      PNPM_CONFIG_FROZEN_LOCKFILE: 'true'
+      PR: ${{ matrix.pr }}
+      SHA: ${{ matrix.sha }}
+      DIR: ${{ matrix.dir }}
+      SCRIPT: ${{ matrix.script }}
+    steps:
+    - name: Check out the harness branch
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        path: harness
+        persist-credentials: 'false'
     - name: Check out the exact PR head
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         repository: CompleteDotTech/openclaw
-        ref: ${{ steps.cfg.outputs.sha }}
+        ref: ${{ matrix.sha }}
         path: pr
         fetch-depth: '1'
         persist-credentials: 'false'
     - name: Verify and record the source under test
-      env:
-        PR: ${{ steps.cfg.outputs.pr }}
-        SHA: ${{ steps.cfg.outputs.sha }}
-        DIR: ${{ steps.cfg.outputs.dir }}
       run: |
         test "$(git -C pr rev-parse HEAD)" = "$SHA"
         jq -n --arg pr "$PR" --arg sha "$SHA" --arg tree "$(git -C pr rev-parse 'HEAD^{tree}')" \
@@ -87,38 +135,38 @@ jobs:
     - name: Generate the scripted audio clips
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        DIR: ${{ steps.cfg.outputs.dir }}
       run: |
         node harness/proof/make-clips.mjs "harness/$DIR/scenario.json"
         cat "harness/$DIR/clips/script.md" >> "$GITHUB_STEP_SUMMARY"
     - name: Run the browser proof
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        DIR: ${{ steps.cfg.outputs.dir }}
-        SCRIPT: ${{ steps.cfg.outputs.script }}
       run: |
         ulimit -c 0
         node "harness/$DIR/$SCRIPT" "$GITHUB_WORKSPACE/pr"
     - name: Summarize the cases
       if: always()
-      env:
-        DIR: ${{ steps.cfg.outputs.dir }}
       run: |
         shopt -s nullglob
         {
-          echo "## Case results"
+          echo "## Case results for #$PR"
           for f in harness/"$DIR"/results/run-*/*/case.json; do
             echo "- $(basename "$(dirname "$f")"): $(jq -r '.status + (if .detail then " (" + .detail + ")" else "" end)' "$f")"
           done
+          echo
+          echo "Result files:"
+          echo '```'
+          (cd "harness/$DIR" && find results -type f 2>/dev/null | sort | head -n 80)
+          echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
     - name: Upload the proof bundle
       if: always()
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
-        name: scripted-audio-proof-pr${{ steps.cfg.outputs.pr }}-${{ github.run_id }}
+        name: scripted-audio-proof-pr${{ matrix.pr }}-${{ github.run_id }}
         path: |
-          harness/${{ steps.cfg.outputs.dir }}/source.json
-          harness/${{ steps.cfg.outputs.dir }}/clips/
-          harness/${{ steps.cfg.outputs.dir }}/results/
+          harness/${{ matrix.dir }}/source.json
+          harness/${{ matrix.dir }}/clips/
+          harness/${{ matrix.dir }}/results/
         retention-days: 30
         if-no-files-found: warn
