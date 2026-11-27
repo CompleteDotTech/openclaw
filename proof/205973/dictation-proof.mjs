@@ -11,7 +11,7 @@ import { promisify } from 'node:util';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const expectedHead = '1a1060d376d44835a4b49d765c4ae096e847c58a';
-const expectedBefore = '66b2e244acf2666690741d0e04140087b4570100';
+const expectedBefore = 'c7ea9f418610b2d5d336d0df191c8e4660202efb';
 const apiKey = process.env.OPENAI_API_KEY?.trim();
 delete process.env.OPENAI_API_KEY;
 delete process.env.DEBUG;
