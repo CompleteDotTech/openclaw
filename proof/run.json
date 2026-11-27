@@ -1,5 +1,5 @@
 {
-  "note": "#205820 red/green rerun on 935d686 with the lane matching the real provider-admission assertion (Nov 27).",
+  "note": "#205892 round 5 on 2234765 with the escalated session's scenario and harness (Nov 27).",
   "runs": [
     {
       "pr": 206088,
