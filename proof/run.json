@@ -1,5 +1,5 @@
 {
-  "note": "#205792 on e82b19f without the live leg: build, 11 tests, tsgo:core, tsgo:ui and lint (06:31 UTC Nov 27).",
+  "note": "#205876 on 532c7d9 and #205794 on 432aa3b after their main syncs: #205876 2 suites, build and six takes; #205794 paired budget check vs d6d289e and six cases (Nov 27).",
   "runs": [
     {
       "pr": 206088,
@@ -30,17 +30,19 @@
     },
     {
       "pr": 205794,
-      "sha": "ab0ad5c680e016d4cebc7212132339fb29e4e81a",
+      "sha": "432aa3b022e43cdf87fde450efdd1c2844728665",
       "dir": "proof/205794",
       "script": "live-dictation-proof.mjs",
-      "checks": [["ui:check-performance:base", "2fda93cf03a882cd080e7984392d50b95c4737aa"]],
-      "checkouts": [{"name": "base", "repo": "openclaw/openclaw", "sha": "2fda93cf03a882cd080e7984392d50b95c4737aa", "build": false}]
+      "checks": [["ui:check-performance:base", "d6d289ee13ff163c20e64b8cbb008312f3181d3f"]],
+      "checkouts": [{"name": "base", "repo": "openclaw/openclaw", "sha": "d6d289ee13ff163c20e64b8cbb008312f3181d3f", "build": false}]
     },
     {
       "pr": 205876,
-      "sha": "45971d0305bfaf4a7096d14ba7dbfe3e28b18b3a",
+      "sha": "532c7d9532a52cdcabfaf53f0f9bd2a40372af8a",
       "dir": "proof/205876",
-      "script": "live-dictation.mjs"
+      "script": "live-dictation.mjs",
+      "tests": ["extensions/openai/realtime-transcription-authority.test.ts", "src/realtime-transcription/websocket-session.test.ts"],
+      "checks": ["build"]
     },
     {
       "pr": 205880,
