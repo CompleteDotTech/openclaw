@@ -1,5 +1,5 @@
 {
-  "note": "#205973 comparison-only rerun against its main parent c7ea9f4 (tests, checks and live takes passed on 1a1060d at 16:54); final proofs on the main merges for six PRs and #206273 on 1d928a6 (Nov 27 17:40).",
+  "note": "#206273 rerun on fd47028 after its E2E expectation fix (Nov 27 21:45).",
   "runs": [
     {
       "pr": 206088,
@@ -97,7 +97,7 @@
     },
     {
       "pr": 206273,
-      "sha": "1d928a6088f3857403a664cd9cc0452660af78fc",
+      "sha": "fd4702826c993ceec8b852cb57e33c1b482ab5af",
       "dir": "proof/206273",
       "script": "dictation-proof.mjs",
       "tests": ["ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-dictation-placement.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/pages/chat/chat-composer-solid.test.tsx", "ui/src/pages/chat/chat-session-rail.test.ts", "ui/src/pages/chat/components/voice-snippets.test.tsx", "ui/src/pages/chat/components/voice-snippet-review.test.tsx", "ui/src/e2e/browser-dictation-status.e2e.test.ts"],
