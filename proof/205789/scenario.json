@@ -1,0 +1,72 @@
+{
+  "leadingSilenceMs": 500,
+  "tts": {
+    "model": "gpt-4o-mini-tts",
+    "voice": "alloy",
+    "instructions": "Read each segment verbatim. Do not omit any hesitations, repetitions, or corrections."
+  },
+  "takes": [
+    { "id": "alloy", "voice": "alloy" },
+    { "id": "nova", "voice": "nova" },
+    { "id": "sage", "voice": "sage" }
+  ],
+  "cases": [
+    {
+      "id": "chat-off",
+      "segments": [
+        { "text": "I might need the blue folder tomorrow.", "pauseAfterMs": 850 }
+      ],
+      "expected": {
+        "surface": "chat",
+        "mode": "off",
+        "action": "keep",
+        "words": "I might need the blue folder tomorrow"
+      }
+    },
+    {
+      "id": "chat-review-and-send",
+      "segments": [
+        { "text": "Um, I need fifteen,", "pauseAfterMs": 170 },
+        { "text": "sorry, fifty copies.", "pauseAfterMs": 850 }
+      ],
+      "expected": {
+        "surface": "chat",
+        "mode": "conservative",
+        "action": "use-and-send",
+        "words": "um I need fifteen sorry fifty copies",
+        "variants": [
+          "um I need 15 sorry 50 copies",
+          "um I need fifteen sorry 50 copies",
+          "um I need 15 sorry fifty copies"
+        ]
+      }
+    },
+    {
+      "id": "new-session-edit-and-copy",
+      "segments": [
+        { "text": "This is very,", "pauseAfterMs": 160 },
+        { "text": "very important.", "pauseAfterMs": 850 }
+      ],
+      "expected": {
+        "surface": "new",
+        "mode": "conservative",
+        "action": "edit-and-copy",
+        "words": "this is very very important",
+        "initialDraft": "Existing unsent draft",
+        "editedDraft": "Please bring the approved agenda"
+      }
+    },
+    {
+      "id": "sidebar-use-original",
+      "segments": [
+        { "text": "We should not ship without approval.", "pauseAfterMs": 850 }
+      ],
+      "expected": {
+        "surface": "sidebar",
+        "mode": "conservative",
+        "action": "use",
+        "words": "we should not ship without approval"
+      }
+    }
+  ]
+}
