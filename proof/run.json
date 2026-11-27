@@ -1,5 +1,5 @@
 {
-  "note": "#205788 round 5 on a58e590 with the v5 harness at 4fbc1c3, its bytes confirmed by RoboClaw (Nov 27).",
+  "note": "#205820 red/green rerun on 935d686 with the lane matching the real provider-admission assertion (Nov 27).",
   "runs": [
     {
       "pr": 206088,
