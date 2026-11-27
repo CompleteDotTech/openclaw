@@ -97,6 +97,44 @@ function classifyError(error, state, setup, step, alerts, now) {
   return { status, error: { step, ...errorInfo(error) } };
 }
 
+async function configurePunctuation(page, policy, receipt) {
+  const talk = page.locator('openclaw-talk-settings');
+  const prefs = talk.locator('.dictation-refinement-settings fieldset.dictation-punctuation-fields');
+  const mode = prefs.locator('select:has(option[value="off"]):has(option[value="automatic"])');
+  try {
+    await prefs.scrollIntoViewIfNeeded();
+    await mode.selectOption(policy);
+    assert.equal(await mode.inputValue(), policy, 'punctuation mode did not stick');
+    if (policy !== 'off') {
+      const language = prefs.locator('select:has(option[value="en-US"])');
+      await language.selectOption('en-US');
+      assert.equal(await language.inputValue(), 'en-US');
+    }
+    if (policy === 'explicit') {
+      await prefs.getByRole('checkbox', {
+        name: 'Allow spoken punctuation commands in Explicit mode', exact: true,
+      }).check();
+    }
+  } finally {
+    // Include below-the-fold headings and raw labels, even when the fieldset never mounted.
+    Object.assign(receipt, await talk.evaluateAll(roots => {
+      const root = roots[0];
+      if (!root) return { talkMounted: false };
+      const fields = root.querySelector('.dictation-refinement-settings fieldset.dictation-punctuation-fields');
+      const select = fields?.querySelector('select:has(option[value="off"]):has(option[value="automatic"])');
+      return {
+        talkMounted: true,
+        headings: [...root.querySelectorAll('h1,h2,h3')].map(el => el.innerText.trim()),
+        punctuationMounted: Boolean(fields), legend: fields?.querySelector('legend')?.innerText.trim() ?? null,
+        modeLabel: select?.labels?.[0]?.querySelector('span')?.innerText.trim() ?? null,
+        mode: select?.value ?? null,
+      };
+    }).catch(() => ({ domSampleUnavailable: true })));
+    for (const field of ['legend', 'modeLabel']) if (typeof receipt[field] === 'string') receipt[field] = scrub(receipt[field]);
+    if (receipt.headings) receipt.headings = receipt.headings.map(scrub);
+  }
+}
+
 function wavMs(file) {
   const b = fs.readFileSync(file);
   assert.ok(b.length >= 44 && b.toString('ascii', 0, 4) === 'RIFF' && b.toString('ascii', 8, 12) === 'WAVE');
@@ -212,7 +250,8 @@ async function main() {
   assert.match(expectedHead, /^[0-9a-f]{40}$/);
   assert.equal(head, expectedHead, 'build the pinned PR head, not the harness branch or merge ref');
   assert.equal(git('status', '--porcelain', '--untracked-files=no'), '', 'tracked checkout is dirty');
-  assert.ok(fs.existsSync(path.join(checkout, 'dist/control-ui/index.html')), 'missing built Control UI');
+  const built = path.join(checkout, 'dist/control-ui');
+  assert.ok(fs.existsSync(path.join(built, 'index.html')), 'missing built Control UI');
   const { chromium } = createRequire(path.join(checkout, 'ui/package.json'))('playwright');
   const scenario = JSON.parse(fs.readFileSync(path.join(__dirname, 'scenario.json'), 'utf8'));
   const { refineDictation } = await import(pathToFileURL(path.join(checkout, 'ui/src/lib/dictation-refinement.ts')).href);
@@ -270,7 +309,8 @@ async function main() {
     const chatModel = process.env.PROOF_CHAT_MODEL || 'openai/gpt-5.4-mini';
     assert.match(chatModel, /^openai\/[a-z0-9.-]+$/);
     fs.writeFileSync(config, JSON.stringify({
-      gateway: { mode: 'local', bind: 'loopback', port, auth: { mode: 'token' }, controlUi: { enabled: true } },
+      gateway: { mode: 'local', bind: 'loopback', port, auth: { mode: 'token' },
+        controlUi: { enabled: true, root: built } },
       logging: { level: 'silent', file: '/dev/null' }, cron: { enabled: false },
       agents: { defaults: { workspace: path.join(tmp, 'work'), model: { primary: chatModel }, models: { [chatModel]: {} } } },
       tools: { profile: 'minimal', media: { audio: { enabled: true, timeoutSeconds: 55 },
@@ -338,7 +378,6 @@ async function main() {
         assert.ok(src);
         const entry = new URL(src, origin);
         assert.equal(entry.origin, origin);
-        const built = path.resolve(checkout, 'dist/control-ui');
         const asset = path.resolve(built, '.' + entry.pathname);
         assert.ok(asset.startsWith(built + path.sep));
         const response = await fetch(entry);
@@ -346,13 +385,12 @@ async function main() {
         result.uiEntrySha256 = sha256(Buffer.from(await response.arrayBuffer()));
         assert.equal(result.uiEntrySha256, sha256(fs.readFileSync(asset)), 'served JS is not from built checkout');
         await page.locator('[data-test-id="send-shortcut-enter"]').click();
+        phase = 'open Talk settings';
         await page.goto(origin + '/settings/talk');
-        const prefs = page.getByRole('group', { name: 'Punctuation policy', exact: true });
-        const mode = prefs.getByLabel('Mode', { exact: true });
-        await mode.selectOption(policy);
-        if (policy !== 'off') await prefs.getByLabel('Punctuation language', { exact: true }).selectOption('en-US');
-        if (policy === 'explicit') await prefs.getByLabel('Allow spoken punctuation commands in Explicit mode', { exact: true }).check();
-        assert.equal(await mode.inputValue(), policy);
+        assert.equal(new URL(page.url()).pathname, '/settings/talk', 'Talk settings route redirected');
+        phase = 'configure dictation punctuation';
+        result.talkSettings = { route: '/settings/talk' };
+        await configurePunctuation(page, policy, result.talkSettings);
         const slug = 'proof-' + c.id + '-' + randomBytes(4).toString('hex');
         const target = 'agent:main:' + slug;
         if (surface !== 'new') {
