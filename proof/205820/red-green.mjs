@@ -23,7 +23,7 @@ const cases = [
     title: "ignores aliases from shared terms shadowed by a personal canonical override",
     sources: ["src/realtime-transcription/vocabulary-terms.ts"],
     line: 210,
-    failure: /^AssertionError: expected .* to deeply equal /m,
+    failure: /^AssertionError: expected .* to deeply equal /,
   },
   {
     id: "provider-admission",
@@ -35,7 +35,8 @@ const cases = [
       "src/realtime-transcription/vocabulary-snapshot.ts",
     ],
     line: 176,
-    failure: /^AssertionError: expected function to throw an error, but it didn't/m,
+    // Vitest delegates toThrow(string) to Chai. Match no throw, not a wrong error.
+    failure: /^AssertionError: expected \[Function(?:[ :][^\]\x0a\x0d]+)?\] to throw an error$/,
   },
 ];
 
@@ -107,7 +108,7 @@ for (const spec of cases) {
 // At the pinned SHAs, each test-file diff is exactly one added regression.
 for (const file of files) copyFileSync(path.join(head, file), path.join(base, file));
 assert.deepEqual(
-  git(base, "diff", "--name-only", "HEAD", "--").split("\n").sort(),
+  git(base, "diff", "--name-only", "HEAD", "--").split("\x0a").sort(),
   files,
   "Only the two regression test files may differ from base HEAD",
 );
@@ -118,8 +119,7 @@ function runCase(spec, side, cwd) {
   const logPath = path.join(out, `${label}.log`);
   const red = side === "base";
 
-  // Same config, file, name filter, and options on both trees.
-  // Only cwd and the report destination change.
+  // Only the working directory and report destination change between sides.
   const args = [
     "scripts/run-vitest.mjs", "run", "--config", spec.config, spec.file,
     "-t", `(?:^| )${escapeRegex(spec.title)}$`,
@@ -130,8 +130,9 @@ function runCase(spec, side, cwd) {
     cwd, env, encoding: "utf8", timeout: 15 * 60_000, maxBuffer: 32 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const log = `${run.stdout ?? ""}\n${run.stderr ?? ""}`;
+  const log = `${run.stdout ?? ""}\x0a${run.stderr ?? ""}`;
   writeFileSync(logPath, log);
+  console.log(`${label}: Vitest exit=${run.status}, signal=${run.signal ?? "none"}`);
   assert(!run.error && !run.signal, `${label}: runner did not finish; see ${logPath}`);
   assert.equal(run.status, red ? 1 : 0, `${label}: unexpected exit; see ${logPath}`);
   assert(
@@ -160,28 +161,38 @@ function runCase(spec, side, cwd) {
   assert.equal(report.numFailedTests, red ? 1 : 0, label);
   assert.equal(report.numPassedTests, red ? 0 : 1, label);
 
-  const failures = test.failureMessages ?? [];
-  assert.equal(failures.length, red ? 1 : 0, label);
+  const errors = test.failureMessages ?? [];
+  assert.equal(errors.length, red ? 1 : 0, label);
   if (red) {
-    const failure = stripVTControlCharacters(failures[0]);
-    const frame = new RegExp(
-      `^\\s*at [^\\n]*${escapeRegex(spec.file)}:${spec.line}:\\d+(?=[)\\s]|$)`,
-      "m",
+    const [message, ...stack] = stripVTControlCharacters(errors[0]).split(/\x0d?\x0a/);
+    const framePattern = new RegExp(
+      `^[ \\t]*at [^\\x0a\\x0d]*${escapeRegex(spec.file)}:(\\d+):\\d+(?=[)\\s]|$)`,
     );
-    assert.match(failure, spec.failure, `${label}: wrong assertion failure`);
-    assert.match(failure, frame, `${label}: wrong assertion line`);
+    const frame = stack.find((line) => framePattern.test(line));
+    console.log(`${label}: assertion ${JSON.stringify(message.slice(0, 1000))}`);
+    console.log(`${label}: first test-file frame ${JSON.stringify(frame?.trim() ?? null)}`);
+    assert.match(message, spec.failure, `${label}: wrong assertion failure`);
+    assert.equal(
+      Number(framePattern.exec(frame ?? "")?.[1]),
+      spec.line,
+      `${label}: wrong assertion line`,
+    );
   }
   console.log(`${label}: ${red ? "RED at the expected assertion" : "GREEN"}`);
 }
 
-const failures = [];
+let failed = false;
 for (const spec of cases) {
   for (const [side, cwd] of [["base", base], ["head", head]]) {
     try {
       runCase(spec, side, cwd);
     } catch (error) {
-      failures.push(`${spec.id}-${side}: ${error.message}`);
+      failed = true;
+      console.log(`FAIL ${spec.id}-${side}: ${error.message}`);
     }
   }
 }
-assert.equal(failures.length, 0, `${failures.join("\n")}\nArtifacts: ${out}`);
+if (failed) {
+  console.log(`Red/green proof failed. Artifacts: ${out}`);
+  process.exitCode = 1;
+}
