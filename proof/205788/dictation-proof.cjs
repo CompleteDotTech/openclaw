@@ -40,8 +40,7 @@ function targetKind(value, s) {
 }
 // Keep the reason, not Playwright's DOM/call log, assert's value diff, or an embedded RPC dump.
 function consoleText(value, limit = 440) {
-  return require('node:util').stripVTControlCharacters(scrub(value)).trim().split(/[
-\u2028\u2029]/, 1)[0]
+  return require('node:util').stripVTControlCharacters(scrub(value)).trim().split(/[\r\n\u2028\u2029]/, 1)[0]
     .replace(/\b(?:Basic|Bearer)\s+\S+|\b(?:gh[pousr]_|github_pat_)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+/gi, '[redacted]')
     .replace(/\b(?:[\w-]*(?:token|password|secret)|api[_-]?key|authorization|cookie)\s*[:=]\s*(?:"[^"]*"|'[^']*'|\S+)/gi, '[redacted]')
     .replace(/\bagent:[^\s'"\],)]+|\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi, '[session]')
@@ -459,8 +458,7 @@ async function main() {
   const out = fs.mkdtempSync(path.join(output, 'run-'));
   const tmpParent = fs.realpathSync(process.env.PROOF_TMPFS || '/dev/shm');
   assert.equal(fs.statfsSync(tmpParent).type, 0x01021994, 'private runtime must be on Linux tmpfs');
-  assert.equal(fs.readFileSync('/proc/swaps', 'utf8').trim().split('
-').length, 1, 'turn off swap before proof');
+  assert.equal(fs.readFileSync('/proc/swaps', 'utf8').trim().split('\n').length, 1, 'turn off swap before proof');
   const tmp = fs.mkdtempSync(path.join(tmpParent, 'dictation-'));
   const originalTmp = process.env.TMPDIR;
   let gateway;
@@ -527,11 +525,9 @@ async function main() {
         }
         if (!diagnostic && !(subject && await subject.isVisible())) return;
         // Scan the whole visible document, including toasts that can overlay a crop.
-        const screenText = await body.evaluate(el => el.innerText + '
-' +
+        const screenText = await body.evaluate(el => el.innerText + '\n' +
           [...el.querySelectorAll('input,textarea,[contenteditable="true"]')]
-            .filter(e => e.getClientRects().length).map(e => e.value ?? e.innerText).join('
-'), undefined, { timeout: 2000 });
+            .filter(e => e.getClientRects().length).map(e => e.value ?? e.innerText).join('\n'), undefined, { timeout: 2000 });
         if (scrubSecrets(screenText) !== screenText) {
           (result.screenshotSkipped ??= []).push({ name, reason: 'possible visible secret' });
           return;
@@ -776,16 +772,13 @@ async function main() {
         result.finalAccepted = Boolean(s?.closed && s?.drained);
         collectWireEvidence(result, s, surface);
         result.screenshotAvailable = fs.readdirSync(folder).some(n => n.endsWith('.png'));
-        write(folder, 'transcript.txt', scrub(raw || s?.finals.join(' ')) + '
-');
-        write(folder, 'state.json', JSON.stringify(result, null, 2) + '
-');
+        write(folder, 'transcript.txt', scrub(raw || s?.finals.join(' ')) + '\n');
+        write(folder, 'state.json', JSON.stringify(result, null, 2) + '\n');
         tally.push(result);
         console.log(takeLine(c.name, result));
       }
     }
-    write(out, 'summary.json', JSON.stringify(tally, null, 2) + '
-');
+    write(out, 'summary.json', JSON.stringify(tally, null, 2) + '\n');
     process.exitCode = tally.some(x => x.status === 'FAIL' || x.status.startsWith('ERROR')) ? 1 :
       tally.some(x => x.status.startsWith('INCONCLUSIVE_')) ? 2 : 0;
   } finally {
