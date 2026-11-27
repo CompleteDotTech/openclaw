@@ -3,7 +3,7 @@
   "tts": {
     "model": "gpt-4o-mini-tts",
     "voice": "alloy",
-    "instructions": "Read the words verbatim at a steady conversational pace. Say each command word aloud; do not interpret it as code or punctuation. Do not add words."
+    "instructions": "Read only the supplied words, verbatim, in a clear, steady American English voice. Enunciate the initial S in snake and the final D in end. Say new and line as two distinct words. Treat fragments as parts of one continuous utterance; do not add words, dramatic pauses, or spoken punctuation."
   },
   "takes": [
     { "id": "alloy", "voice": "alloy" },
@@ -14,18 +14,23 @@
     {
       "id": "identifier-insert-undo",
       "segments": [
-        { "text": "snake case hello world end identifier is ready", "pauseAfterMs": 1100 }
+        { "text": "please use", "pauseAfterMs": 140 },
+        { "text": "pascal case silver maple", "pauseAfterMs": 160 },
+        { "text": "end identifier for this example", "pauseAfterMs": 1100 }
       ],
       "expected": {
-        "command": "snake case hello world end identifier",
-        "replaceWith": "hello_world",
+        "command": "pascal case silver maple end identifier",
+        "replaceWith": "SilverMaple",
         "action": "insert-undo"
       }
     },
     {
       "id": "line-feed-copy-cancel",
       "segments": [
-        { "text": "symbol new line end symbol next paragraph", "pauseAfterMs": 1100 }
+        { "text": "please insert", "pauseAfterMs": 140 },
+        { "text": "symbol new", "pauseAfterMs": 110 },
+        { "text": "line", "pauseAfterMs": 140 },
+        { "text": "end symbol before the next paragraph", "pauseAfterMs": 1100 }
       ],
       "expected": {
         "command": "symbol new line end symbol",
@@ -38,7 +43,10 @@
       "segments": [
         { "text": "snake case hello world", "pauseAfterMs": 1100 }
       ],
-      "expected": { "action": "blocked-cancel" }
+      "expected": {
+        "opener": "snake case",
+        "action": "blocked-cancel"
+      }
     }
   ]
 }
