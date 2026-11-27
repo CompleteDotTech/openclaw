@@ -65,18 +65,19 @@ async function captureFrame(page, target, secrets, expectedDraft, draft) {
   await surface.waitFor();
   await target.waitFor();
   const measure = () => Promise.all([surface.boundingBox(), target.boundingBox()]);
-  const presentation = await surface.evaluate(async (element) => {
+  const presentation = await surface.evaluate(async (element, newline) => {
     await document.fonts.ready;
     await new Promise((finish) => requestAnimationFrame(() => requestAnimationFrame(finish)));
     return {
-      scrollX, scrollY,
+      scrollX,
+      scrollY,
       theme: document.documentElement.dataset.themeMode ?? getComputedStyle(document.documentElement).colorScheme,
       rendered: [element.innerText, ...Array.from(
         element.querySelectorAll("textarea, input:not([type=hidden]), [contenteditable=true]"),
         (field) => field.value ?? field.textContent,
-      )].join(LF),
+      )].join(newline),
     };
-  });
+  }, "\x0a");
   check(presentation.scrollX === 0 && presentation.scrollY === 0, "The proof viewport scrolled.");
   check(await draft.inputValue() === expectedDraft, "The draft changed before capture.");
   const safe = presentation.rendered;
@@ -336,8 +337,14 @@ async function runTake(c, take, h) {
       name: "English file-reference commands for this session's local workspace", exact: true,
     });
     if (h.variant === "candidate") {
-      stage = "opt in to file-reference commands";
-      await optIn.check();
+      stage = "wait for actionable file-reference opt-in";
+      await optIn.and(page.locator(":enabled")).waitFor({ state: "visible", timeout: 30_000 });
+      check(!(await optIn.isChecked()), "File-reference commands must be off in a fresh session.");
+      stage = "click the file-reference opt-in";
+      await optIn.click();
+      stage = "wait for file-reference opt-in to settle checked";
+      await optIn.and(page.locator(':enabled:checked:not([aria-busy="true"])'))
+        .waitFor({ state: "visible", timeout: 30_000 });
       stage = "wait for the opted-in file-reference owner";
       await page.getByRole("checkbox", {
         name: "Literal mode: keep command-like words as text", exact: true,
@@ -417,6 +424,7 @@ async function runTake(c, take, h) {
       check(!(await page.evaluate(() => window.__proofChooserSeen)) &&
         await chip.count() === 0 && fileActions.length === 0,
         "Baseline unexpectedly used file-reference review.");
+      stage = "capture baseline plain-text draft";
       const editor = page.locator(COMPOSER + " .agent-chat__composer-combobox");
       await capture("plain-transcript", editor, raw, "Dictation stays as ordinary text");
     } else if (c.chooser.opens) {
