@@ -8,7 +8,7 @@ import { dirname, join, resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-const HEAD = '8b9b1489296846a05300227a2670a14df8cd67a8';
+const HEAD = '7ea1297feb705b5ac8350bb45c93823837d659a3';
 const STT = 'gpt-4o-mini-transcribe';
 const CHAT = 'openai/gpt-5.4-mini';
 const here = dirname(fileURLToPath(import.meta.url));
@@ -21,7 +21,6 @@ const slug = (s) => typeof s === 'string' && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(s
 const segmenter = new Intl.Segmenter('en', { granularity: 'word' });
 const words = (s) => [...segmenter.segment(s.toLowerCase())]
   .filter((x) => x.isWordLike).map((x) => x.segment).join(' ');
-
 const redacted = (s) => (key ? String(s).split(key).join('[redacted]') : String(s))
   .replace(/\bsk-[\w-]+|\bBearer\s+[^\s"']+/gi, '[redacted]')
   .replace(/https?:\/\/[^\s"'<>]+|wss?:\/\/[^\s"'<>]+/gi, '[url]')
@@ -43,9 +42,7 @@ async function until(test, msg, ms = 20_000, ErrorType = Error) {
 async function wavTarget(path) {
   const b = await readFile(path);
   const tag = (i) => b.toString('ascii', i, i + 4);
-  if (b.length < 44 || tag(0) !== 'RIFF' || tag(8) !== 'WAVE') {
-    throw new Error('Expected RIFF/WAVE');
-  }
+  if (b.length < 44 || tag(0) !== 'RIFF' || tag(8) !== 'WAVE') throw new Error('Expected RIFF/WAVE');
   let pcm = false, size = 0;
   for (let i = 12; i + 8 <= b.length;) {
     const len = b.readUInt32LE(i + 4), p = i + 8;
@@ -60,15 +57,13 @@ async function wavTarget(path) {
   if (!pcm || size % 2 || size < 96_000 || size > 30 * 96_000) {
     throw new Error('Expected 1–30 s, 48 kHz mono PCM16 WAV');
   }
-  // 8 kHz μ-law at the Gateway; stop within trailing silence, before EOF.
-  return Math.floor(size / 12) - 800;
+  return Math.floor(size / 12) - 800; // 8 kHz μ-law; stop 100 ms before WAV EOF.
 }
 
 async function guardSocket(page, base) {
   const w = { requests: [], replies: new Map(), events: [], blocked: [], sent: [], permit: null };
   const sends = new Set(['chat.send', 'sessions.send', 'agent', 'sessions.dispatch', 'sessions.companion.ask']);
   const parse = (m) => { try { return JSON.parse(m.toString()); } catch { return null; } };
-
   await page.routeWebSocket((url) => url.host === new URL(base).host, (client) => {
     const server = client.connectToServer(), tracked = new Set();
     client.onMessage((message) => {
@@ -77,13 +72,11 @@ async function guardSocket(page, base) {
         if (f.method !== 'chat.send' || w.permit === null ||
             f.params?.message !== w.permit || w.sent.length) {
           w.blocked.push(f.method);
-          client.send(JSON.stringify({
-            type: 'res', id: f.id, ok: false,
-            error: { code: 'INVALID_REQUEST', message: 'Blocked by dictation proof' },
-          }));
+          client.send(JSON.stringify({ type: 'res', id: f.id, ok: false,
+            error: { code: 'INVALID_REQUEST', message: 'Blocked by dictation proof' } }));
           return;
         }
-        w.permit = null; // Consume the permit before forwarding.
+        w.permit = null;
         w.sent.push(f.id);
         tracked.add(f.id);
       } else if (f?.type === 'req' && ['talk.session.create', 'talk.session.close'].includes(f.method)) {
@@ -92,15 +85,17 @@ async function guardSocket(page, base) {
       }
       server.send(message);
     });
-
     server.onMessage((message) => {
       const f = parse(message), p = f?.payload;
       if (f?.type === 'res' && tracked.has(f.id)) {
         w.replies.set(f.id, { ok: f.ok, id: p?.transcriptionSessionId, provider: p?.provider, status: p?.status });
       } else if (f?.type === 'event' && f.event === 'talk.event' && p?.transcriptionSessionId) {
         w.events.push({
-          id: p.transcriptionSessionId, type: p.type, reason: p.reason,
-          final: p.final, text: p.type === 'transcript' ? p.text : undefined, bytes: p.byteLength,
+          id: p.transcriptionSessionId, type: p.type ?? null, reason: p.reason ?? null,
+          final: p.final ?? null, seq: p.talkEvent?.seq ?? null, talkType: p.talkEvent?.type ?? null,
+          frameSeq: f.seq ?? null, textLength: typeof p.text === 'string' ? p.text.length : null,
+          phase: w.requests.some((r) => r.method === 'talk.session.close') ? 'after-stop-rpc' : 'before-stop-rpc',
+          text: p.type === 'transcript' ? p.text : undefined, bytes: p.byteLength,
         });
       }
       client.send(message);
@@ -127,40 +122,34 @@ async function runTake(chromium, base, env, out, c, take, sendOnce) {
   const e = c.expected, name = c.id + (take ? '--' + take.id : '');
   const path = join(here, 'clips', name + '.wav'), dir = join(out, name);
   await mkdir(dir);
-  const s = {
-    head: HEAD, case: c.id, take: take?.id ?? null, surface: e.surface, mode: e.mode,
-    probe: e.action, proof: 'Chromium fake-media capture with a prerecorded WAV',
-    sttModel: STT, status: 'ERROR', step: 'read-clip', expectedWords: e.words,
-  };
+  const s = { head: HEAD, case: c.id, take: take?.id ?? null, surface: e.surface, mode: e.mode,
+    probe: e.action, proof: 'Chromium fake-media capture with a prerecorded WAV', sttModel: STT,
+    status: 'ERROR', step: 'read-clip', expectedWords: e.words };
   let browser, page, wire, input, transcript = '';
-  const shot = (file) => page.screenshot({
-    path: join(dir, file), animations: 'disabled', timeout: 5000,
-    mask: [page.locator('[role="alert"], .agent-chat__dictation-status, .agent-chat__error')],
-  });
+  const pageErrors = [];
+  const shot = (file) => page.screenshot({ path: join(dir, file), animations: 'disabled', timeout: 5000 });
   const record = (err, status) => {
     s.status = status;
-    s.error = {
-      step: s.step, name: redacted(err?.name ?? 'Error').slice(0, 80),
-      message: redacted(err?.message ?? err).replace(/\x1b\[[0-9;]*m/g, '').slice(0, 1800),
-    };
+    s.error = { step: s.step, name: redacted(err?.name ?? 'Error').slice(0, 80),
+      message: redacted(err?.message ?? err).replace(/\x1b\[[0-9;]*m/g, '').slice(0, 1800) };
   };
 
   try {
     const targetBytes = await wavTarget(path);
     s.step = 'launch-chromium';
-    browser = await chromium.launch({ env, args: [
-      '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream',
-      '--use-file-for-fake-audio-capture=' + path + '%noloop',
-    ] });
-    const context = await browser.newContext({
-      locale: 'en-US', viewport: { width: 1440, height: 900 },
-      serviceWorkers: 'block', acceptDownloads: false,
-    });
+    browser = await chromium.launch({ env, args: ['--use-fake-ui-for-media-stream',
+      '--use-fake-device-for-media-stream', '--use-file-for-fake-audio-capture=' + path + '%noloop'] });
+    const context = await browser.newContext({ locale: 'en-US', viewport: { width: 1440, height: 900 },
+      serviceWorkers: 'block', acceptDownloads: false });
     await context.grantPermissions(['microphone', 'clipboard-read', 'clipboard-write'], { origin: base });
     page = await context.newPage();
     page.setDefaultTimeout(15_000);
+    page.on('pageerror', (err) => {
+      if (pageErrors.length < 10) {
+        pageErrors.push({ name: redacted(err.name), message: redacted(err.message).slice(0, 500) });
+      }
+    });
     wire = await guardSocket(page, base);
-
     s.step = 'open-composer';
     await page.goto(base + (e.surface === 'new' ? '/new' : '/chat/main'));
     const connected = () => page.waitForFunction(
@@ -174,13 +163,10 @@ async function runTake(chromium, base, env, out, c, take, sendOnce) {
     const root = e.surface === 'new' ? page.locator('.new-session-page__composer:visible') :
       e.surface === 'sidebar' ? pane.locator('.chat-session-rail__composer:visible') :
       pane.locator('.agent-chat__composer-shell:visible');
-    input = root.locator({
-      chat: 'textarea[aria-label="Chat composer"]',
-      new: '.new-session-page__message',
-      sidebar: '.chat-session-rail__input',
-    }[e.surface]);
-    const ready = () => until(async () => await input.isVisible() &&
-      await input.isEnabled() && await input.isEditable() &&
+    input = root.locator({ chat: 'textarea[aria-label="Chat composer"]', new: '.new-session-page__message',
+      sidebar: '.chat-session-rail__input' }[e.surface]);
+    const ready = () => until(async () => await input.isVisible() && await input.isEnabled() &&
+      await input.isEditable() &&
       !(await page.getByText('Set up a model', { exact: true }).filter({ visible: true }).count()),
     'Composer not ready (disabled, read-only, or model setup visible)');
     s.step = 'wait-for-ready-composer';
@@ -188,8 +174,7 @@ async function runTake(chromium, base, env, out, c, take, sendOnce) {
 
     const originalDraft = e.initialDraft ?? '';
     const dialog = page.getByRole('dialog', { name: 'Dictation cleanup', exact: true });
-    const mode = dialog.getByLabel('Cleanup mode', { exact: true });
-    const review = button(root, 'Review dictation');
+    const mode = dialog.getByLabel('Cleanup mode', { exact: true }), review = button(root, 'Review dictation');
     const closeDialog = async () => {
       await page.keyboard.press('Escape');
       await dialog.waitFor({ state: 'hidden' });
@@ -216,9 +201,7 @@ async function runTake(chromium, base, env, out, c, take, sendOnce) {
       await mic.hover();
       await page.mouse.down();
       try { await until(create, 'Chat hold did not start dictation'); } finally { await page.mouse.up(); }
-    } else {
-      await mic.click();
-    }
+    } else await mic.click();
     await until(() => create() && wire.replies.has(create().id), 'No dictation admission response');
     const admission = wire.replies.get(create().id);
     if (!admission.ok || admission.provider !== 'openai' || !admission.id) {
@@ -258,9 +241,9 @@ async function runTake(chromium, base, env, out, c, take, sendOnce) {
       const use = button(dialog, 'Use original');
       check(await original.inputValue() === transcript, 'Review text differed from Gateway final');
       check(await input.inputValue() === originalDraft, 'Review changed the unsent draft');
-      check(await dialog.getByRole('status').textContent() ===
-        'Cleanup is unavailable. The original recognized text is unchanged.',
-      'Missing semantic-unavailable status');
+      s.reviewStatus = redacted(await dialog.getByRole('status').textContent());
+      check(s.reviewStatus === 'Cleanup is unavailable. The original recognized text is unchanged.',
+        'Unexpected review status: ' + s.reviewStatus);
       for (const label of ['Use cleaned draft', 'Restore original']) {
         check(await button(dialog, label).count() === 0, 'Unexpected action: ' + label);
       }
@@ -268,14 +251,12 @@ async function runTake(chromium, base, env, out, c, take, sendOnce) {
       s.step = 'assert-escape-recovery';
       await original.focus();
       await closeDialog();
-      await until(() => review.evaluate((el) => el.matches(':focus')),
-        'Escape did not return focus', 2000, ProofFailure);
+      await until(() => review.evaluate((el) => el.matches(':focus')), 'Escape did not return focus', 2000, ProofFailure);
       check(await input.inputValue() === originalDraft, 'Escape changed the unsent draft');
       if (e.action === 'edit-and-copy') await input.fill(e.editedDraft);
       await review.press('Enter');
       check(await original.inputValue() === transcript, 'Reopened review lost the original');
       await shot('review.png');
-
       if (e.action === 'edit-and-copy') {
         s.step = 'assert-edit-and-copy';
         check(await use.isDisabled(), 'Editing did not revoke Use original');
@@ -316,24 +297,25 @@ async function runTake(chromium, base, env, out, c, take, sendOnce) {
     s.status = 'PASS';
     s.step = 'complete';
   } catch (err) {
-    record(err, err instanceof InconclusiveStt ? 'INCONCLUSIVE_STT' :
-      err instanceof ProofFailure ? 'FAIL' : 'ERROR');
+    record(err, err instanceof InconclusiveStt ? 'INCONCLUSIVE_STT' : err instanceof ProofFailure ? 'FAIL' : 'ERROR');
   } finally {
     if (wire) wire.permit = null;
     const auxiliary = (err, step) => {
-      if (s.status === 'PASS') {
-        s.step = step;
-        record(err, 'ERROR');
-      }
+      if (s.status === 'PASS') { s.step = step; record(err, 'ERROR'); }
     };
     if (page) {
+      s.alerts = await page.getByRole('alert').filter({ visible: true }).allInnerTexts()
+        .then((texts) => texts.map((value) => redacted(value.trim())).filter(Boolean), () => []);
+      s.pageErrors = pageErrors;
       s.draft = input ? await input.inputValue({ timeout: 1000 }).then(redacted, () => null) : null;
-      await shot('final.png').then(
-        () => { s.screenshot = 'final.png'; },
-        (err) => auxiliary(err, 'final-screenshot'),
-      );
+      await shot('final.png').then(() => { s.screenshot = 'final.png'; },
+        (err) => auxiliary(err, 'final-screenshot'));
     }
     await browser?.close().catch((err) => auxiliary(err, 'close-browser'));
+    const sessionId = wire?.requests.find((r) => r.method === 'talk.session.create' && r.mode === 'transcription')?.id;
+    const admitted = wire?.replies.get(sessionId)?.id;
+    s.talkEvents = admitted ? wire.events.filter((event) => event.id === admitted)
+      .map(({ id, text, bytes, ...event }) => event) : [];
     s.sent = wire?.sent.length ?? 0;
     s.blocked = wire?.blocked ?? [];
     if (s.blocked.length) {
@@ -373,51 +355,37 @@ async function main() {
   const validIds = (rows) => rows.length && rows.every((x) => slug(x.id)) &&
     new Set(rows.map((x) => x.id)).size === rows.length;
   if (fixture.leadingSilenceMs !== 500 || !validIds(fixture.cases) ||
-      (fixture.takes && !validIds(fixture.takes))) {
-    throw new Error('Invalid scenario or take IDs');
-  }
-
+      (fixture.takes && !validIds(fixture.takes))) throw new Error('Invalid scenario or take IDs');
   const results = join(here, 'results');
   await mkdir(results, { recursive: true });
   const out = await mkdtemp(join(results, 'run-'));
   const state = await mkdtemp(join(tmpdir(), 'dictation-gw-'));
   let gateway, exited;
+
   try {
     const listener = createServer().listen(0, '127.0.0.1');
     await once(listener, 'listening');
     const port = listener.address().port;
     await new Promise((ok, fail) => listener.close((err) => err ? fail(err) : ok()));
-    const base = 'http://127.0.0.1:' + port;
-    const config = join(state, 'openclaw.json'), workspace = join(state, 'workspace');
+    const base = 'http://127.0.0.1:' + port, config = join(state, 'openclaw.json'), workspace = join(state, 'workspace');
     const env = { PATH: process.env.PATH, HOME: state, TMPDIR: join(state, 'tmp'), LANG: 'C.UTF-8' };
     await mkdir(workspace);
     await mkdir(env.TMPDIR);
     await writeFile(config, JSON.stringify({
-      gateway: {
-        mode: 'local', bind: 'loopback', port, auth: { mode: 'none' },
-        controlUi: { enabled: true, root: ui }, tailscale: { mode: 'off' },
-      },
-      cron: { enabled: false },
-      logging: { level: 'silent', consoleLevel: 'silent' },
+      gateway: { mode: 'local', bind: 'loopback', port, auth: { mode: 'none' },
+        controlUi: { enabled: true, root: ui }, tailscale: { mode: 'off' } },
+      cron: { enabled: false }, logging: { level: 'silent', consoleLevel: 'silent' },
       plugins: { allow: ['openai'], entries: { openai: { enabled: true } } },
       agents: { defaults: { workspace, model: { primary: CHAT }, models: { [CHAT]: {} } } },
-      tools: {
-        profile: 'minimal',
-        media: {
-          audio: { enabled: true },
-          models: [{ provider: 'openai', model: STT, capabilities: ['audio'] }],
-        },
-      },
+      tools: { profile: 'minimal', media: { audio: { enabled: true },
+        models: [{ provider: 'openai', model: STT, capabilities: ['audio'] }] } },
     }), { mode: 0o600 });
-
     gateway = spawn(process.execPath, [
       join(checkout, 'openclaw.mjs'), 'gateway', 'run', '--bind', 'loopback', '--port', String(port),
     ], {
-      cwd: state, detached: true, stdio: 'ignore',
-      env: {
-        ...env, OPENAI_API_KEY: key, OPENCLAW_HOME: state, OPENCLAW_STATE_DIR: state,
-        OPENCLAW_CONFIG_PATH: config, OPENCLAW_SKIP_CHANNELS: '1', OPENCLAW_DISABLE_BONJOUR: '1',
-      },
+      cwd: state, detached: true, stdio: 'ignore', env: { ...env, OPENAI_API_KEY: key,
+        OPENCLAW_HOME: state, OPENCLAW_STATE_DIR: state, OPENCLAW_CONFIG_PATH: config,
+        OPENCLAW_SKIP_CHANNELS: '1', OPENCLAW_DISABLE_BONJOUR: '1' },
     });
     let stopped = false;
     exited = new Promise((done) => {
@@ -434,10 +402,8 @@ async function main() {
       for (const take of fixture.takes ?? [null]) {
         runs.push(await runTake(chromium, base, env, out, c, take, sendOnce));
       }
-      summary.push({
-        id: c.id, status: caseStatus(runs, c.expected.action),
-        takes: runs.map(({ take, status, sendAck }) => ({ take, status, sendAck })),
-      });
+      summary.push({ id: c.id, status: caseStatus(runs, c.expected.action),
+        takes: runs.map(({ take, status, sendAck }) => ({ take, status, sendAck })) });
     }
     await writeFile(join(out, 'summary.json'), JSON.stringify({ head: HEAD, cases: summary }, null, 2) + '\n');
     process.exitCode = summary.some((x) => x.status === 'FAIL' || x.status === 'ERROR') ? 1 :
@@ -457,7 +423,4 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(redacted(err?.message ?? err));
-  process.exitCode = 1;
-});
+main().catch((err) => { console.error(redacted(err?.message ?? err)); process.exitCode = 1; });
