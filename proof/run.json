@@ -2,9 +2,10 @@
   "runs": [
     {
       "pr": 206088,
-      "sha": "d752b31db27df007f6a84f49d916f0e5d1eda226",
+      "sha": "5166e8aa8ff61c209dde9a06dd69b4f5678819c9",
       "dir": "proof/206088",
-      "script": "dictation-proof.mjs"
+      "script": "dictation-proof.mjs",
+      "tests": ["ui/src/pages/chat/composer-file-reference-provider.integration.test.ts"]
     },
     {
       "pr": 205789,
