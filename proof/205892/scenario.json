@@ -1,0 +1,44 @@
+{
+  "leadingSilenceMs": 500,
+  "tts": {
+    "model": "gpt-4o-mini-tts",
+    "voice": "alloy",
+    "instructions": "Read the words verbatim at a steady conversational pace. Say each command word aloud; do not interpret it as code or punctuation. Do not add words."
+  },
+  "takes": [
+    { "id": "alloy", "voice": "alloy" },
+    { "id": "nova", "voice": "nova" },
+    { "id": "sage", "voice": "sage" }
+  ],
+  "cases": [
+    {
+      "id": "identifier-insert-undo",
+      "segments": [
+        { "text": "snake case hello world end identifier is ready", "pauseAfterMs": 1100 }
+      ],
+      "expected": {
+        "command": "snake case hello world end identifier",
+        "replaceWith": "hello_world",
+        "action": "insert-undo"
+      }
+    },
+    {
+      "id": "line-feed-copy-cancel",
+      "segments": [
+        { "text": "symbol new line end symbol next paragraph", "pauseAfterMs": 1100 }
+      ],
+      "expected": {
+        "command": "symbol new line end symbol",
+        "replaceWith": "\n",
+        "action": "copy-cancel"
+      }
+    },
+    {
+      "id": "incomplete-command-cancel",
+      "segments": [
+        { "text": "snake case hello world", "pauseAfterMs": 1100 }
+      ],
+      "expected": { "action": "blocked-cancel" }
+    }
+  ]
+}
