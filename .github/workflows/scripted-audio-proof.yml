@@ -20,6 +20,8 @@
 #   "offline"    lane scripts in proof/<pr>/ that need no secret (upgrade, recovery,
 #                red-on-base). Each runs with node; a failure fails the job but does
 #                not skip the live proof.
+#   "live"       false skips clip generation and the browser proof, so the job never
+#                sees OPENAI_API_KEY (for build, test and secretless-lane-only runs).
 # The harness and lane scripts get the PR checkout path as argv[2] and the
 # environment variables PROOF_PR_DIR, PROOF_RESULTS_DIR, PROOF_CHECKOUTS (JSON
 # object, name -> path) and PROOF_STABLE_DIR (empty when there is no stable install).
@@ -66,7 +68,7 @@ jobs:
         normalize='if type == "object" and has("runs") then .runs else [.] end | map(select(.enabled != false) | {pr: (.pr | tostring), sha, dir, script, tests: (.tests // []),
           checks: ((.checks // []) | if type == "array" then map(if type == "string" then [.] else . end) else . end),
           checkouts: ((.checkouts // []) | if type == "array" then map(if type == "object" then {name, repo, sha, build: (.build // false)} else . end) else . end),
-          stable: (.stable // ""), offline: (.offline // [])})'
+          stable: (.stable // ""), offline: (.offline // []), live: (if .live == null then true else .live end)})'
         runs=$(jq -c "$normalize" harness/proof/run.json)
         jq -e 'length > 0 and all(.[];
             (.pr | test("^[0-9]+$")) and (.sha | type == "string" and test("^[0-9a-f]{40}$")) and
@@ -75,9 +77,10 @@ jobs:
             (.checks | type == "array" and all(.[]; type == "array" and length > 0 and (.[0] | type == "string" and test("^[a-z][a-z0-9:_-]*$")) and all(.[1:][]; type == "string" and test("^[A-Za-z0-9._:/=@+-]+$")))) and
             (.checkouts | type == "array" and all(.[]; type == "object" and (.name | type == "string" and test("^[a-z][a-z0-9-]{0,30}$")) and (.repo | IN("openclaw/openclaw", "CompleteDotTech/openclaw")) and (.sha | type == "string" and test("^[0-9a-f]{40}$")) and (.build | type == "boolean")) and (map(.name) | length == (unique | length))) and
             (.stable | type == "string" and test("^([0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?)?$")) and
-            (.offline | type == "array" and all(.[]; type == "string" and test("^[A-Za-z0-9._-]+\\.[cm]?js$")) and (length == (unique | length))))
+            (.offline | type == "array" and all(.[]; type == "string" and test("^[A-Za-z0-9._-]+\\.[cm]?js$")) and (length == (unique | length))) and
+            (.live | type == "boolean"))
           and (map(.pr) | length == (unique | length))' <<<"$runs" >/dev/null \
-          || { echo "run.json: every entry needs a numeric pr, a full 40-character sha, dir proof/<name> and a .js/.mjs/.cjs script, with no duplicate PRs. Optional: tests as relative *.test.* paths; checks as script names or [name, args...]; checkouts as {name, repo (openclaw/openclaw or CompleteDotTech/openclaw), full sha, build true/false} with unique names; stable as a version like 2026.11.10; offline as script file names."; exit 1; }
+          || { echo "run.json: every entry needs a numeric pr, a full 40-character sha, dir proof/<name> and a .js/.mjs/.cjs script, with no duplicate PRs. Optional: tests as relative *.test.* paths; checks as script names or [name, args...]; checkouts as {name, repo (openclaw/openclaw or CompleteDotTech/openclaw), full sha, build true/false} with unique names; stable as a version like 2026.11.10; offline as script file names; live as true or false."; exit 1; }
         while read -r dir script; do
           test -f "harness/$dir/scenario.json" && test -f "harness/$dir/$script" || { echo "Missing scenario.json or $script in $dir"; exit 1; }
         done < <(jq -r '.[] | "\(.dir) \(.script)"' <<<"$runs")
@@ -128,6 +131,7 @@ jobs:
       CHECKOUTS: ${{ toJSON(matrix.checkouts) }}
       STABLE: ${{ matrix.stable }}
       OFFLINE: ${{ toJSON(matrix.offline) }}
+      LIVE: ${{ matrix.live }}
       PROOF_PR_DIR: ${{ github.workspace }}/pr
       PROOF_RESULTS_DIR: ${{ github.workspace }}/harness/${{ matrix.dir }}/results
     steps:
@@ -243,14 +247,14 @@ jobs:
         sudo swapoff -a
         test "$(wc -l < /proc/swaps)" -eq 1
     - name: Generate the scripted audio clips
-      if: steps.tests.outcome != 'failure' && steps.checks.outcome != 'failure'
+      if: matrix.live && steps.tests.outcome != 'failure' && steps.checks.outcome != 'failure'
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       run: |
         node harness/proof/make-clips.mjs "harness/$DIR/scenario.json"
         cat "harness/$DIR/clips/script.md" >> "$GITHUB_STEP_SUMMARY"
     - name: Run the browser proof
-      if: steps.tests.outcome != 'failure' && steps.checks.outcome != 'failure'
+      if: matrix.live && steps.tests.outcome != 'failure' && steps.checks.outcome != 'failure'
       env:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       run: |
@@ -272,7 +276,9 @@ jobs:
           if [[ -f "harness/$DIR/checks.log" ]]; then
             echo "- listed checks ($(jq -r 'map(join(" ")) | join(", ")' <<<"$CHECKS")): $CHECKS_OUTCOME"
           fi
-          if [[ "$TESTS_OUTCOME" == failure || "$CHECKS_OUTCOME" == failure ]]; then
+          if [[ "$LIVE" != true ]]; then
+            echo "- live proof not run for this entry (live: false)"
+          elif [[ "$TESTS_OUTCOME" == failure || "$CHECKS_OUTCOME" == failure ]]; then
             echo "- live proof skipped because a listed test or check failed"
           fi
           if [[ "$OFFLINE_OUTCOME" == success || "$OFFLINE_OUTCOME" == failure ]]; then
