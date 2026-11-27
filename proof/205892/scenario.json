@@ -3,7 +3,7 @@
   "tts": {
     "model": "gpt-4o-mini-tts",
     "voice": "alloy",
-    "instructions": "Read exactly the supplied text in clear American English at an even conversational pace. Each clip is part of a longer utterance: make every word distinct, but do not add pauses or a sentence-ending cadence at clip boundaries. Keep the initial S in snake and the final D in end audible. Say new line as two words. Do not add words or speak punctuation."
+    "instructions": "Read only the supplied words, verbatim, in a clear, steady American English voice. Enunciate the initial S in snake and the final D in end. Say new and line as two distinct words. Treat fragments as parts of one continuous utterance; do not add words, dramatic pauses, or spoken punctuation."
   },
   "takes": [
     { "id": "alloy", "voice": "alloy" },
@@ -13,6 +13,7 @@
   "cases": [
     {
       "id": "identifier-insert-undo",
+      "transcriptionModel": "whisper-1",
       "segments": [
         { "text": "please use", "pauseAfterMs": 140 },
         { "text": "pascal", "pauseAfterMs": 110 },
@@ -28,6 +29,7 @@
     },
     {
       "id": "line-feed-copy-cancel",
+      "transcriptionModel": "gpt-4o-mini-transcribe",
       "segments": [
         { "text": "please insert", "pauseAfterMs": 140 },
         { "text": "symbol new", "pauseAfterMs": 110 },
@@ -42,6 +44,7 @@
     },
     {
       "id": "incomplete-command-cancel",
+      "transcriptionModel": "whisper-1",
       "segments": [
         { "text": "snake", "pauseAfterMs": 110 },
         { "text": "case hello world", "pauseAfterMs": 1100 }
