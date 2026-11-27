@@ -1,5 +1,5 @@
 {
-  "note": "#206088 full proof on fc9ffa4 (manifest refreshed); #205973 final round on 268da4f without lint/format:check; #206273 on its stack 16883b0 without lint (Nov 27 16:25).",
+  "note": "#205973 final round on its main merge 1a1060d without lint/format:check; #206088 full proof on fc9ffa4; #206273 on its stack 16883b0 (Nov 27 16:30).",
   "runs": [
     {
       "pr": 206088,
@@ -60,7 +60,7 @@
     },
     {
       "pr": 205973,
-      "sha": "268da4f795a65fea0ff7260c9ef8fd25bdc6ef70",
+      "sha": "1a1060d376d44835a4b49d765c4ae096e847c58a",
       "dir": "proof/205973",
       "script": "dictation-proof.mjs",
       "tests": ["ui/src/pages/chat/composer-dictation-refinement.relay.test.ts", "ui/src/pages/chat/composer-dictation-session.finality.test.ts", "ui/src/pages/chat/composer-dictation-refinement.test.ts", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/pages/chat/talk/split.test.ts", "ui/src/pages/chat/chat-composer.test.ts", "src/shared/dictation-refinement/coordinator.test.ts", "src/talk/dictation-refinement-model.test.ts", "test/scripts/ci-ui-e2e-selection.test.ts", "ui/src/e2e/browser-dictation-refinement.e2e.test.ts", "ui/src/e2e/browser-dictation-refinement.real-gateway.e2e.test.ts"],
