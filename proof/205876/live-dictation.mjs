@@ -22,7 +22,11 @@ const words = (s) => s.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}]+/gu)?
 const secrets = new Set([key, token].filter(Boolean));
 const sends = new Set(["chat.send", "sessions.send", "sessions.dispatch", "agent"]);
 const idPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const alertSelector = '[role="alert"], .callout.danger, .agent-chat__composer-alert, .agent-chat__composer-status[data-tone="danger"]';
+const alertSelector = [
+  '[role="alert"]', '.callout.danger', '.agent-chat__composer-alert',
+  '.agent-chat__composer-status[data-tone="danger"]',
+  'main[data-public-session][data-public-unavailable]:not([data-entry-pending]) .article-head',
+].join(', ');
 
 class VisibleUiError extends Error { name = "VisibleUiError"; }
 
@@ -156,8 +160,7 @@ function diagnostic(step, error) {
 }
 
 async function pageEvidence(page, path) {
-  // Redact value fragments in place after the assertions. Never hide or mask
-  // an alert, a status, or any other element just because it reports a failure.
+  // Redact credential fragments in place, not entire alerts or status elements.
   const snapshot = await page.evaluateHandle(() => {
     const fields = [...document.querySelectorAll("input:not([type=hidden]), textarea")];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -196,7 +199,8 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
     for (const text of texts) alerts.add(text);
     return texts;
   };
-  let listening = false, settled = false, screenshot = false, screenshotError = null, status = "FAIL";
+  let gatewayConnected = false, chatOpened = false, listening = false, settled = false;
+  let screenshot = false, screenshotError = null, status = "FAIL";
   let step = "validate WAV";
   try {
     const clip = join(here, "clips", id + ".wav");
@@ -204,8 +208,7 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
     const speechEnd = duration - c.segments.at(-1).pauseAfterMs;
     if (speechEnd <= leadingSilenceMs) fail("WAV is shorter than its declared padding");
     const late = c.expected.finalRelativeToStop === "after";
-    // G.711 at 8 kHz is 8 bytes/ms. Wait until the relay saw the audio block
-    // containing the last word (or the trailing silence for the VAD case).
+    // G.711 at 8 kHz is 8 bytes/ms.
     const minimumBytes = Math.ceil((late ? speechEnd : duration) * 8);
     step = "launch Chromium";
     context = await chromium.launchPersistentContext(join(work, id), {
@@ -224,12 +227,20 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
       if (s.error) fail(s.error);
       return ok;
     }, ms, message);
-    step = "create chat and open Control UI";
-    const slug = "proof-" + id.replaceAll("--", "-");
-    await cli(["gateway", "call", "sessions.create", "--json", "--params", JSON.stringify({
-      key: "agent:main:" + slug, agentId: "main", label: id,
-    })]);
-    const url = new URL(JSON.parse(await cli(["dashboard", "--json"])).browserUrl);
+
+    step = "create unsent dashboard chat";
+    const created = JSON.parse(await cli(["gateway", "call", "sessions.create", "--json", "--params",
+      JSON.stringify({ agentId: "main", label: "Scripted dictation " + id })]));
+    const sessionKey = created.key;
+    const dashboardId = typeof sessionKey === "string"
+      ? /^agent:main:dashboard:([0-9a-f-]{36})$/.exec(sessionKey)?.[1] : null;
+    if (created.ok !== true || created.runStarted !== false || !dashboardId) {
+      fail("Expected a new dashboard session with no agent run");
+    }
+
+    step = "pair browser using the original Dashboard handoff";
+    const { browserUrl } = JSON.parse(await cli(["dashboard", "--json"]));
+    const url = new URL(browserUrl);
     const fragment = new URLSearchParams(url.hash.slice(1));
     const bootstrap = fragment.get("bootstrapToken");
     if (bootstrap) secrets.add(bootstrap);
@@ -239,9 +250,24 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
     }
     await page.addInitScript(() => localStorage.setItem("openclaw:control-ui:community-invite:v2",
       JSON.stringify({ dismissedAtMs: Date.now() })));
-    url.pathname = "/chat/main/" + slug;
-    url.search = "";
-    await page.goto(url.href, { waitUntil: "domcontentloaded" });
+    await page.goto(browserUrl, { waitUntil: "domcontentloaded" });
+    await until(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase === "connected"),
+      30_000, "Dashboard did not establish an authenticated Gateway connection", true);
+    gatewayConnected = true;
+
+    step = "open the created chat inside the authenticated app";
+    await page.evaluate((uuid) => {
+      const app = window.openclawControlUi;
+      if (app?.snapshot().gatewayPhase !== "connected") throw new Error("Dashboard is not connected");
+      const pathname = app.snapshot().basePath + "/chat/main/dashboard/" + uuid;
+      app.navigate("chat", { pathname });
+    }, dashboardId);
+    await until(() => page.evaluate((key) => {
+      const state = window.openclawControlUi?.snapshot();
+      return state?.gatewayPhase === "connected" && state.routeReady === true && state.sessionKey === key;
+    }, sessionKey), 30_000, "The authenticated app did not open the created dashboard chat", true);
+    chatOpened = true;
+
     const shell = page.locator(".agent-chat__composer-shell");
     textarea = shell.locator('textarea[aria-label="Chat composer"]');
     const setup = page.getByText("Set up a model", { exact: true }).filter({ visible: true });
@@ -252,6 +278,7 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
     await until(async () => !(await setup.count()) && await textarea.isVisible() && await textarea.isEditable() &&
       await start.isVisible() && await start.isEnabled(), 30_000, "Model setup did not clear or the composer stayed disabled", true);
     if (await textarea.inputValue()) fail("Expected an empty composer");
+
     step = "hold microphone and reach Listening";
     await start.hover();
     await page.mouse.down();
@@ -260,6 +287,7 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
         15_000, "Dictation did not enter Listening", true);
       listening = true;
     } finally { await page.mouse.up(); }
+
     step = "observe OpenAI readiness and sufficient audio";
     await until(() => s.ready && s.bytes >= minimumBytes, 20_000, "OpenAI readiness or relay audio missing");
     if (!late) {
@@ -274,11 +302,13 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
     s.stop = ++s.seq; // Stop action issued; the close RPC has its own later order.
     await stop.click();
     await until(() => s.close && s.ack && s.closed, 20_000, "No acknowledged Stop and completed relay close");
+
     step = "wait for the final composer state";
     await until(async () => !(await phase.isVisible()) && await start.isVisible(),
       15_000, "Composer did not return to its idle controls", true);
     draft = await textarea.inputValue();
     settled = true;
+
     step = "qualify final words, ordering, and composer text";
     const expected = words(c.expected.text);
     const joinFinals = (accept) => words(s.finals.filter(accept).map((f) => f.text).join(" "));
@@ -314,6 +344,7 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
     }
     await context?.close().catch(() => {});
   }
+
   if (s?.blocked) {
     status = "FAIL";
     error = diagnostic("guard no-send boundary", new Error("Blocked forbidden send RPC: " + s.blocked));
@@ -325,8 +356,8 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
     gatewayEvents: (s?.events ?? []).map((event) => ({
       ...event, relativeToStop: !s.stop ? "stop-not-reached" : event.order < s.stop ? "before" : "after",
     })),
-    listening, providerReady: !!s?.ready, audioBytes: s?.bytes ?? 0, stopAttempted: !!s?.stop,
-    closeRequested: !!s?.close, stopAcknowledged: !!s?.ack, relayClosed: !!s?.closed,
+    gatewayConnected, chatOpened, listening, providerReady: !!s?.ready, audioBytes: s?.bytes ?? 0,
+    stopAttempted: !!s?.stop, closeRequested: !!s?.close, stopAcknowledged: !!s?.ack, relayClosed: !!s?.closed,
     blockedSend: s?.blocked ?? null, settled, expectedFinalRelativeToStop: c.expected.finalRelativeToStop,
     observedFinalRelativeToStop: relative, composer: safe(draft), screenshot, screenshotError,
   });
@@ -359,7 +390,7 @@ async function main() {
   let output, step = "prepare isolated run";
   try {
     const results = join(here, "results");
-    await fs.mkdir(results, { mode: 0o700 }); // Refuse stale results.
+    await fs.mkdir(results, { mode: 0o700 });
     output = results;
     delete process.env.DEBUG;
     delete process.env.PWDEBUG;
@@ -402,7 +433,7 @@ async function main() {
             cwd: work, env: gwEnv, timeout: 30_000, maxBuffer: 1 << 20,
           })).stdout;
         } catch (cause) {
-          // Never include child stdout/stderr: dashboard output contains a grant.
+          // Dashboard output contains a grant; never include child stdout/stderr.
           fail("Isolated CLI " + args.slice(0, 3).filter((s) => !s.startsWith("--")).join(" ") +
             (cause.killed ? " timed out" : " failed"));
         }
