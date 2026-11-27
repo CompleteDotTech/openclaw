@@ -38,8 +38,10 @@ const json = (message) => { try { return JSON.parse(String(message)) ?? {}; } ca
 const transcript = (m) => m.finals.join(' ').trim();
 const failedStatus = /^(A complete transcript is unavailable\.|This transcript exceeds the text review limit\.)/u;
 function blockingNotice(ui, since) {
-  return ui.current.find((n) => n.kind === 'error') ??
-    ui.seen.findLast((n) => n.kind === 'error' && n.lastSeen >= since) ??
+  const error = (n) => n.kind === 'error';
+  return ui.current.find((n) => error(n) && n.inComposer) ??
+    ui.current.find(error) ??
+    ui.seen.findLast((n) => error(n) && n.lastSeen >= since) ??
     ui.current.find((n) => n.kind === 'status' && failedStatus.test(n.text));
 }
 
@@ -60,7 +62,8 @@ function installPageProbes() {
       const kind = el.matches(errors) ? 'error' : 'status';
       const key = kind + '\0' + text;
       const lastSeen = Date.now();
-      const item = { kind, text, firstSeen: seen.get(key)?.firstSeen ?? lastSeen, lastSeen };
+      const item = { kind, text, inComposer: Boolean(el.closest('.agent-chat__composer-shell')),
+        firstSeen: seen.get(key)?.firstSeen ?? lastSeen, lastSeen };
       seen.set(key, item);
       current.push(item);
     }
@@ -79,6 +82,26 @@ function installPageProbes() {
     if (tracks.length) window.proofMic.openedAt ??= performance.now();
     return stream;
   };
+}
+
+const visibleButton = (scope, name) => scope.getByRole('button', { name, exact: true })
+  .filter({ visible: true });
+
+async function startDictation(page, shell, ready, recordGesture) {
+  const mobile = visibleButton(shell, 'Dictation');
+  const desktop = visibleButton(shell, 'Start voice input');
+  await mobile.or(desktop).waitFor();
+  if (await mobile.isVisible()) {
+    recordGesture('mobile-click');
+    await mobile.click();
+    await ready();
+    return;
+  }
+  recordGesture('desktop-hold');
+  // Desktop tap opens Talk. Hold until the app has latched or reported startup failure.
+  await desktop.hover();
+  await page.mouse.down();
+  try { await ready(); } finally { await page.mouse.up(); }
 }
 
 // Read RIFF chunks rather than assuming a 44-byte header.
@@ -311,8 +334,10 @@ async function runCase({ c, take, clip, out, ram, checkout, chromium, build, sce
     browser = await chromium.launch({ headless: true, env,
       args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream',
         '--use-file-for-fake-audio-capture=' + clip + '%noloop'] });
+    const viewport = { width: 1440, height: 1000 };
+    report.viewport = viewport;
     const context = await browser.newContext({ locale: 'en-US', permissions: ['microphone'],
-      viewport: { width: 1280, height: 1000 }, colorScheme: 'dark', reducedMotion: 'reduce' });
+      viewport, colorScheme: 'dark', reducedMotion: 'reduce' });
     page = await context.newPage();
     page.setDefaultTimeout(8_000);
     await observe(page, origin, m, () => report.stage);
@@ -322,9 +347,8 @@ async function runCase({ c, take, clip, out, ram, checkout, chromium, build, sce
       undefined, { timeout: 30_000 });
     shell = page.locator('.agent-chat__composer-shell');
     draft = shell.locator('textarea[aria-label="Chat composer"]');
-    const mic = shell.locator('.chat-mobile-dictation-action');
     const review = shell.locator('.agent-chat__dictation-refinement');
-    const button = (scope, name) => scope.getByRole('button', { name, exact: true });
+    const button = visibleButton;
     status = review.getByRole('status');
     preview = review.getByRole('textbox', { name: 'Text preview', exact: true });
 
@@ -336,17 +360,17 @@ async function runCase({ c, take, clip, out, ram, checkout, chromium, build, sce
     report.result = 'FAIL';
     step('opt-in');
     await draft.fill(c.initialDraft);
-    await button(mic, 'Dictation text options').click();
+    await button(shell, 'Dictation text options').click();
     const optIn = review.getByRole('checkbox', { name: 'Review dictated text before inserting' });
     check(!await optIn.isChecked(), 'Review was not off by default');
     await optIn.check();
     await draft.press('End');
 
     step('capture');
-    await button(mic, 'Dictation').click();
-    await until(async () => m.providerError || m.createRejected || await shell
-      .locator('.agent-chat__dictation-status [data-status="listening"]').isVisible(),
-      8_000, 'Dictation did not enter listening');
+    const listening = shell.locator('.agent-chat__dictation-status [data-status="listening"]');
+    await startDictation(page, shell, () => until(
+      async () => m.providerError || m.createRejected || await listening.isVisible(),
+      8_000, 'Dictation did not enter listening'), (gesture) => { report.captureGesture = gesture; });
     if (m.createRejected) report.result = 'ERROR_SETUP';
     check(m.openaiRelay, 'No successful OpenAI transcription relay admission');
     check(!m.providerError, 'OpenAI relay reported an error before capture');
@@ -362,7 +386,8 @@ async function runCase({ c, take, clip, out, ram, checkout, chromium, build, sce
       await until(() => m.finals.length > 0, 3_000, 'No pre-Stop final').catch(() => {});
     }
     step('stop');
-    const stop = button(shell, 'Finish and review text');
+    const stop = button(shell, 'Finish and review text')
+      .and(shell.locator('.chat-send-btn--dictation-commit'));
     await stop.waitFor();
     // Evidence boundary: dispatch of the Stop click, before its Gateway close RPC.
     m.stopIssued = true;
@@ -429,16 +454,17 @@ async function runCase({ c, take, clip, out, ram, checkout, chromium, build, sce
     }
     if (report.result === 'PASS') step('complete');
   } catch (error) {
+    // Keep the underlying action error alongside any visible notice, not the raw call log.
+    const cause = { name: redact(error?.name ?? 'Error'),
+      message: redact(String(error?.message ?? error).split(/\r?\n/u, 1)[0]).slice(0, 400) };
     const alert = await findError(m.providerError || m.createRejected ? 750 : 0);
-    if (alert) await markUiError(alert);
-    else if (report.stage === 'capture' && m.providerError &&
+    if (alert) {
+      await markUiError(alert);
+      report.failure.cause = cause;
+    } else if (report.stage === 'capture' && m.providerError &&
         await draft.inputValue({ timeout: 1000 }).catch(() => null) === c.initialDraft) {
       inconclusive('TranscriptionUnavailable', 'OpenAI relay reported an error during capture');
-    } else {
-      // Do not persist stacks, provider payloads or Playwright call logs.
-      report.failure = { step: report.stage, name: redact(error?.name ?? 'Error'),
-        message: redact(String(error?.message ?? error).split(/\r?\n/u, 1)[0]).slice(0, 400) };
-    }
+    } else report.failure = { step: report.stage, ...cause };
   } finally {
     const ui = await notices();
     const redactNotice = (n) => ({ ...n, text: redact(n.text) });
