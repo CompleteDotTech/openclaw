@@ -54,6 +54,22 @@
         { "text": "no make that Thursday", "pauseAfterMs": 1400 }
       ],
       "expected": { "mode": "explicit", "literal": true, "action": "insert" }
+    },
+    {
+      "id": "review-download-failure-keep-original",
+      "segments": [
+        { "text": "The meeting is Tuesday", "pauseAfterMs": 240 },
+        { "text": "no make that Thursday", "pauseAfterMs": 1400 }
+      ],
+      "expected": { "mode": "explicit", "action": "keep", "blockReviewChunk": true }
+    },
+    {
+      "id": "review-download-failure-cancel",
+      "segments": [
+        { "text": "Please reserve the blue room", "pauseAfterMs": 240 },
+        { "text": "actually reserve the green room", "pauseAfterMs": 1400 }
+      ],
+      "expected": { "mode": "explicit", "action": "cancel", "blockReviewChunk": true }
     }
   ]
 }
