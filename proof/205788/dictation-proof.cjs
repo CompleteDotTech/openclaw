@@ -97,11 +97,11 @@ function takeLine(name, result) {
     ...(result.alerts?.length ? { lastAlert: consoleText(result.alerts.at(-1).text, 180) } : {}),
   });
 }
-// Independent positive control for this one utterance, not the candidate parser. Retain
-// lexical casing and horizontal separators. Only a matching mark immediately AFTER its
-// command may already exist. Do not bless marks before commands or duplicate punctuation.
+// Independent control for this utterance only. Preserve word casing and horizontal spacing.
+// A single comma before an intact "insert ..." belongs to that command's edit span.
+// Leave a matching mark after the command in place once; do not strip punctuation elsewhere.
 function explicitControl(raw) {
-  const m = /^(call[ \t]+me)([ \t]+insert[ \t]+comma)(,?)([ \t]+please)([ \t]+insert[ \t]+period)(\.?)$/i.exec(raw);
+  const m = /^(call[ \t]+me)(,?[ \t]+insert[ \t]+comma)(,?)([ \t]+please)(,?[ \t]+insert[ \t]+period)(\.?)$/i.exec(raw);
   if (!m) return null;
   const first = m[1].length, second = first + m[2].length + m[3].length + m[4].length;
   return { text: m[1] + ',' + m[4] + '.', edits: [
