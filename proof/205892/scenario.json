@@ -3,7 +3,7 @@
   "tts": {
     "model": "gpt-4o-mini-tts",
     "voice": "alloy",
-    "instructions": "Read only the supplied words, verbatim, in a clear, steady American English voice. Enunciate the initial S in snake and the final D in end. Say new and line as two distinct words. Treat fragments as parts of one continuous utterance; do not add words, dramatic pauses, or spoken punctuation."
+    "instructions": "Read exactly the supplied text in clear American English at an even conversational pace. Each clip is part of a longer utterance: make every word distinct, but do not add pauses or a sentence-ending cadence at clip boundaries. Keep the initial S in snake and the final D in end audible. Say new line as two words. Do not add words or speak punctuation."
   },
   "takes": [
     { "id": "alloy", "voice": "alloy" },
@@ -15,8 +15,10 @@
       "id": "identifier-insert-undo",
       "segments": [
         { "text": "please use", "pauseAfterMs": 140 },
-        { "text": "pascal case silver maple", "pauseAfterMs": 160 },
-        { "text": "end identifier for this example", "pauseAfterMs": 1100 }
+        { "text": "pascal", "pauseAfterMs": 110 },
+        { "text": "case silver maple", "pauseAfterMs": 180 },
+        { "text": "end identifier", "pauseAfterMs": 0 },
+        { "text": "for this example", "pauseAfterMs": 1100 }
       ],
       "expected": {
         "command": "pascal case silver maple end identifier",
@@ -41,7 +43,8 @@
     {
       "id": "incomplete-command-cancel",
       "segments": [
-        { "text": "snake case hello world", "pauseAfterMs": 1100 }
+        { "text": "snake", "pauseAfterMs": 110 },
+        { "text": "case hello world", "pauseAfterMs": 1100 }
       ],
       "expected": {
         "opener": "snake case",
