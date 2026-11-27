@@ -5,6 +5,12 @@
       "sha": "d752b31db27df007f6a84f49d916f0e5d1eda226",
       "dir": "proof/206088",
       "script": "dictation-proof.mjs"
+    },
+    {
+      "pr": 205789,
+      "sha": "8b9b1489296846a05300227a2670a14df8cd67a8",
+      "dir": "proof/205789",
+      "script": "dictation-proof.mjs"
     }
   ]
 }
