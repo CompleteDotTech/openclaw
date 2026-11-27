@@ -1,0 +1,41 @@
+{
+  "leadingSilenceMs": 500,
+  "tts": {
+    "model": "gpt-4o-mini-tts",
+    "voice": "alloy",
+    "instructions": "Speak naturally and clearly. Read exactly the supplied text without adding words."
+  },
+  "takes": [
+    { "id": "alloy", "voice": "alloy", "instructions": "Read the text exactly, in a clear conversational voice." },
+    { "id": "nova", "voice": "nova", "instructions": "Read the text exactly, in a clear conversational voice." },
+    { "id": "sage", "voice": "sage", "instructions": "Read the text exactly, in a clear conversational voice." }
+  ],
+  "cases": [
+    {
+      "id": "live-start-and-vad",
+      "segments": [
+        {
+          "text": "The blue lantern is beside the garden gate.",
+          "pauseAfterMs": 1700
+        }
+      ],
+      "expected": {
+        "text": "The blue lantern is beside the garden gate.",
+        "finalRelativeToStop": "before"
+      }
+    },
+    {
+      "id": "stop-keeps-final-transcript",
+      "segments": [
+        {
+          "text": "The silver kite landed on the roof.",
+          "pauseAfterMs": 160
+        }
+      ],
+      "expected": {
+        "text": "The silver kite landed on the roof.",
+        "finalRelativeToStop": "after"
+      }
+    }
+  ]
+}
