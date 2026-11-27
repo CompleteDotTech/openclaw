@@ -31,6 +31,7 @@ async function until(read, label, timeout = 15_000) {
 }
 
 const here = fileURLToPath(new URL(".", import.meta.url));
+const LF = String.fromCharCode(10);
 const apiKey = process.env.OPENAI_API_KEY?.trim();
 delete process.env.OPENAI_API_KEY;
 
@@ -40,6 +41,13 @@ const COMPOSER = ".agent-chat__composer-shell";
 const DRAFT = COMPOSER + ' textarea[aria-label="Chat composer"]';
 const CHAT_MODEL = "openai/gpt-5.4-mini";
 const SEND_METHODS = new Set(["chat.send", "sessions.send", "agent"]);
+const VISUAL_CASE = "contractions";
+const VISUAL_SURFACE = ".chat-main__conversation-column";
+const SEND_BUTTON = COMPOSER + " .chat-send-btn--send";
+const CONVERT = "Convert file references to plain text";
+const REFUSAL = "Convert file references to plain text before sending. This conversation cannot deliver their object identities.";
+const VIEWPORT = { width: 1440, height: 1000 };
+const FILE_REPLIES = { capabilities: "ready", search: "matches", revalidate: "validated" };
 
 function redact(text, secrets) {
   let safe = String(text);
@@ -50,13 +58,80 @@ function redact(text, secrets) {
   return safe;
 }
 
-function diagnostic(text, secrets) {
-  return redact(text, secrets)
-    .replace(/\b(?:https?|wss?):\/\/[^\s"'<>]+/gi, "[redacted URL]")
-    .replace(/\b(?:Bearer|Basic)\s+[^\s"',;<>]+/gi, "[redacted authorization]")
-    .replace(/\b(?:authorization|cookie|set-cookie)\s*:\s*[^\n]*/gi, "[redacted header]")
-    .replace(/\bsk-[a-z0-9_-]{8,}\b/gi, "[redacted key]")
-    .slice(0, 2400);
+// Capture only the isolated fixture's conversation column; no browser chrome,
+// settings, failed takes, traces, raw messages or request/response dumps.
+async function captureFrame(page, target, secrets, expectedDraft, draft) {
+  const surface = page.locator(VISUAL_SURFACE);
+  await surface.waitFor();
+  await target.waitFor();
+  const measure = () => Promise.all([surface.boundingBox(), target.boundingBox()]);
+  const presentation = await surface.evaluate(async (element) => {
+    await document.fonts.ready;
+    await new Promise((finish) => requestAnimationFrame(() => requestAnimationFrame(finish)));
+    return {
+      scrollX, scrollY,
+      theme: document.documentElement.dataset.themeMode ?? getComputedStyle(document.documentElement).colorScheme,
+      rendered: [element.innerText, ...Array.from(
+        element.querySelectorAll("textarea, input:not([type=hidden]), [contenteditable=true]"),
+        (field) => field.value ?? field.textContent,
+      )].join(LF),
+    };
+  });
+  check(presentation.scrollX === 0 && presentation.scrollY === 0, "The proof viewport scrolled.");
+  check(await draft.inputValue() === expectedDraft, "The draft changed before capture.");
+  const safe = presentation.rendered;
+  check(redact(safe, secrets) === safe &&
+    !/\b(?:https?|wss?):|\bwww\.|\b(?:authorization|cookie|set-cookie)\s*:|\b(?:Bearer|Basic)\s+[A-Za-z0-9_.-]{12,}|\bsk-[a-z0-9_-]{8,}|(?:^|[\s"'(])(?:\/(?:dev|home|root|run|tmp|workspace|mnt|var|etc)\/|[a-z]:\\)|[\w.+-]+@[\w.-]+\.[a-z]{2,}/im.test(safe),
+    "Potentially sensitive text in the capture surface.");
+  const before = await measure();
+  const [outer, inner] = before;
+  check(outer && inner, "Capture surface or target is missing.");
+  const x = Math.ceil(outer.x), y = Math.ceil(outer.y);
+  const clip = { x, y, width: Math.floor(outer.x + outer.width) - x,
+    height: Math.floor(outer.y + outer.height) - y };
+  const rect = { x: inner.x - x, y: inner.y - y, width: inner.width, height: inner.height };
+  check(x >= 0 && y >= 0 && clip.width > 0 && clip.height > 0 &&
+    x + clip.width <= VIEWPORT.width && y + clip.height <= VIEWPORT.height &&
+    rect.x >= 0 && rect.y >= 0 &&
+    rect.x + rect.width <= clip.width && rect.y + rect.height <= clip.height,
+    "Capture surface or target is clipped.");
+  const png = await page.screenshot({
+    clip, animations: "disabled", caret: "hide", scale: "css", timeout: 5_000,
+    mask: [surface.locator("img, video, canvas, iframe, .context-usage")], maskColor: "#778899",
+  });
+  check(JSON.stringify(await measure()) === JSON.stringify(before) &&
+    await draft.inputValue() === expectedDraft, "Capture geometry or draft changed during capture.");
+  return { clip, rect, theme: presentation.theme, png };
+}
+
+// STT can vary on identical audio. Only qualified synthetic text can become pixels;
+// transcript text and digests of it are never written to the proof bundle.
+function safeFixtureTranscript(raw) {
+  return raw.length <= 240 && /^[\p{L}\p{M}\p{N} .,'’‘“”"!?;:…/()\-]+$/u.test(raw) &&
+    !/(?:^|\s)\/|:\/\/|\bwww\./i.test(raw);
+}
+
+async function saveVisuals(out, frames, browser, rasterize) {
+  const saved = [];
+  for (const [stage, { clip, rect, png, label }] of frames) {
+    const clean = `${stage}-clean.png`;
+    const item = { stage, clean, clip };
+    if (label) {
+      const spec = {
+        viewport: { width: clip.width, height: clip.height }, scale: 1,
+        annotations: [{ kind: "outline", rect, text: label,
+          labelAt: { x: 12, y: Math.max(12, rect.y - 52) }, color: "#7654a5" }],
+      };
+      const annotated = await rasterize(browser, { ...spec, image: png });
+      item.annotated = `${stage}-annotated.png`;
+      item.measurements = `${stage}-measurements.json`;
+      await writeFile(join(out, item.annotated), annotated, { mode: 0o600 });
+      await writeFile(join(out, item.measurements), JSON.stringify(spec, null, 2) + LF, { mode: 0o600 });
+    }
+    await writeFile(join(out, clean), png, { mode: 0o600 });
+    saved.push(item);
+  }
+  return saved;
 }
 
 function wavDurationMs(b) {
@@ -109,7 +184,7 @@ function qualify(raw, c, recognize) {
 
   // Locate an actual single-quoted span, not a contraction. Parse its contents
   // separately so failure to protect the original span doesn't disqualify it.
-  const quotes = /(?<![\p{L}\p{M}\p{N}])'(?:[^'\n]|(?<=[\p{L}\p{M}\p{N}])'(?=[\p{L}\p{M}\p{N}]))*'(?![\p{L}\p{M}\p{N}])|‘(?:[^’\n]|(?<=[\p{L}\p{M}\p{N}])’(?=[\p{L}\p{M}\p{N}]))*’(?![\p{L}\p{M}\p{N}])/gu;
+  const quotes = /(?<![\p{L}\p{M}\p{N}])'(?:[^'\x0a]|(?<=[\p{L}\p{M}\p{N}])'(?=[\p{L}\p{M}\p{N}]))*'(?![\p{L}\p{M}\p{N}])|‘(?:[^’\x0a]|(?<=[\p{L}\p{M}\p{N}])’(?=[\p{L}\p{M}\p{N}]))*’(?![\p{L}\p{M}\p{N}])/gu;
   for (const span of raw.matchAll(quotes)) {
     const result = intended(parse(span[0].slice(1, -1)), span.index + 1);
     if (result) return result;
@@ -132,13 +207,17 @@ async function tabTo(page, target) {
 
 async function runTake(c, take, h) {
   const clipId = `${c.id}--${take.id}`;
-  const out = join(h.results, c.id, take.id);
-  await mkdir(out);
+  const out = join(h.results, c.id, take.id, h.variant);
+  await mkdir(out, { recursive: true, mode: 0o700 });
+  const visual = c.id === VISUAL_CASE;
+  const frames = new Map();
   let stage = "create fixture session";
-  let status = "FAIL", failure = null, screenshot = null, chooserScreenshot = null;
+  let status = "FAIL", failure = null, captures = [];
   let browser, page, draft, connectId, createId, closeId, opened, closeOK, firstAudioAt;
-  let gatewayMessage, clipSha256, qualified;
+  let gatewayErrorSeen = false, clipSha256, qualified, raw;
+  let refusedBeforeInterceptor = false, convertedToPlainText = false;
   const events = [], fileActions = [], blockedSends = [];
+  const pendingFileRequests = new Map(), successfulFileActions = new Set();
   const secrets = new Set([apiKey, h.token]);
   const remember = (value) => {
     if (typeof value === "string" && value.length >= 8) secrets.add(value);
@@ -160,20 +239,34 @@ async function runTake(c, take, h) {
       headless: true,
       env: h.ramEnv,
       args: [
+        "--disable-partial-raster",
+        "--disable-gpu-rasterization",
         "--use-fake-ui-for-media-stream",
         "--use-fake-device-for-media-stream",
         `--use-file-for-fake-audio-capture=${clip}%noloop`,
       ],
     });
     const context = await browser.newContext({
-      locale: "en-US", viewport: { width: 1440, height: 1000 },
+      locale: "en-US", viewport: VIEWPORT, deviceScaleFactor: 1,
+      colorScheme: "light", reducedMotion: "reduce",
       permissions: ["microphone"], serviceWorkers: "block",
     });
     page = await context.newPage();
     page.setDefaultTimeout(15_000);
 
-    // Forward real Gateway traffic, except never forward a turn submission.
-    await page.routeWebSocket((url) => url.host === new URL(h.origin).host, (socket) => {
+    const origin = new URL(h.origin);
+    // Browser egress is limited to this isolated Gateway and its static reads.
+    // Gateway-to-STT traffic is separate; never forward a UI turn submission.
+    await page.route("**/*", (route) => {
+      const request = route.request();
+      return new URL(request.url()).origin === origin.origin &&
+        ["GET", "HEAD"].includes(request.method()) ? route.continue() : route.abort();
+    });
+    await page.routeWebSocket(() => true, (socket) => {
+      if (new URL(socket.url()).host !== origin.host) {
+        void socket.close();
+        return;
+      }
       const server = socket.connectToServer();
       socket.onMessage((message) => {
         const f = parseFrame(message);
@@ -189,7 +282,11 @@ async function runTake(c, take, h) {
           if (f.method === "talk.session.create" && f.params?.mode === "transcription") createId = f.id;
           if (f.method === "talk.session.appendAudio") firstAudioAt ??= Date.now();
           if (f.method === "talk.session.close" && !f.params?.discard) closeId = f.id;
-          if (f.method === "sessions.files.references") fileActions.push(f.params?.action);
+          if (f.method === "sessions.files.references") {
+            const action = f.params?.action;
+            fileActions.push(action);
+            if (Object.hasOwn(FILE_REPLIES, action)) pendingFileRequests.set(f.id, action);
+          }
         }
         server.send(message);
       });
@@ -203,12 +300,15 @@ async function runTake(c, take, h) {
           }
           if (f.id === createId) opened = f.ok ? p : false;
           if (f.id === closeId) closeOK = f.ok === true;
-          if (!f.ok && [connectId, createId, closeId].includes(f.id)) {
-            gatewayMessage = f.error?.message;
+          if (!f.ok && [connectId, createId, closeId].includes(f.id)) gatewayErrorSeen = true;
+          const action = pendingFileRequests.get(f.id);
+          if (action) {
+            pendingFileRequests.delete(f.id);
+            if (f.ok === true && p?.status === FILE_REPLIES[action]) successfulFileActions.add(action);
           }
         }
         if (f?.type === "event" && f.event === "talk.event" && p?.transcriptionSessionId) {
-          if (p.type === "error") gatewayMessage = p.message;
+          if (p.type === "error") gatewayErrorSeen = true;
           events.push({
             id: p.transcriptionSessionId, type: p.type, final: p.final, text: p.text, reason: p.reason,
           });
@@ -232,10 +332,20 @@ async function runTake(c, take, h) {
     }, DRAFT, { timeout: 30_000 });
     check(await draft.inputValue() === "", "Expected a fresh empty draft.");
 
-    stage = "opt in to file-reference commands";
-    await page.getByRole("checkbox", {
+    const optIn = page.getByRole("checkbox", {
       name: "English file-reference commands for this session's local workspace", exact: true,
-    }).check();
+    });
+    if (h.variant === "candidate") {
+      stage = "opt in to file-reference commands";
+      await optIn.check();
+      stage = "wait for the opted-in file-reference owner";
+      await page.getByRole("checkbox", {
+        name: "Literal mode: keep command-like words as text", exact: true,
+      }).waitFor();
+    } else {
+      stage = "verify main has no file-reference opt-in";
+      check(await optIn.count() === 0, "Main unexpectedly exposes the candidate opt-in.");
+    }
     await page.evaluate((selector) => {
       window.__proofChooserSeen = Boolean(document.querySelector(selector));
       new MutationObserver((records) => {
@@ -275,12 +385,12 @@ async function runTake(c, take, h) {
       !relayEvents().some((e) => e.type === "error"), "OpenAI relay did not complete cleanly.");
 
     stage = "qualify the final transcript";
-    const raw = transcript();
+    raw = transcript();
     qualified = qualify(raw, c, h.recognize);
     if (!qualified) throw new InconclusiveSTT(c.singleQuoted
       ? "STT did not supply the intended command within actual single quotes."
       : "STT did not supply the intended parseable command and surrounding words.");
-    check(!c.singleQuoted || qualified.recognizedCommands === 0,
+    check(h.variant === "main" || !c.singleQuoted || qualified.recognizedCommands === 0,
       "Product parser recognized a command inside a qualified single-quoted span.");
 
     stage = "wait for composer dictation to settle";
@@ -295,8 +405,21 @@ async function runTake(c, take, h) {
     const review = page.locator(REVIEW);
     const chip = page.locator(CHIP);
     let expected = raw;
+    const capture = async (name, target, value, label) => {
+      check(safeFixtureTranscript(raw), "Qualified transcript is not safe for visual evidence.");
+      const frame = await captureFrame(page, target, secrets, value, draft);
+      check(!frames.size || frames.values().next().value.theme === frame.theme, "Capture theme changed within a take.");
+      frames.set(name, { ...frame, label });
+    };
 
-    if (c.chooser.opens) {
+    if (h.variant === "main") {
+      stage = "verify baseline plain-text draft";
+      check(!(await page.evaluate(() => window.__proofChooserSeen)) &&
+        await chip.count() === 0 && fileActions.length === 0,
+        "Baseline unexpectedly used file-reference review.");
+      const editor = page.locator(COMPOSER + " .agent-chat__composer-combobox");
+      await capture("plain-transcript", editor, raw, "Dictation stays as ordinary text");
+    } else if (c.chooser.opens) {
       stage = "wait for the chooser and intended file";
       await review.getByRole("heading", { name: "Choose a file reference", exact: true }).waitFor();
       const radio = review.getByRole("radio", { name: c.file, exact: true });
@@ -309,9 +432,19 @@ async function runTake(c, take, h) {
       await tabTo(page, radio);
       await page.keyboard.press("Space");
       await until(() => radio.isChecked(), "candidate selected using Space");
-      chooserScreenshot = await page.locator(COMPOSER).screenshot({
-        path: join(out, "chooser.png"), timeout: 5_000,
-      }).then(() => "chooser.png", () => null);
+      check(successfulFileActions.has("capabilities") && successfulFileActions.has("search"),
+        "Candidate selection has no successful real Gateway metadata receipts.");
+      if (visual) {
+        stage = "inspect authorized path and workspace";
+        const option = review.locator(".composer-file-references__candidate")
+          .filter({ has: page.getByRole("radio", { name: c.file, exact: true }) });
+        const details = option.locator("summary");
+        await details.click();
+        await option.getByText("fixture-workspace", { exact: true }).waitFor();
+        check((await option.locator("code").innerText()).trim() === c.file, "Path disclosure did not match the fixture.");
+        stage = "capture authorized selection";
+        await capture("authorized-selection", option, raw, "Selected workspace file, before insertion");
+      }
 
       if (c.chooser.exitKey === "Enter") {
         stage = "confirm the bound reference by keyboard";
@@ -321,7 +454,7 @@ async function runTake(c, take, h) {
         expected = raw.slice(0, qualified.start) + label + raw.slice(qualified.end);
         await chip.waitFor();
         check(await chip.textContent() === label, "Bound chip has the wrong label.");
-        check(fileActions.includes("revalidate"), "Confirm did not revalidate the selected file.");
+        check(successfulFileActions.has("revalidate"), "Confirm did not receive a successful Gateway revalidation.");
       } else {
         stage = "cancel the chooser by keyboard";
         check(c.chooser.exitKey === "Escape", "Invalid expected chooser exit key.");
@@ -336,122 +469,113 @@ async function runTake(c, take, h) {
     stage = "verify final unsent draft";
     await review.waitFor({ state: "hidden" });
     await expectDraft(expected);
-    const confirmed = c.chooser.exitKey === "Enter";
+    const confirmed = h.variant === "candidate" && c.chooser.exitKey === "Enter";
+    const bindingCount = async () => {
+      const refs = JSON.parse((await draft.getAttribute("data-composer-file-references")) ?? "[]");
+      check(Array.isArray(refs), "Composer binding metadata is not an array.");
+      return refs.length;
+    };
     check(await draft.inputValue() === expected, "Composer changed text outside the expected edit.");
     check(await chip.count() === (confirmed ? 1 : 0), "Wrong number of bound chips.");
     check(confirmed || !fileActions.includes("revalidate"), "Unexpected file revalidation.");
+
+    if (visual && confirmed) {
+      const convert = page.locator(COMPOSER).getByRole("button", { name: CONVERT, exact: true });
+      const send = page.locator(SEND_BUTTON);
+      const refusal = page.locator(VISUAL_SURFACE).getByText(REFUSAL, { exact: true });
+      stage = "capture confirmed unsent reference";
+      await convert.waitFor();
+      await until(async () => await bindingCount() === 1, "one binding stored in the editor");
+      await capture("bound-draft", chip, expected);
+
+      stage = "verify product refuses Send before interception";
+      check(!(await refusal.isVisible()) && blockedSends.length === 0, "Send proof did not start cleanly.");
+      await send.click();
+      await refusal.waitFor();
+      check(blockedSends.length === 0 && await draft.inputValue() === expected &&
+        await bindingCount() === 1 && await chip.count() === 1,
+        "Refusal did not preserve the bound draft before the send interceptor.");
+      refusedBeforeInterceptor = true;
+      stage = "capture product refusal";
+      await capture("send-refused", refusal, expected);
+
+      stage = "convert to ordinary text without sending";
+      await convert.click();
+      await convert.waitFor({ state: "hidden" });
+      await chip.waitFor({ state: "hidden" });
+      await until(async () => await bindingCount() === 0, "binding metadata removed");
+      await until(() => send.isEnabled(), "ordinary Send enabled");
+      check(await draft.inputValue() === expected && blockedSends.length === 0,
+        "Conversion changed the visible draft or attempted submission.");
+      convertedToPlainText = true;
+      stage = "capture converted unsent text";
+      const editor = page.locator(COMPOSER + " .agent-chat__composer-combobox");
+      await capture("converted-draft", editor, expected);
+    }
+
+    if (frames.size) {
+      stage = "write fixed-name visual evidence";
+      check(blockedSends.length === 0, "A submission reached the interceptor.");
+      captures = await saveVisuals(out, frames, browser, h.rasterize);
+    }
     status = "PASS";
   } catch (error) {
     status = error instanceof InconclusiveSTT ? "INCONCLUSIVE_STT" : "FAIL";
-    failure = {
-      step: stage,
-      name: diagnostic(error?.name ?? "Error", secrets),
-      message: diagnostic(error?.message ?? error, secrets),
-    };
+    failure = { step: stage, code: error instanceof InconclusiveSTT ? "STT_MISS" : "ASSERTION_OR_RUNTIME" };
   } finally {
-    if (status === "INCONCLUSIVE_STT") {
-      await page.locator(".agent-chat__dictation-status")
-        .waitFor({ state: "hidden", timeout: 3_000 }).catch(() => {});
-    }
-    const finalComposer = draft ? await draft.inputValue({ timeout: 1_000 }).catch(() => null) : null;
-    if (page) {
-      screenshot = await page.locator(COMPOSER).screenshot({
-        path: join(out, "final.png"), timeout: 5_000,
-      }).then(() => "final.png", () => null);
-    }
     await browser?.close().catch(() => {});
     if (blockedSends.length > 0) {
       status = "FAIL";
-      failure = {
-        step: stage, name: "UnexpectedSubmission",
-        message: "A chat submission was blocked before reaching the Gateway.",
-      };
+      failure = { step: stage, code: "UNEXPECTED_SUBMISSION" };
     }
-    if (status === "PASS" && (!screenshot || (c.chooser.opens && !chooserScreenshot))) {
-      status = "FAIL";
-      failure = {
-        step: "capture evidence", name: "MissingScreenshot",
-        message: "A required screenshot is missing.",
-      };
-    }
-    const detail = failure ? `${failure.step}: ${failure.name}` : null;
-    const save = (name, value) => writeFile(join(out, name), redact(value, secrets), { mode: 0o600 });
-    await save("transcript.txt", transcript());
-    await save("composer.txt", finalComposer ?? "");
-    await save("take.json", JSON.stringify({
-      head: h.head, status, detail, stage, error: failure, screenshot, chooserScreenshot,
-      gatewayError: gatewayMessage ? diagnostic(gatewayMessage, secrets) : null,
-      takeId: take.id, voice: take.voice, clipSha256, qualified: qualified ?? null,
-      validInput: qualified ? true : status === "INCONCLUSIVE_STT" ? false : null,
-      chatModel: CHAT_MODEL, blockedSends,
-      provider: opened?.provider === "openai" ? "openai" : null,
-      finalTranscriptParts: finalParts(), finalComposer, fileActions,
-    }, null, 2) + "\n");
   }
 
-  console.log(`${clipId}: ${status}${failure ? ` — ${failure.step}: ${failure.name}` : ""}`);
+  const validInput = qualified ? true : status === "INCONCLUSIVE_STT" ? false : null;
+  const result = {
+    variant: h.variant, head: h.head, status, failure, clipSha256, validInput, gatewayErrorSeen,
+    providerCompleted: closeOK === true && relayEvents().some((event) =>
+      event.type === "close" && event.reason === "completed") && !gatewayErrorSeen,
+    interceptedSendCount: blockedSends.length, refusedBeforeInterceptor, convertedToPlainText,
+    successfulFileActions: [...successfulFileActions], captures,
+  };
+  await writeFile(join(out, "take.json"), JSON.stringify(result, null, 2) + LF, { mode: 0o600 });
+  console.log(`${clipId}/${h.variant}: ${status}${failure ? ` — ${failure.step}: ${failure.code}` : ""}`);
   return {
-    id: take.id, status,
-    validInput: qualified ? true : status === "INCONCLUSIVE_STT" ? false : null,
-    artifact: `${take.id}/take.json`,
+    ...result,
+    artifact: `${take.id}/${h.variant}/take.json`,
+    // Pairing metadata stays process-local; no transcript is written to disk.
+    visual: status === "PASS" && frames.size ? { raw, theme: frames.values().next().value.theme } : null,
   };
 }
 
-async function main() {
-  check(process.argv[2], "Usage: node dictation-proof.mjs <built PR checkout>");
-  check(apiKey, "Set OPENAI_API_KEY in the run step.");
-  check(process.platform === "linux" && (await statfs("/dev/shm")).type === 0x01021994,
-    "Expected Linux tmpfs at /dev/shm.");
-  check((await readFile("/proc/swaps", "utf8")).trim().split("\n").length === 1,
-    "Swap is enabled. Turn it off on this disposable runner before using the secret.");
-
-  const repo = resolve(process.argv[2]);
+async function withGateway({ repo, ram, chromium, variant, results, head, recognize, rasterize }, run) {
   const launcher = join(repo, "openclaw.mjs");
   const uiRoot = join(repo, "dist", "control-ui");
-  await access(join(uiRoot, "index.html"));
-  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
-  const { cases, takes } = JSON.parse(await readFile(join(here, "scenario.json"), "utf8"));
-  const uniqueIds = (list) => Array.isArray(list) && list.length > 0 &&
-    list.every((item) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(item.id)) &&
-    new Set(list.map((item) => item.id)).size === list.length;
-  check(uniqueIds(cases) && uniqueIds(takes), "Expected unique kebab-case IDs for cases and takes.");
-
-  const { recognizeDictatedFileReferences: recognize } = await import(
-    pathToFileURL(join(repo, "ui/src/lib/dictation-file-references.ts")).href
-  );
-
-  await mkdir(join(here, "results"), { recursive: true });
-  const results = await mkdtemp(join(here, "results", "run-"));
-  const ram = await mkdtemp("/dev/shm/openclaw-dictation-");
   const token = randomBytes(32).toString("hex");
   let child, done, exited = false, startError = false;
-  const previousTmp = process.env.TMPDIR;
+  const ramEnv = {
+    PATH: process.env.PATH, LANG: "C.UTF-8", HOME: ram,
+    TMPDIR: ram, TMP: ram, TEMP: ram,
+    XDG_CONFIG_HOME: join(ram, "xdg-config"), XDG_CACHE_HOME: join(ram, "xdg-cache"),
+    XDG_DATA_HOME: join(ram, "xdg-data"), XDG_STATE_HOME: join(ram, "xdg-state"),
+    NODE_DISABLE_COMPILE_CACHE: "1",
+  };
+  const localEnv = {
+    ...ramEnv, OPENCLAW_HOME: ram, OPENCLAW_STATE_DIR: join(ram, "state"),
+    OPENCLAW_CONFIG_PATH: join(ram, "openclaw.json"),
+    OPENCLAW_GATEWAY_TOKEN: token, OPENCLAW_SKIP_CHANNELS: "1",
+  };
   try {
-    process.env.TMPDIR = ram;
-    const { chromium } = createRequire(join(repo, "ui", "package.json"))("playwright");
-    const ramEnv = {
-      PATH: process.env.PATH, LANG: "C.UTF-8", HOME: ram,
-      TMPDIR: ram, TMP: ram, TEMP: ram,
-      XDG_CONFIG_HOME: join(ram, "xdg-config"), XDG_CACHE_HOME: join(ram, "xdg-cache"),
-      XDG_DATA_HOME: join(ram, "xdg-data"), XDG_STATE_HOME: join(ram, "xdg-state"),
-      NODE_DISABLE_COMPILE_CACHE: "1",
-    };
-    const localEnv = {
-      ...ramEnv, OPENCLAW_HOME: ram, OPENCLAW_STATE_DIR: join(ram, "state"),
-      OPENCLAW_CONFIG_PATH: join(ram, "openclaw.json"),
-      OPENCLAW_GATEWAY_TOKEN: token, OPENCLAW_SKIP_CHANNELS: "1",
-    };
-
     const socket = createServer().listen(0, "127.0.0.1");
     await once(socket, "listening");
     const { port } = socket.address();
     await new Promise((resolveClose, reject) => socket.close((err) =>
       err ? reject(err) : resolveClose()));
-    const origin = `http://127.0.0.1:${port}`;
+    const origin = new URL(`http://127.0.0.1:${port}`).origin;
     const workspace = join(ram, "fixture-workspace");
     await mkdir(join(workspace, "src"), { recursive: true });
     for (const path of ["src/auth.ts", "notes", "checklist"]) {
-      await writeFile(join(workspace, path), "Synthetic proof fixture\n");
+      await writeFile(join(workspace, path), "Synthetic proof fixture" + LF);
     }
     await writeFile(localEnv.OPENCLAW_CONFIG_PATH, JSON.stringify({
       gateway: {
@@ -485,22 +609,7 @@ async function main() {
       "--params", JSON.stringify({ agentId: "main", key: `agent:main:dictation-${id}`, label: id }),
     ], { cwd: repo, env: localEnv, timeout: 45_000, stdio: "ignore" });
 
-    const h = { chromium, ramEnv, origin, token, createSession, results, head, recognize };
-    for (const c of cases) {
-      const out = join(results, c.id);
-      await mkdir(out);
-      const observed = [];
-      for (const take of takes) observed.push(await runTake(c, take, h));
-      const passed = observed.filter((t) => t.status === "PASS").length;
-      const failed = observed.filter((t) => t.status === "FAIL").length;
-      const valid = observed.filter((t) => t.validInput === true).length;
-      const status = failed ? "FAIL" : passed ? "PASS" : "INCONCLUSIVE_STT";
-      const detail = `${passed}/${observed.length} passed; ${valid} qualified; ${failed} failed`;
-      await writeFile(join(out, "case.json"), JSON.stringify({
-        head, status, detail, takes: observed,
-      }, null, 2) + "\n", { mode: 0o600 });
-      if (status !== "PASS") process.exitCode = 1;
-    }
+    await run({ variant, chromium, ramEnv, origin, token, createSession, results, head, recognize, rasterize });
   } finally {
     if (child?.pid && !exited) {
       try { process.kill(-child.pid, "SIGTERM"); } catch {}
@@ -510,10 +619,127 @@ async function main() {
         await done;
       }
     }
+  }
+}
+
+async function main() {
+  check(apiKey, "Set OPENAI_API_KEY only in the authorized live proof run step.");
+  check(process.platform === "linux" && (await statfs("/dev/shm")).type === 0x01021994,
+    "Expected Linux tmpfs at /dev/shm.");
+  check((await readFile("/proc/swaps", "utf8")).trim().split(LF).length === 1,
+    "Swap is enabled. Turn it off on this disposable runner before using the secret.");
+  check(process.env.PROOF_PR_DIR && process.env.PROOF_RESULTS_DIR,
+    "Expected workflow-provided PROOF_PR_DIR and PROOF_RESULTS_DIR.");
+  const mainPath = JSON.parse(process.env.PROOF_CHECKOUTS ?? "{}").main;
+  check(typeof mainPath === "string" && mainPath.length > 0,
+    "Configure a built PROOF_CHECKOUTS.main for the visual comparison.");
+  const candidate = resolve(process.env.PROOF_PR_DIR);
+  const baseline = resolve(mainPath);
+  if (process.argv[2]) {
+    check(resolve(process.argv[2]) === candidate, "The positional checkout must agree with PROOF_PR_DIR.");
+  }
+  const headFor = (repo) => execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+  }).trim();
+  const heads = { main: headFor(baseline), candidate: headFor(candidate) };
+  check(Object.values(heads).every((head) => /^[0-9a-f]{40}$/.test(head)) && heads.main !== heads.candidate,
+    "Expected distinct, valid main and candidate revisions.");
+  for (const repo of [baseline, candidate]) await access(join(repo, "dist", "control-ui", "index.html"));
+
+  const { cases, takes } = JSON.parse(await readFile(join(here, "scenario.json"), "utf8"));
+  const uniqueIds = (list) => Array.isArray(list) && list.length > 0 &&
+    list.every((item) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(item.id)) &&
+    new Set(list.map((item) => item.id)).size === list.length;
+  check(uniqueIds(cases) && uniqueIds(takes), "Expected unique kebab-case IDs for cases and takes.");
+  const visualCase = cases.find((c) => c.id === VISUAL_CASE);
+  check(visualCase?.file === "src/auth.ts" && visualCase.chooser?.opens && visualCase.chooser.exitKey === "Enter",
+    "Expected the synthetic contractions/confirmation case for visual pairing.");
+  const { recognizeDictatedFileReferences: recognize } = await import(
+    pathToFileURL(join(candidate, "ui/src/lib/dictation-file-references.ts")).href
+  );
+  // The frame helper imports Vitest and requires its runner. The standalone
+  // script uses Playwright for the clean frame and the shared annotation renderer.
+  const { rasterizeProofAnnotations: rasterize } = await import(
+    pathToFileURL(join(candidate, "ui/src/test-helpers/proof-annotations.ts")).href
+  );
+  const parent = resolve(process.env.PROOF_RESULTS_DIR);
+  await mkdir(parent, { recursive: true, mode: 0o700 });
+  const results = await mkdtemp(join(parent, "run-"));
+  const ram = await mkdtemp("/dev/shm/openclaw-dictation-");
+  const previousTmp = process.env.TMPDIR;
+  try {
+    process.env.TMPDIR = ram;
+    const { chromium } = createRequire(join(candidate, "ui", "package.json"))("playwright");
+    const baselineTakes = new Map();
+    const runLane = async (variant, repo, run) => {
+      const laneRam = join(ram, variant);
+      await mkdir(laneRam, { mode: 0o700 });
+      await withGateway({
+        variant, repo, ram: laneRam, chromium, results, head: heads[variant], recognize, rasterize,
+      }, run);
+    };
+    let mainLaneFailed = false;
+    try {
+      await runLane("main", baseline, async (h) => {
+        for (const take of takes) baselineTakes.set(take.id, await runTake(visualCase, take, h));
+      });
+    } catch {
+      mainLaneFailed = true;
+      console.error("Main comparison lane failed to set up, complete or clean up.");
+    }
+    await runLane("candidate", candidate, async (h) => {
+      for (const c of cases) {
+        const out = join(results, c.id);
+        await mkdir(out, { recursive: true, mode: 0o700 });
+        const observed = [], pairs = [];
+        for (const take of takes) {
+          const { visual, ...after } = await runTake(c, take, h);
+          observed.push({ id: take.id, ...after });
+          if (c !== visualCase) continue;
+          const before = baselineTakes.get(take.id);
+          const sameWav = Boolean(before?.clipSha256 && before.clipSha256 === after.clipSha256);
+          const bothPassed = before?.status === "PASS" && after.status === "PASS";
+          const matchedGeometry = Boolean(bothPassed && before.visual?.theme === visual?.theme &&
+            before.captures.length === 1 && after.captures.length === 4 && after.captures.every(({ clip }) =>
+              JSON.stringify(clip) === JSON.stringify(before.captures[0].clip)));
+          const pairStatus = !before || before.status === "FAIL" || after.status === "FAIL" ||
+            !sameWav || (bothPassed && !matchedGeometry) ? "FAIL" :
+            bothPassed ? "PASS" : "INCONCLUSIVE_STT";
+          pairs.push({
+            takeId: take.id, status: pairStatus, sameWav, matchedGeometry,
+            sameFinalText: bothPassed ? before.visual.raw === visual.raw : null,
+            mainStatus: before?.status ?? "NOT_RUN", candidateStatus: after.status,
+            before: before?.artifact ?? null, after: after.artifact,
+          });
+        }
+        const passed = observed.filter((t) => t.status === "PASS").length;
+        const failed = observed.filter((t) => t.status === "FAIL").length;
+        const valid = observed.filter((t) => t.validInput === true).length;
+        const status = failed ? "FAIL" : passed ? "PASS" : "INCONCLUSIVE_STT";
+        const detail = `${passed}/${observed.length} passed; ${valid} qualified; ${failed} failed`;
+        await writeFile(join(out, "case.json"), JSON.stringify({
+          head: heads.candidate, status, detail, takes: observed,
+        }, null, 2) + LF, { mode: 0o600 });
+        if (status !== "PASS") process.exitCode = 1;
+        if (c !== visualCase) continue;
+        const paired = pairs.filter((pair) => pair.status === "PASS");
+        const preferred = paired.find((pair) => pair.sameFinalText) ?? paired[0];
+        const pairStatus = mainLaneFailed || pairs.some((pair) => pair.status === "FAIL") ? "FAIL" :
+          preferred ? "PASS" : "INCONCLUSIVE_STT";
+        await writeFile(join(out, "comparison.json"), JSON.stringify({
+          heads, status: pairStatus, preferredTakeId: preferred?.takeId ?? null, mainLaneFailed,
+          pairs, viewport: VIEWPORT, scale: 1, syntheticWav: true, liveStt: true,
+          deniedGatewayAuthorization: "NOT_RUN_NO_SUPPORTED_RESTRICTED_IDENTITY_FIXTURE",
+          liveChatDelivery: "NOT_RUN_SEND_INTERLOCK_ACTIVE",
+        }, null, 2) + LF, { mode: 0o600 });
+        console.log(`Visual comparison: ${pairStatus}; ${paired.length}/${pairs.length} comparable takes.`);
+        if (pairStatus !== "PASS") process.exitCode = 1;
+      }
+    });
+  } finally {
     if (previousTmp === undefined) delete process.env.TMPDIR;
     else process.env.TMPDIR = previousTmp;
     await rm(ram, { recursive: true, force: true });
-    console.log(`Artifacts: ${results}`);
   }
 }
 
