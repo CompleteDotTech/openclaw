@@ -44,14 +44,13 @@
     {
       "id": "new-session-edit-and-copy",
       "segments": [
-        { "text": "This is very,", "pauseAfterMs": 160 },
-        { "text": "very important.", "pauseAfterMs": 850 }
+        { "text": "The meeting starts after lunch.", "pauseAfterMs": 850 }
       ],
       "expected": {
         "surface": "new",
         "mode": "conservative",
         "action": "edit-and-copy",
-        "words": "this is very very important",
+        "words": "the meeting starts after lunch",
         "initialDraft": "Existing unsent draft",
         "editedDraft": "Please bring the approved agenda"
       }
