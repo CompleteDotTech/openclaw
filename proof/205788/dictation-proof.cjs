@@ -6,9 +6,8 @@ const net = require('node:net');
 const { createRequire } = require('node:module');
 const { pathToFileURL } = require('node:url');
 const { randomBytes, createHash } = require('node:crypto');
-const { spawn, execFileSync } = require('node:child_process');
+const { spawn, spawnSync, execFileSync } = require('node:child_process');
 const { once } = require('node:events');
-
 class ProofTimeout extends Error { name = 'ProofTimeout'; }
 class MissingControl extends Error { name = 'MissingControl'; }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -38,6 +37,31 @@ const sttModel = 'gpt-4o-mini-transcribe';
 const errorInfo = e => ({ name: scrub(e?.name || 'Error').slice(0, 80),
   message: scrub(e?.message ?? e).slice(0, 1200) });
 const button = (scope, name) => scope.getByRole('button', { name, exact: true }).filter({ visible: true }).first();
+
+function createProofSession(checkout, env, target, label, result) {
+  const child = spawnSync(process.execPath, ['openclaw.mjs', 'gateway', 'call', 'sessions.create', '--json',
+    '--params', JSON.stringify({ agentId: 'main', key: target, label })], {
+    cwd: checkout, env, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 40000,
+    maxBuffer: 256 * 1024,
+  });
+  const clean = value => scrub(String(value ?? '')
+    .split(env.OPENCLAW_GATEWAY_TOKEN || '\0').join('[redacted]')
+    .split(env.HOME).join('[proof-runtime]').split(checkout).join('[checkout]')).trim().slice(0, 4000);
+  let reply;
+  try { reply = JSON.parse(child.stdout); } catch { /* stderr and process status still survive */ }
+  const gatewayError = reply?.error ?? reply?.runError;
+  result.sessionCreateCli = {
+    label, exitCode: child.status, signal: child.signal, spawnError: clean(child.error?.code) || null,
+    stderr: clean(child.stderr), gatewayCode: clean(gatewayError?.code) || null,
+    gatewayMessage: clean(gatewayError?.message ?? (typeof gatewayError === 'string' ? gatewayError : '')) || null,
+    keyMatches: reply?.key === target,
+  };
+  const receipt = result.sessionCreateCli;
+  if (child.status !== 0 || child.error || reply?.ok !== true || gatewayError || !receipt.keyMatches) {
+    throw new Error('sessions.create failed (exit ' + (receipt.exitCode ?? receipt.signal ?? receipt.spawnError ?? 'unknown') +
+      '): ' + (receipt.gatewayMessage || receipt.stderr || 'missing or unexpected success receipt'));
+  }
+}
 
 const alertSelector = [
   '[role="alert"]:not([data-active="false"])',
@@ -181,10 +205,12 @@ async function watchGateway(page, origin, surface, step) {
         const w = { method: m.method, text: p.message ?? p.question ?? '', target: p.sessionKey ?? p.key };
         s.writes.push(w);
         const empty = !p.attachments?.length && !p.mentions?.length && !p.deliver;
-        if (surface === 'new' && s.allowStandby && !s.standby && m.method === 'sessions.create' && !w.text && empty) {
+        const draftCreate = m.method === 'sessions.create' && p.agentId === 'main' &&
+          w.target === undefined && !p.fork && !p.parentSessionKey;
+        if (surface === 'new' && s.allowStandby && !s.standby && draftCreate && !w.text && empty) {
           s.standby = w;
         } else if (s.allow && !s.sent && w.method === s.allow.method && w.text === s.allow.text &&
-                   w.target === s.allow.target && empty) {
+                   w.target === s.allow.target && empty && (w.method !== 'sessions.create' || draftCreate)) {
           s.sent = w;
         } else {
           w.blocked = true;
@@ -201,7 +227,19 @@ async function watchGateway(page, origin, surface, step) {
       const m = parse(frame);
       if (!m) return socket.send(frame);
       const p = m.payload ?? {};
-      if (p.type === 'hello-ok') s.hello++;
+      if (p.type === 'hello-ok') {
+        s.hello++;
+        if (p.auth) {
+          const scopes = p.auth.scopes ?? [];
+          s.hasAuth = true;
+          // At the pinned head, operator.write and operator.admin imply operator.talk.
+          s.hasTalk = p.auth.role === 'operator' &&
+            ['operator.talk', 'operator.write', 'operator.admin'].some(scope => scopes.includes(scope));
+        } else {
+          s.hasAuth = false;
+          s.hasTalk = false;
+        }
+      }
       if (m.type === 'res' && pending.has(m.id)) {
         const r = pending.get(m.id); pending.delete(m.id);
         if (r.kind === 'capture') {
@@ -213,9 +251,17 @@ async function watchGateway(page, origin, surface, step) {
           s.closed = m.ok === true;
           if (!m.ok) s.closeRejected = scrub(m.error?.message || 'Gateway rejected finalization');
         } else {
-          r.w.createdKey = p.key;
-          r.w.accepted = m.ok === true && !['error', 'timeout', 'rejected'].includes(p.status) &&
-            p.initialRun?.status !== 'rejected';
+          const w = r.w;
+          w.createdKey = p.key;
+          w.error = scrub(m.error?.message || p.runError?.message).slice(0, 1200) || null;
+          if (w.method === 'sessions.create') {
+            w.runStarted = p.runStarted === true;
+            w.accepted = m.ok === true && p.ok === true && typeof p.key === 'string' &&
+              p.key.startsWith('agent:main:dashboard:') &&
+              p.runError === undefined && p.runStarted === (w !== s.standby);
+          } else {
+            w.accepted = m.ok === true && !['error', 'timeout', 'rejected'].includes(p.status);
+          }
         }
       }
       if (m.event === 'talk.event' && s.sid && p.transcriptionSessionId === s.sid) {
@@ -239,6 +285,24 @@ async function watchGateway(page, origin, surface, step) {
     });
   });
   return s;
+}
+
+function checkCaptureTarget(surface, s, target) {
+  if (surface === 'main') {
+    assert.equal(s.target, target, 'Main dictation targeted the wrong session');
+  } else if (surface === 'new' && s.expectStandby) {
+    assert.ok(s.standby?.accepted && s.standby.createdKey === s.target,
+      'Session-scoped New Session capture did not reuse its accepted empty standby');
+  } else {
+    assert.equal(s.target, undefined, surface + ' dictation unexpectedly targeted a chat session');
+    assert.equal(s.standby, undefined, surface + ' dictation unexpectedly created a standby session');
+  }
+}
+
+function expectedSubmit(surface, s, target, text) {
+  if (surface === 'new' && !s.expectStandby) return { method: 'sessions.create', text, target: undefined };
+  return { method: surface === 'side' ? 'sessions.companion.ask' : 'chat.send', text,
+    target: surface === 'new' ? s.standby.createdKey : target };
 }
 
 async function main() {
@@ -391,12 +455,11 @@ async function main() {
         phase = 'configure dictation punctuation';
         result.talkSettings = { route: '/settings/talk' };
         await configurePunctuation(page, policy, result.talkSettings);
-        const slug = 'proof-' + c.id + '-' + randomBytes(4).toString('hex');
+        const slug = 'proof-' + c.name.replace('--', '-') + '-' + randomBytes(6).toString('hex');
         const target = 'agent:main:' + slug;
         if (surface !== 'new') {
-          execFileSync(process.execPath, ['openclaw.mjs','gateway','call','sessions.create','--json',
-            '--params', JSON.stringify({ agentId: 'main', key: target, label: 'Dictation proof' })],
-          { cwd: checkout, env, stdio: 'ignore', timeout: 40000 });
+          phase = 'seed chat session (sessions.create)';
+          createProofSession(checkout, env, target, slug, result);
         }
         phase = 'open composer';
         const previousHello = s.hello;
@@ -430,8 +493,13 @@ async function main() {
         const checkGuard = () => {
           if (s.violation) throw new PrematureSubmit('Blocked ' + s.violation.method + ' at ' + s.violation.step);
         };
+        if (surface !== 'main') {
+          assert.ok(s.hasAuth, 'composer Gateway hello did not report granted scopes');
+          if (surface === 'side') assert.ok(s.hasTalk, 'Side chat proof requires standalone Talk access');
+        }
+        s.expectStandby = surface === 'new' && !s.hasTalk;
         setup = false; phase = 'start microphone';
-        s.allowStandby = surface === 'new';
+        s.allowStandby = s.expectStandby;
         if (surface === 'main') {
           await mic.hover(); await page.mouse.down();
           try { await until(() => s.sid || s.captureRejected || s.violation, 'Main microphone hold was not admitted', 30000); }
@@ -442,10 +510,7 @@ async function main() {
         checkGuard();
         if (s.captureRejected || s.sttError) throw new Error(s.captureRejected || s.sttError);
         assert.equal(s.provider, 'openai', 'wrong transcription provider');
-        if (surface === 'new') {
-          assert.ok(s.target && s.standby?.accepted && s.standby.createdKey === s.target,
-            'New Session dictation did not reuse its empty standby session');
-        } else assert.equal(s.target, target, 'wrong dictation session');
+        checkCaptureTarget(surface, s, target);
         await sleep(c.ms + 350); checkGuard();
         phase = 'finish capture';
         const stopButton = button(box, 'Stop and keep text');
@@ -519,12 +584,12 @@ async function main() {
           checkGuard(); result.status = 'PASS'; continue;
         }
         phase = 'explicit submit';
-        s.allow = { method: surface === 'side' ? 'sessions.companion.ask' : 'chat.send', text: inserted, target: s.target };
+        s.allow = expectedSubmit(surface, s, target, inserted);
         if (after === 'enter') await field.press('Enter');
         else await sendButton().click();
         await until(() => s.violation || s.sent?.accepted !== undefined, 'no completed submit RPC', 150000);
         checkGuard();
-        assert.equal(s.sent.accepted, true, 'Gateway rejected the explicit submission');
+        assert.equal(s.sent.accepted, true, s.sent.error || 'Gateway did not acknowledge the explicit submission');
         const turn = (surface === 'side' ? page.locator('.chat-session-rail__thread .chat-group.user') :
           page.locator('.chat-group.user').filter({ visible: true })).getByText(inserted, { exact: true });
         await turn.first().waitFor();
@@ -556,8 +621,14 @@ async function main() {
         result.gatewayAcceptedAudioFrames = s?.audioAccepted ?? 0;
         result.gatewayProvider = s?.provider === 'openai' ? 'openai' : null;
         result.finalAccepted = Boolean(s?.closed && s?.drained);
+        result.routing = {
+          standaloneTalk: s?.hasAuth ? s.hasTalk : null,
+          dictationHasTarget: Boolean(s?.target), expectedStandby: s?.expectStandby ?? null,
+          standbyReused: Boolean(s?.standby?.accepted && s.standby.createdKey === s.target),
+        };
         result.writes = (s?.writes ?? []).map(w => ({ method: w.method, accepted: w.accepted ?? null,
-          blocked: Boolean(w.blocked), nonempty: Boolean(w.text), sameDictationSession: Boolean(w.target && w.target === s.target) }));
+          blocked: Boolean(w.blocked), nonempty: Boolean(w.text), sameDictationSession: Boolean(w.target && w.target === s.target),
+          returnedKey: Boolean(w.createdKey), runStarted: w.runStarted ?? null, error: w.error ?? null }));
         result.screenshotAvailable = fs.readdirSync(folder).some(n => n.endsWith('.png'));
         write(folder, 'transcript.txt', scrub(raw || s?.finals.join(' ')) + '\n');
         write(folder, 'state.json', JSON.stringify(result, null, 2) + '\n');
