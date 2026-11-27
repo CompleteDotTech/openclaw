@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -16,7 +16,8 @@ const seed = "Existing draft:";
 const blockedMethods = new Set(["chat.send", "chat.inject", "sessions.send", "agent", "send"]);
 const relayMethods = new Set(["talk.session.create", "talk.session.appendAudio", "talk.session.close"]);
 const words = (s) => (s.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
-const save = (p, data) => writeFile(p, JSON.stringify(data, null, 2) + "\n");
+const save = (p, data) => writeFile(p, JSON.stringify(data, null, 2) + "
+");
 let apiKey;
 
 function scrub(value) {
@@ -49,12 +50,20 @@ class VisibleUiError extends Error {
   name = "VisibleUiError";
 }
 
-async function errorText(page) {
+async function errorEntries(page) {
   if (!page) return [];
   return page.locator(errorNodes).filter({ visible: true }).evaluateAll((els) =>
     els.filter((el) => !el.closest(".sr-only") && el.checkVisibility({ opacityProperty: true }))
-      .map((el) => el.innerText?.trim() ?? "").filter(Boolean),
+      .map((el) => ({
+        text: el.innerText?.trim() ?? "",
+        composerLazyAlert: el.matches('.lazy-view-error--inline[role="alert"]') &&
+          !!el.closest(".agent-chat__composer-shell"),
+      })).filter(({ text }) => text),
   );
+}
+
+async function errorText(page) {
+  return (await errorEntries(page)).map(({ text }) => text);
 }
 
 export async function visibleErrors(page) {
@@ -167,35 +176,40 @@ export async function capture(page, path) {
   await page.screenshot({ path, animations: "disabled", timeout: 5000 });
 }
 
-export async function runTake(c, take, { chromium, origin, results, commit }) {
+export async function runTake(c, take, { chromium, origin, results, commit, reviewChunkPath }) {
   const id = take ? c.id + "--" + take.id : c.id;
   const out = join(results, id);
   await mkdir(out);
   const e = c.expected;
   const shouldReview = e.action !== "insert";
+  const expectsRecovery = e.blockReviewChunk === true;
   const intended = c.segments.map((s) => s.text).join(" ");
   const state = { caseId: c.id, takeId: take?.id ?? null, commit, stt, expected: e, status: "BLOCKED", step: "clip" };
   let browser, page, draft, review, wire, setup;
   state.visibleErrors = [];
   const seen = new Set();
-  const observeErrors = async () => {
-    const errors = await visibleErrors(page).catch(() => []);
-    for (const text of errors) {
+  const observeErrors = async (includeExpected = false) => {
+    const errors = new Set();
+    for (const entry of await errorEntries(page).catch(() => [])) {
+      const text = scrub(entry.text);
+      const expected = entry.composerLazyAlert &&
+        state.reviewChunk?.aborts.some((item) => item.stopPhase === "after-stop");
+      if (includeExpected || !expected) errors.add(text);
       const stopPhase = wire?.stopRequested ? "after-stop" : "before-stop";
-      const key = JSON.stringify([state.step, stopPhase, text]);
+      const key = JSON.stringify([state.step, stopPhase, text, Boolean(expected)]);
       if (!seen.has(key)) {
         seen.add(key);
-        state.visibleErrors.push({ step: state.step, stopPhase, text });
+        state.visibleErrors.push({ step: state.step, stopPhase, text, expected: Boolean(expected) });
       }
     }
-    return errors;
+    return [...errors];
   };
   const waitUi = (check, message, ms) => waitFor(async () => {
     const ready = await check();
     const errors = await observeErrors();
-    if (ready) return true;
-    if (errors.length) throw new VisibleUiError(errors.join("\n"));
-    return false;
+    if (errors.length && (expectsRecovery || !ready)) throw new VisibleUiError(errors.join("
+"));
+    return ready;
   }, message, ms);
   try {
     const clip = join(here, "clips", id + ".wav");
@@ -206,11 +220,29 @@ export async function runTake(c, take, { chromium, origin, results, commit }) {
       "--use-fake-device-for-media-stream",
       "--use-file-for-fake-audio-capture=" + clip + "%noloop",
     ] });
-    const ctx = await browser.newContext({ locale: "en-US", viewport: { width: 1280, height: 1000 } });
+    const ctx = await browser.newContext({ locale: "en-US", viewport: { width: 1280, height: 1000 },
+      ...(expectsRecovery ? { serviceWorkers: "block" } : {}) });
     await ctx.grantPermissions(["microphone"], { origin });
     page = await ctx.newPage();
     page.setDefaultTimeout(10_000);
     wire = await installGuard(page, origin);
+    if (expectsRecovery) {
+      state.step = "arm-review-chunk-fault";
+      assert.ok(e.mode === "explicit" && !e.literal && ["keep", "cancel"].includes(e.action));
+      assert.ok(reviewChunkPath, "Full review chunk not identified");
+      const fault = state.reviewChunk = { path: reviewChunkPath, aborts: [], failures: [] };
+      const target = (url) => url.origin === origin && url.pathname === reviewChunkPath;
+      const stopPhase = () => wire.stopRequested ? "after-stop" : "before-stop";
+      page.on("requestfailed", (request) => {
+        if (target(new URL(request.url()))) {
+          fault.failures.push({ stopPhase: stopPhase(), error: scrub(request.failure()?.errorText) });
+        }
+      });
+      await page.route(target, async (route) => {
+        fault.aborts.push({ stopPhase: stopPhase(), resourceType: route.request().resourceType() });
+        await route.abort("failed");
+      });
+    }
     await page.goto(origin + "/chat", { waitUntil: "domcontentloaded" });
     await waitUi(() => wire.hello, "Gateway hello-ok not observed", 60_000);
 
@@ -264,21 +296,44 @@ export async function runTake(c, take, { chromium, origin, results, commit }) {
       const until = Date.now() + 600;
       await waitUi(() => Date.now() >= until, "Checking empty transcription", 2000);
       const errors = await observeErrors();
-      if (errors.length) throw new VisibleUiError(errors.join("\n"));
+      if (errors.length) throw new VisibleUiError(errors.join("
+"));
       state.status = "INCONCLUSIVE_STT";
     } else {
       state.status = "FAIL"; // Grade the app against what the provider actually returned.
       review = shell.getByRole("region", { name: "Review dictated text", exact: true });
       if (shouldReview) {
-        state.step = "original-only-review";
-        await waitUi(() => review.isVisible(), "Original-only review did not appear");
+        state.step = expectsRecovery ? "review-download-recovery" : "original-only-review";
+        const recovery = review.and(shell.locator(".composer-correction-recovery"));
+        const loadAlert = shell.locator('.lazy-view-error--inline[role="alert"]:visible');
+        if (expectsRecovery) {
+          await waitUi(async () => state.reviewChunk.failures.length > 0 &&
+            await recovery.isVisible() && await loadAlert.count() === 1,
+          "Failed full-review request did not show an inline alert and the recovery panel");
+          assert.ok(state.reviewChunk.aborts.length > 0 &&
+            state.reviewChunk.aborts.every((item) => item.stopPhase === "after-stop"),
+          "Review chunk was not requested exclusively after Stop");
+          state.reviewChunk.alertText = scrub(await loadAlert.innerText());
+          assert.ok(state.reviewChunk.alertText, "Expected a visible review-load message");
+        } else {
+          await waitUi(() => review.isVisible(), "Original-only review did not appear");
+        }
         assert.equal(await draft.inputValue(), seed, "Review changed the unsent draft before a choice");
-        const recognized = review.getByRole("region", { name: "Original recognized text", exact: true });
-        assert.equal((await recognized.textContent())?.trim(), original, "Review rewrote the returned text");
-        assert.ok(await review.getByRole("button", { name: "Accept correction", exact: true }).isDisabled());
-        await capture(page, join(out, "review.png"));
+        const panel = expectsRecovery ? recovery : review;
+        const recognized = panel.getByRole(expectsRecovery ? "textbox" : "region",
+          { name: "Original recognized text", exact: true });
+        if (expectsRecovery) {
+          assert.ok(await recognized.isVisible(), "Recovery transcript is not visible");
+          assert.equal(await recognized.inputValue(), original, "Recovery rewrote the returned text");
+          assert.equal(await recognized.isEditable(), false, "Recovery transcript is not read-only");
+          assert.equal(await panel.getByRole("button", { name: "Accept correction", exact: true }).count(), 0);
+        } else {
+          assert.equal((await recognized.textContent())?.trim(), original, "Review rewrote the returned text");
+          assert.ok(await panel.getByRole("button", { name: "Accept correction", exact: true }).isDisabled());
+        }
+        await capture(page, join(out, expectsRecovery ? "recovery.png" : "review.png"));
         state.step = "keyboard-choice";
-        const choice = review.getByRole("button", { name: e.action === "keep" ? "Keep original" : "Cancel", exact: true });
+        const choice = panel.getByRole("button", { name: e.action === "keep" ? "Keep original" : "Cancel", exact: true });
         assert.ok(await choice.isEnabled(), "Expected review choice to be enabled");
         await choice.press("Enter");
       }
@@ -288,15 +343,20 @@ export async function runTake(c, take, { chromium, origin, results, commit }) {
       await waitUi(async () => await draft.isVisible() && await draft.inputValue() === expectedDraft,
         "Final draft did not match the expected unsent text");
       await waitUi(() => start.isVisible(), "The idle microphone control did not return");
-      assert.equal(await review.isVisible(), false, "Review did not close or was unexpected");
+      await waitUi(async () => !await review.isVisible(), "Review did not close or was unexpected");
+      assert.equal(await draft.inputValue(), expectedDraft, "Draft changed after the recording settled");
       if (e.literal) {
         assert.equal(await shell.getByRole("checkbox", { name: "Literal for this recording" }).isChecked(), false);
       }
-      state.status = state.intendedWordsMatched ? "PASS" : "INCONCLUSIVE_STT";
+      // Recovery is graded against nonempty provider output, not the TTS prompt.
+      state.status = expectsRecovery || state.intendedWordsMatched ? "PASS" : "INCONCLUSIVE_STT";
       state.step = "complete";
     }
   } catch (error) {
-    const errors = await observeErrors();
+    // If the recovery panel never appeared, surface the actual alert rather than a timeout.
+    const recoveryMissing = state.step === "review-download-recovery" &&
+      !await page.locator(".composer-correction-recovery").isVisible().catch(() => false);
+    const errors = await observeErrors(recoveryMissing);
     if (state.step === "composer-model-ready" && await setup?.first().isVisible().catch(() => false)) {
       const text = scrub(await setup.first().innerText({ timeout: 1000 }).catch(() => "Set up a model"));
       errors.push(text);
@@ -305,11 +365,12 @@ export async function runTake(c, take, { chromium, origin, results, commit }) {
     if (error instanceof VisibleUiError || errors.length) {
       state.status = "ERROR";
       state.error = { step: state.step, name: "VisibleUiError",
-        message: error instanceof VisibleUiError ? error.message : errors.join("\n") };
+        message: error instanceof VisibleUiError ? error.message : errors.join("
+") };
     } else state.error = diagnostic(state.step, error);
   } finally {
     try {
-      state.visibleErrorsAtEnd = await observeErrors();
+      state.visibleErrorsAtEnd = await observeErrors(true);
       state.finalDraft = await draft?.inputValue({ timeout: 2000 }).then(scrub).catch(() => null) ?? null;
       state.reviewVisible = await review?.isVisible().catch(() => null) ?? null;
       if (page) {
@@ -348,6 +409,13 @@ async function main() {
   await access(join(ui, "index.html"));
   const { chromium } = createRequire(join(root, "ui", "package.json"))("playwright");
   const scenario = JSON.parse(await readFile(join(here, "scenario.json"), "utf8"));
+  let reviewChunkPath;
+  if (scenario.cases.some((c) => c.expected.blockReviewChunk === true)) {
+    const names = (await readdir(join(ui, "assets")))
+      .filter((name) => /^composer-correction-review-[A-Za-z0-9_-]+\.js$/.test(name));
+    assert.equal(names.length, 1, "Expected exactly one built full-review JS chunk; found " + names.join(", "));
+    reviewChunkPath = "/assets/" + names[0];
+  }
   assert.equal(scenario.leadingSilenceMs, 500);
   const checkIds = (items) => {
     assert.ok(items.length && items.every(({ id }) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)));
@@ -391,7 +459,7 @@ async function main() {
     for (const c of scenario.cases) {
       const runs = [];
       for (const take of takes) {
-        const result = await runTake(c, take, { chromium, origin, results, commit });
+        const result = await runTake(c, take, { chromium, origin, results, commit, reviewChunkPath });
         runs.push(result);
         const message = result.status === "ERROR" ? " — " + result.error.message.replace(/\s+/g, " ") : "";
         console.log(result.id + ": " + result.status + message);
