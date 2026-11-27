@@ -8,8 +8,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
-const head = "4a413b07f78bd51bfc309e3c451de341bf7cac0f";
-const tree = "d22abac2b83f606d2e0cdc98b5a3b38c3c57df16";
+const head = "9067ceeb5daf046e09cc6f9378cc8f0dc6080179";
+const tree = "61ef7aad3139cc273a9f9e8c2eff4d79f22416bc";
 const transcript = "Please bring the blue folder to the meeting.";
 const initial = "Meeting note:";
 const edited = "Meeting note: Please bring the green folder instead.";

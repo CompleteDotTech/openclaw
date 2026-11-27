@@ -1,5 +1,5 @@
 {
-  "note": "#205875 native receipt proof on 42d18e8 (Xvfb, no secrets); #206273 rerun on fd47028 (Nov 27).",
+  "note": "#205792 offline proof re-pinned to 9067cee; #205875 native receipt proof on 42d18e8; #206273 rerun on fd47028 (Nov 27).",
   "runs": [
     {
       "pr": 206088,
@@ -163,7 +163,7 @@
     },
     {
       "pr": 205792,
-      "sha": "4a413b07f78bd51bfc309e3c451de341bf7cac0f",
+      "sha": "9067ceeb5daf046e09cc6f9378cc8f0dc6080179",
       "dir": "proof/205792",
       "script": "dictation-proof.mjs",
       "tests": [
