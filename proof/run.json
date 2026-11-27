@@ -9,9 +9,10 @@
     },
     {
       "pr": 205789,
-      "sha": "8b9b1489296846a05300227a2670a14df8cd67a8",
+      "sha": "7ea1297feb705b5ac8350bb45c93823837d659a3",
       "dir": "proof/205789",
-      "script": "dictation-proof.mjs"
+      "script": "dictation-proof.mjs",
+      "tests": ["ui/src/pages/chat/composer-dictation-source.test.ts"]
     },
     {
       "pr": 205788,
