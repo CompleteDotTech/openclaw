@@ -52,6 +52,7 @@ import { registerDebugEnglish } from "../../ui/src/i18n/locales/en-debug.ts";
 import { registerDesktopEnglish } from "../../ui/src/i18n/locales/en-desktop.ts";
 import { registerDevicePairSecureAccessEnglish } from "../../ui/src/i18n/locales/en-device-pair-secure-access.ts";
 import { registerDevicesEnglish } from "../../ui/src/i18n/locales/en-devices.ts";
+import { registerDictationWritingProfilesEnglish } from "../../ui/src/i18n/locales/en-dictation-writing-profiles.ts";
 import { registerDreamingEnglish } from "../../ui/src/i18n/locales/en-dreaming.ts";
 import { registerFilePreviewEnglish } from "../../ui/src/i18n/locales/en-file-preview.ts";
 import { registerGitHubConnectionsEnglish } from "../../ui/src/i18n/locales/en-github-connections.ts";
@@ -188,6 +189,7 @@ const sourceFiles = [
   "en-debug.ts",
   "en-desktop.ts",
   "en-devices.ts",
+  "en-dictation-writing-profiles.ts",
   "en-device-pair-secure-access.ts",
   "en-dreaming.ts",
   "en-file-preview.ts",
@@ -789,6 +791,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerProfileEnglish.catalog,
     registerRolesEnglish.catalog,
     registerSettingsEnglish.catalog,
+    registerDictationWritingProfilesEnglish.catalog,
     registerSidebarAttentionEnglish.catalog,
     registerSkillWorkshopEnglish.catalog,
     registerSkillsBrowserEnglish.catalog,
