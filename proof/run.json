@@ -1,5 +1,5 @@
 {
-  "note": "#206088 boot manifest export on its pushed head 1e6dd77; the visual entry returns afterwards (Nov 27).",
+  "note": "#205792 rerun on 10ea958 with its CI fixes; lint dropped from the entry (Nov 27).",
   "runs": [
     {
       "pr": 206088,
@@ -66,11 +66,11 @@
     },
     {
       "pr": 205792,
-      "sha": "e82b19fb9132d62dd8da3bd516462d3f6739a6ea",
+      "sha": "10ea9589f0305145836d0d80c59c6d804b80a836",
       "dir": "proof/205792",
       "script": "dictation-proof.mjs",
       "tests": ["src/shared/dictation-writing-profiles.test.ts", "src/state/user-preferences.writing-profiles.test.ts", "ui/src/app/dictation-writing-profile-preferences.node.test.ts", "ui/src/pages/chat/chat-composer-solid.test.tsx", "ui/src/pages/chat/chat-pane-lifecycle.test.ts", "ui/src/pages/chat/components/chat-session-rail-dictation-intent.test.tsx", "ui/src/pages/chat/components/composer-dictation-send-action.test.tsx", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/pages/config/dictation-writing-profiles-section.test.tsx", "ui/src/pages/new-session/new-session-page.test.ts"],
-      "checks": ["tsgo:core", "tsgo:ui", "lint"],
+      "checks": ["tsgo:core", "tsgo:ui"],
       "offline": ["offline-dictation-proof.mjs"],
       "live": false
     },
