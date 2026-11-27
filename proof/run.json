@@ -1,5 +1,5 @@
 {
-  "note": "#205880 and #205973 with their test suites and checks (05:15 UTC Nov 27).",
+  "note": "#205794 on ab0ad5c with the paired UI budget check against 2fda93c (05:18 UTC Nov 27).",
   "runs": [
     {
       "pr": 206088,
@@ -23,9 +23,11 @@
     },
     {
       "pr": 205794,
-      "sha": "8d399bf4575d40a12146b68616974b99defbcfa0",
+      "sha": "ab0ad5c680e016d4cebc7212132339fb29e4e81a",
       "dir": "proof/205794",
-      "script": "live-dictation-proof.mjs"
+      "script": "live-dictation-proof.mjs",
+      "checks": [["ui:check-performance:base", "2fda93cf03a882cd080e7984392d50b95c4737aa"]],
+      "checkouts": [{"name": "base", "repo": "openclaw/openclaw", "sha": "2fda93cf03a882cd080e7984392d50b95c4737aa", "build": false}]
     },
     {
       "pr": 205876,
