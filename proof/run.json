@@ -1,5 +1,5 @@
 {
-  "note": "#205791 on aff75fc (main merge + late-final fix): 9 test files, 6 checks incl. the paired budget vs 6d2cb03 and the e2e suites, then the late-final journey (Nov 27).",
+  "note": "#205788 round 6 on a58e590 with the v6 harness and proof-receipts.cjs, both matching RoboClaw's stated hashes (Nov 27).",
   "runs": [
     {
       "pr": 206088,
