@@ -23,7 +23,7 @@ assert.equal((await readFile("/proc/swaps", "utf8")).trim().split("\x0a").length
 const here = fileURLToPath(new URL(".", import.meta.url));
 const repo = resolve(process.argv[2]);
 const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
-assert.equal(head, "16883b085acd2af51ca1c36362a917da2d1b8ffc", "Unexpected proof checkout");
+assert.equal(head, "1d928a6088f3857403a664cd9cc0452660af78fc", "Unexpected proof checkout");
 const { cases, takes, definitions, applyDraft } = JSON.parse(await readFile(join(here, "scenario.json"), "utf8"));
 const require = createRequire(join(repo, "ui/package.json"));
 const { createServer: vite } = await import(pathToFileURL(require.resolve("vite")).href);
