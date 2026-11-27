@@ -1,5 +1,5 @@
 {
-  "note": "#206088 visual lane alone on d81b892 (its budget checks failed in run 45946132899, which skipped it), with the main checkout for the comparison (Nov 27).",
+  "note": "#205876 on 532c7d9 with its 11 Evidence suites, pnpm build and the six takes, harness head pinned to 532c7d9 (Nov 27).",
   "runs": [
     {
       "pr": 206088,
@@ -37,7 +37,7 @@
       "sha": "532c7d9532a52cdcabfaf53f0f9bd2a40372af8a",
       "dir": "proof/205876",
       "script": "live-dictation.mjs",
-      "tests": ["extensions/openai/realtime-transcription-authority.test.ts", "src/realtime-transcription/websocket-session.test.ts"],
+      "tests": ["extensions/openai/realtime-transcription-authority.test.ts", "extensions/openai/realtime-transcription-provider.test.ts", "extensions/openai/realtime-voice-browser-auth.test.ts", "src/realtime-transcription/websocket-session.test.ts", "src/gateway/talk/transcription-relay.test.ts", "src/gateway/talk/client-authority.test.ts", "src/agents/agent-tools.prefix-stability.test.ts", "extensions/deepgram/realtime-transcription-provider.test.ts", "extensions/elevenlabs/realtime-transcription-provider.test.ts", "extensions/mistral/realtime-transcription-provider.test.ts", "extensions/xai/realtime-transcription-provider.test.ts"],
       "checks": ["build"]
     },
     {
