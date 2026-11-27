@@ -1,5 +1,5 @@
 {
-  "note": "#205788 round 6 on a58e590 with the v6 harness and proof-receipts.cjs, both matching RoboClaw's stated hashes (Nov 27).",
+  "note": "#205973 final round again on 268da4f; the last one lost its runner during the checks (Nov 27).",
   "runs": [
     {
       "pr": 206088,
