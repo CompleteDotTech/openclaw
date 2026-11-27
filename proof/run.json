@@ -1,5 +1,5 @@
 {
-  "note": "#205792 on e82b19f: build, 11 tests, tsgo:core, tsgo:ui, lint and the secretless offline browser lane, live false (Nov 27).",
+  "note": "#205820 red/green lane: its two named regressions on the pre-fix baseline and on 935d686, offline only (Nov 27).",
   "runs": [
     {
       "pr": 206088,
@@ -71,6 +71,15 @@
       "tests": ["src/shared/dictation-writing-profiles.test.ts", "src/state/user-preferences.writing-profiles.test.ts", "ui/src/app/dictation-writing-profile-preferences.node.test.ts", "ui/src/pages/chat/chat-composer-solid.test.tsx", "ui/src/pages/chat/chat-pane-lifecycle.test.ts", "ui/src/pages/chat/components/chat-session-rail-dictation-intent.test.tsx", "ui/src/pages/chat/components/composer-dictation-send-action.test.tsx", "ui/src/pages/chat/composer-dictation.test.ts", "ui/src/pages/chat/composer-direct-dictation.test.tsx", "ui/src/pages/config/dictation-writing-profiles-section.test.tsx", "ui/src/pages/new-session/new-session-page.test.ts"],
       "checks": ["tsgo:core", "tsgo:ui", "lint"],
       "offline": ["offline-dictation-proof.mjs"],
+      "live": false
+    },
+    {
+      "pr": 205820,
+      "sha": "935d686591746fbeff2335e14877213679340635",
+      "dir": "proof/205820",
+      "tests": ["src/realtime-transcription/vocabulary-terms.test.ts", "src/gateway/talk/transcription-relay.vocabulary.test.ts"],
+      "checkouts": [{"name": "pre-fix", "repo": "CompleteDotTech/openclaw", "sha": "af23a024cf8ef3e7793976ea54cb0191b03044ab", "build": false}],
+      "offline": ["red-green.mjs"],
       "live": false
     }
   ]
