@@ -5,13 +5,27 @@
 #
 # Runs only on pushes to this branch. Each PR has proof/<pr>/scenario.json and its
 # harness script, and an entry in proof/run.json: { "runs": [ { "pr", "sha", "dir",
-# "script" } ] } (an entry with "enabled": false is skipped). An entry may also list
-# "tests" (PR test files for pnpm test) and "checks" (package scripts such as lint
-# or tsgo); both run before any secret is used, and if either fails the live proof
-# is skipped and the job fails. A push proves only the
-# PRs whose proof/<pr>/ files or run.json entry changed; a change to the clip
-# builder or this workflow proves all of them. Put "[proof: all]" or
-# "[proof: 206088,205788]" in the pushed commit message to choose explicitly.
+# "script" } ] } (an entry with "enabled": false is skipped). Optional entry fields,
+# all used before any secret:
+#   "tests"      PR test files, run with pnpm test <files> --maxWorkers=1.
+#   "checks"     package scripts, each a name ("lint") or a name with arguments
+#                (["ui:check-performance:base", "<sha>"]), run with pnpm run.
+#                If a listed test or check fails, the live proof is skipped and the
+#                job fails.
+#   "checkouts"  extra source trees, [{ "name", "repo", "sha", "build" }], with repo
+#                openclaw/openclaw or CompleteDotTech/openclaw. Each is installed, and
+#                built when "build" is true, under checkouts/<name>; its commit is
+#                also fetched into the PR checkout so scripts can compare against it.
+#   "stable"     a released openclaw version, installed from npm under stable/.
+#   "offline"    lane scripts in proof/<pr>/ that need no secret (upgrade, recovery,
+#                red-on-base). Each runs with node; a failure fails the job but does
+#                not skip the live proof.
+# The harness and lane scripts get the PR checkout path as argv[2] and the
+# environment variables PROOF_PR_DIR, PROOF_RESULTS_DIR, PROOF_CHECKOUTS (JSON
+# object, name -> path) and PROOF_STABLE_DIR (empty when there is no stable install).
+# A push proves only the PRs whose proof/<pr>/ files or run.json entry changed; a
+# change to the clip builder or this workflow proves all of them. Put "[proof: all]"
+# or "[proof: 206088,205788]" in the pushed commit message to choose explicitly.
 # Each PR runs as its own job; a newer push for the same PR cancels the older job.
 name: Scripted audio dictation proof
 'on':
@@ -49,18 +63,27 @@ jobs:
         AFTER: ${{ github.sha }}
         HEAD_MESSAGE: ${{ github.event.head_commit.message }}
       run: |
-        normalize='if type == "object" and has("runs") then .runs else [.] end | map(select(.enabled != false) | {pr: (.pr | tostring), sha, dir, script, tests: (.tests // []), checks: (.checks // [])})'
+        normalize='if type == "object" and has("runs") then .runs else [.] end | map(select(.enabled != false) | {pr: (.pr | tostring), sha, dir, script, tests: (.tests // []),
+          checks: ((.checks // []) | if type == "array" then map(if type == "string" then [.] else . end) else . end),
+          checkouts: ((.checkouts // []) | if type == "array" then map(if type == "object" then {name, repo, sha, build: (.build // false)} else . end) else . end),
+          stable: (.stable // ""), offline: (.offline // [])})'
         runs=$(jq -c "$normalize" harness/proof/run.json)
         jq -e 'length > 0 and all(.[];
-            (.pr | test("^[0-9]+$")) and (.sha | test("^[0-9a-f]{40}$")) and
-            (.dir | test("^proof/[A-Za-z0-9._-]+$")) and (.script | test("^[A-Za-z0-9._-]+\\.[cm]?js$")) and
+            (.pr | test("^[0-9]+$")) and (.sha | type == "string" and test("^[0-9a-f]{40}$")) and
+            (.dir | type == "string" and test("^proof/[A-Za-z0-9._-]+$")) and (.script | type == "string" and test("^[A-Za-z0-9._-]+\\.[cm]?js$")) and
             (.tests | type == "array" and all(.[]; type == "string" and test("^[A-Za-z0-9_][A-Za-z0-9._/-]*\\.test\\.[cm]?[jt]sx?$") and (contains("..") | not))) and
-            (.checks | type == "array" and all(.[]; type == "string" and test("^[a-z][a-z0-9:_-]*$"))))
+            (.checks | type == "array" and all(.[]; type == "array" and length > 0 and (.[0] | type == "string" and test("^[a-z][a-z0-9:_-]*$")) and all(.[1:][]; type == "string" and test("^[A-Za-z0-9._:/=@+-]+$")))) and
+            (.checkouts | type == "array" and all(.[]; type == "object" and (.name | type == "string" and test("^[a-z][a-z0-9-]{0,30}$")) and (.repo | IN("openclaw/openclaw", "CompleteDotTech/openclaw")) and (.sha | type == "string" and test("^[0-9a-f]{40}$")) and (.build | type == "boolean")) and (map(.name) | length == (unique | length))) and
+            (.stable | type == "string" and test("^([0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?)?$")) and
+            (.offline | type == "array" and all(.[]; type == "string" and test("^[A-Za-z0-9._-]+\\.[cm]?js$")) and (length == (unique | length))))
           and (map(.pr) | length == (unique | length))' <<<"$runs" >/dev/null \
-          || { echo "run.json: every entry needs a numeric pr, a full 40-character sha, dir proof/<name> and a .js/.mjs/.cjs script, with no duplicate PRs; optional tests must be relative *.test.* paths and checks plain script names"; exit 1; }
+          || { echo "run.json: every entry needs a numeric pr, a full 40-character sha, dir proof/<name> and a .js/.mjs/.cjs script, with no duplicate PRs. Optional: tests as relative *.test.* paths; checks as script names or [name, args...]; checkouts as {name, repo (openclaw/openclaw or CompleteDotTech/openclaw), full sha, build true/false} with unique names; stable as a version like 2026.11.10; offline as script file names."; exit 1; }
         while read -r dir script; do
           test -f "harness/$dir/scenario.json" && test -f "harness/$dir/$script" || { echo "Missing scenario.json or $script in $dir"; exit 1; }
         done < <(jq -r '.[] | "\(.dir) \(.script)"' <<<"$runs")
+        while read -r dir lane; do
+          test -f "harness/$dir/$lane" || { echo "Missing offline lane $lane in $dir"; exit 1; }
+        done < <(jq -r '.[] | .dir as $d | .offline[] | "\($d) \(.)"' <<<"$runs")
 
         pick=$(grep -o '\[proof: *[a-z0-9, ]*\]' <<<"$HEAD_MESSAGE" | head -n1 | sed 's/^\[proof: *//; s/\]$//; s/ //g' || true)
         if [[ "$pick" == all ]] || [[ "$BEFORE" =~ ^0+$ ]]; then
@@ -84,7 +107,7 @@ jobs:
     needs: plan
     if: needs.plan.outputs.count != '0'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     concurrency:
       group: scripted-audio-proof-pr${{ matrix.pr }}
       cancel-in-progress: true
@@ -102,6 +125,11 @@ jobs:
       SCRIPT: ${{ matrix.script }}
       TESTS: ${{ toJSON(matrix.tests) }}
       CHECKS: ${{ toJSON(matrix.checks) }}
+      CHECKOUTS: ${{ toJSON(matrix.checkouts) }}
+      STABLE: ${{ matrix.stable }}
+      OFFLINE: ${{ toJSON(matrix.offline) }}
+      PROOF_PR_DIR: ${{ github.workspace }}/pr
+      PROOF_RESULTS_DIR: ${{ github.workspace }}/harness/${{ matrix.dir }}/results
     steps:
     - name: Check out the harness branch
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -121,7 +149,8 @@ jobs:
         test "$(git -C pr rev-parse HEAD)" = "$SHA"
         jq -n --arg pr "$PR" --arg sha "$SHA" --arg tree "$(git -C pr rev-parse 'HEAD^{tree}')" \
           --arg harness "$(git -C harness rev-parse HEAD)" --arg run "$GITHUB_RUN_ID" \
-          '{pr: $pr, head: $sha, tree: $tree, harness_commit: $harness, run_id: $run}' | tee "harness/$DIR/source.json"
+          '{pr: $pr, head: $sha, tree: $tree, harness_commit: $harness, run_id: $run, checkouts: [], stable: null}' | tee "harness/$DIR/source.json"
+        { echo "PROOF_CHECKOUTS={}"; echo "PROOF_STABLE_DIR="; } >> "$GITHUB_ENV"
     - name: Set up Node
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
@@ -135,6 +164,42 @@ jobs:
         pnpm install --frozen-lockfile
         NODE_OPTIONS=--max-old-space-size=8192 pnpm build:ci-artifacts
         pnpm --dir ui exec playwright install --with-deps chromium
+    - name: Check out, install and build the extra source trees (no secrets)
+      if: join(matrix.checkouts.*.name, ' ') != ''
+      run: |
+        mapfile -t entries < <(jq -c '.[]' <<<"$CHECKOUTS")
+        paths='{}'
+        for entry in "${entries[@]}"; do
+          name=$(jq -r .name <<<"$entry"); repo=$(jq -r .repo <<<"$entry")
+          sha=$(jq -r .sha <<<"$entry"); build=$(jq -r .build <<<"$entry")
+          dest="$GITHUB_WORKSPACE/checkouts/$name"
+          echo "::group::$name: $repo@$sha"
+          git init -q "$dest"
+          git -C "$dest" fetch -q --depth 1 --no-tags "https://github.com/$repo.git" "$sha"
+          git -C "$dest" -c advice.detachedHead=false checkout -q FETCH_HEAD
+          test "$(git -C "$dest" rev-parse HEAD)" = "$sha"
+          git -C pr fetch -q --depth 1 --no-tags "https://github.com/$repo.git" "$sha"
+          (cd "$dest" && pnpm install --frozen-lockfile < /dev/null)
+          if [[ "$build" == true ]]; then
+            (cd "$dest" && NODE_OPTIONS=--max-old-space-size=8192 pnpm build:ci-artifacts < /dev/null)
+          fi
+          echo "::endgroup::"
+          jq --arg name "$name" --arg repo "$repo" --arg sha "$sha" --arg tree "$(git -C "$dest" rev-parse 'HEAD^{tree}')" --argjson build "$build" \
+            '.checkouts += [{name: $name, repo: $repo, sha: $sha, tree: $tree, built: $build}]' "harness/$DIR/source.json" > source.tmp
+          mv source.tmp "harness/$DIR/source.json"
+          paths=$(jq -c --arg name "$name" --arg path "$dest" '. + {($name): $path}' <<<"$paths")
+        done
+        echo "PROOF_CHECKOUTS=$paths" >> "$GITHUB_ENV"
+    - name: Install the released openclaw (no secrets)
+      if: matrix.stable != ''
+      run: |
+        dest="$GITHUB_WORKSPACE/stable"
+        npm install --prefix "$dest" --no-audit --no-fund "openclaw@$STABLE"
+        test "$(jq -r .version "$dest/node_modules/openclaw/package.json")" = "$STABLE"
+        jq --arg version "$STABLE" --arg integrity "$(jq -r '.packages["node_modules/openclaw"].integrity // ""' "$dest/package-lock.json")" \
+          '.stable = {package: "openclaw", version: $version, integrity: $integrity}' "harness/$DIR/source.json" > source.tmp
+        mv source.tmp "harness/$DIR/source.json"
+        echo "PROOF_STABLE_DIR=$dest" >> "$GITHUB_ENV"
     - name: Run the PR's listed tests (no secrets)
       id: tests
       if: join(matrix.tests, ' ') != ''
@@ -149,12 +214,27 @@ jobs:
       continue-on-error: true
       working-directory: pr
       run: |
-        mapfile -t checks < <(jq -r '.[]' <<<"$CHECKS")
+        mapfile -t entries < <(jq -c '.[]' <<<"$CHECKS")
         status=0
-        for check in "${checks[@]}"; do
-          echo "::group::pnpm run $check"
-          echo "== pnpm run $check" >> "$GITHUB_WORKSPACE/harness/$DIR/checks.log"
-          pnpm run "$check" 2>&1 | tee -a "$GITHUB_WORKSPACE/harness/$DIR/checks.log" || status=1
+        for entry in "${entries[@]}"; do
+          mapfile -t args < <(jq -r '.[]' <<<"$entry")
+          echo "::group::pnpm run ${args[*]}"
+          echo "== pnpm run ${args[*]}" >> "$GITHUB_WORKSPACE/harness/$DIR/checks.log"
+          pnpm run "${args[@]}" < /dev/null 2>&1 | tee -a "$GITHUB_WORKSPACE/harness/$DIR/checks.log" || status=1
+          echo "::endgroup::"
+        done
+        exit "$status"
+    - name: Run the PR's offline lanes (no secrets)
+      id: offline
+      if: join(matrix.offline, ' ') != ''
+      continue-on-error: true
+      run: |
+        mapfile -t lanes < <(jq -r '.[]' <<<"$OFFLINE")
+        mkdir -p "$PROOF_RESULTS_DIR"
+        status=0
+        for lane in "${lanes[@]}"; do
+          echo "::group::$lane"
+          node "harness/$DIR/$lane" "$PROOF_PR_DIR" < /dev/null 2>&1 | tee "harness/$DIR/offline-${lane%.*}.log" || status=1
           echo "::endgroup::"
         done
         exit "$status"
@@ -175,12 +255,13 @@ jobs:
         OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       run: |
         ulimit -c 0
-        node "harness/$DIR/$SCRIPT" "$GITHUB_WORKSPACE/pr"
+        node "harness/$DIR/$SCRIPT" "$PROOF_PR_DIR"
     - name: Summarize the cases
       if: always()
       env:
         TESTS_OUTCOME: ${{ steps.tests.outcome }}
         CHECKS_OUTCOME: ${{ steps.checks.outcome }}
+        OFFLINE_OUTCOME: ${{ steps.offline.outcome }}
       run: |
         shopt -s nullglob
         {
@@ -189,10 +270,13 @@ jobs:
             echo "- listed tests ($(jq -r 'join(", ")' <<<"$TESTS")): $TESTS_OUTCOME"
           fi
           if [[ -f "harness/$DIR/checks.log" ]]; then
-            echo "- listed checks ($(jq -r 'join(", ")' <<<"$CHECKS")): $CHECKS_OUTCOME"
+            echo "- listed checks ($(jq -r 'map(join(" ")) | join(", ")' <<<"$CHECKS")): $CHECKS_OUTCOME"
           fi
           if [[ "$TESTS_OUTCOME" == failure || "$CHECKS_OUTCOME" == failure ]]; then
             echo "- live proof skipped because a listed test or check failed"
+          fi
+          if [[ -n "$OFFLINE_OUTCOME" ]]; then
+            echo "- offline lanes ($(jq -r 'join(", ")' <<<"$OFFLINE")): $OFFLINE_OUTCOME"
           fi
           for f in harness/"$DIR"/results/run-*/*/case.json; do
             echo "- $(basename "$(dirname "$f")"): $(jq -r '.status + (if .detail then " (" + .detail + ")" else "" end)' "$f")"
@@ -214,10 +298,11 @@ jobs:
           harness/${{ matrix.dir }}/results/
           harness/${{ matrix.dir }}/tests.log
           harness/${{ matrix.dir }}/checks.log
+          harness/${{ matrix.dir }}/offline-*.log
         retention-days: 30
         if-no-files-found: warn
-    - name: Fail the job if a listed test or check failed
-      if: steps.tests.outcome == 'failure' || steps.checks.outcome == 'failure'
+    - name: Fail the job if a listed test, check or offline lane failed
+      if: steps.tests.outcome == 'failure' || steps.checks.outcome == 'failure' || steps.offline.outcome == 'failure'
       run: |
-        echo "A listed test or check failed; see tests.log and checks.log in the proof bundle."
+        echo "A listed test, check or offline lane failed; see tests.log, checks.log and offline-*.log in the proof bundle."
         exit 1
