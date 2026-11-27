@@ -1,5 +1,5 @@
 {
-  "note": "#205973 final round on its main merge 1a1060d without lint/format:check; #206088 full proof on fc9ffa4; #206273 on its stack 16883b0 (Nov 27 16:30).",
+  "note": "#205820 stack after its main merge (ab64087): suites + provider-admission red/green; #205973 final round on 1a1060d; #206088 on fc9ffa4 (Nov 27 16:40).",
   "runs": [
     {
       "pr": 206088,
@@ -80,7 +80,7 @@
     },
     {
       "pr": 205820,
-      "sha": "935d686591746fbeff2335e14877213679340635",
+      "sha": "ab64087ebe3ce3155b57247dfb0f1007d8003264",
       "dir": "proof/205820",
       "tests": ["src/realtime-transcription/vocabulary-terms.test.ts", "src/gateway/talk/transcription-relay.vocabulary.test.ts"],
       "checkouts": [{"name": "pre-fix", "repo": "CompleteDotTech/openclaw", "sha": "af23a024cf8ef3e7793976ea54cb0191b03044ab", "build": false}],
