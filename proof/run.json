@@ -1,5 +1,5 @@
 {
-  "note": "#205973 final round on 268da4f (fixes + main merge): 12 test files, 7 checks, the before/after compare lane against 66b2e24 and the live takes (Nov 27).",
+  "note": "#205788 round 5 on a58e590 with the v5 harness at 4fbc1c3, its bytes confirmed by RoboClaw (Nov 27).",
   "runs": [
     {
       "pr": 206088,
