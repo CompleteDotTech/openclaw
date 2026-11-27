@@ -27,9 +27,7 @@ const alertSelector = [
   '.agent-chat__composer-status[data-tone="danger"]',
   'main[data-public-session][data-public-unavailable]:not([data-entry-pending]) .article-head',
 ].join(', ');
-
 class VisibleUiError extends Error { name = "VisibleUiError"; }
-
 const redactCredentials = (s) => [...secrets].reduce((text, secret) => text.replaceAll(secret, "[redacted]"), s)
   .replace(/\bsk-[\w-]+|\bBearer\s+[-\w.]+|\b(?:bootstrapToken|deviceToken|apiKey|token)=[-\w.%]+/gi, "[redacted]");
 const safe = (s) => redactCredentials(s)
@@ -160,7 +158,8 @@ function diagnostic(step, error) {
 }
 
 async function pageEvidence(page, path) {
-  // Redact credential fragments in place, not entire alerts or status elements.
+  // Redact value fragments in place after the assertions. Never hide or mask
+  // an alert, a status, or any other element just because it reports a failure.
   const snapshot = await page.evaluateHandle(() => {
     const fields = [...document.querySelectorAll("input:not([type=hidden]), textarea")];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -190,7 +189,7 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
   const id = take ? c.id + "--" + take.id : c.id;
   const dir = join(output, id);
   await fs.mkdir(dir, { mode: 0o700 });
-  let context, page, textarea, s, error = null, draft = "", relative = null;
+  let context, page, s, error = null, draft = "", relative = null;
   const alerts = new Set();
   const visibleAlerts = async () => {
     if (!page || page.isClosed()) return [];
@@ -208,7 +207,8 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
     const speechEnd = duration - c.segments.at(-1).pauseAfterMs;
     if (speechEnd <= leadingSilenceMs) fail("WAV is shorter than its declared padding");
     const late = c.expected.finalRelativeToStop === "after";
-    // G.711 at 8 kHz is 8 bytes/ms.
+    // G.711 at 8 kHz is 8 bytes/ms. Wait until the relay saw the audio block
+    // containing the last word (or the trailing silence for the VAD case).
     const minimumBytes = Math.ceil((late ? speechEnd : duration) * 8);
     step = "launch Chromium";
     context = await chromium.launchPersistentContext(join(work, id), {
@@ -227,7 +227,6 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
       if (s.error) fail(s.error);
       return ok;
     }, ms, message);
-
     step = "create unsent dashboard chat";
     const created = JSON.parse(await cli(["gateway", "call", "sessions.create", "--json", "--params",
       JSON.stringify({ agentId: "main", label: "Scripted dictation " + id })]));
@@ -237,7 +236,6 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
     if (created.ok !== true || created.runStarted !== false || !dashboardId) {
       fail("Expected a new dashboard session with no agent run");
     }
-
     step = "pair browser using the original Dashboard handoff";
     const { browserUrl } = JSON.parse(await cli(["dashboard", "--json"]));
     const url = new URL(browserUrl);
@@ -254,7 +252,6 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
     await until(() => page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase === "connected"),
       30_000, "Dashboard did not establish an authenticated Gateway connection", true);
     gatewayConnected = true;
-
     step = "open the created chat inside the authenticated app";
     await page.evaluate((uuid) => {
       const app = window.openclawControlUi;
@@ -267,27 +264,32 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
       return state?.gatewayPhase === "connected" && state.routeReady === true && state.sessionKey === key;
     }, sessionKey), 30_000, "The authenticated app did not open the created dashboard chat", true);
     chatOpened = true;
-
-    const shell = page.locator(".agent-chat__composer-shell");
-    textarea = shell.locator('textarea[aria-label="Chat composer"]');
-    const setup = page.getByText("Set up a model", { exact: true }).filter({ visible: true });
-    const start = shell.getByRole("button", { name: "Start voice input", exact: true });
-    const stop = shell.getByRole("button", { name: "Stop and keep text", exact: true });
-    const phase = shell.locator(".agent-chat__dictation-status");
-    step = "wait for configured and editable composer";
-    await until(async () => !(await setup.count()) && await textarea.isVisible() && await textarea.isEditable() &&
-      await start.isVisible() && await start.isEnabled(), 30_000, "Model setup did not clear or the composer stayed disabled", true);
+    // Cached and split panes can keep identical composers mounted. Use the
+    // renderer's active marker, not DOM order or visibility alone.
+    const pane = page.locator('openclaw-chat-pane.chat-pane-cache__pane--active[aria-hidden="false"]:not([inert])');
+    const shell = pane.locator(".agent-chat__composer-shell").filter({ visible: true });
+    const textarea = shell.locator('textarea[aria-label="Chat composer"]').filter({ visible: true });
+    const setup = pane.getByText("Set up a model", { exact: true }).filter({ visible: true });
+    const voiceButton = (name) => shell.getByRole("button", { name, exact: true }).filter({ visible: true });
+    const start = voiceButton("Start voice input");
+    const stop = voiceButton("Stop and keep text");
+    const listeningLabel = shell.locator(".agent-chat__dictation-phase--listening").filter({ visible: true });
+    const phase = shell.locator(".agent-chat__dictation-status").filter({ visible: true });
+    step = "wait for configured and editable composer in the active chat pane";
+    await until(async () =>
+      await pane.count() === 1 && await shell.count() === 1 && await setup.count() === 0 &&
+      await textarea.count() === 1 && await textarea.isEditable() &&
+      await start.count() === 1 && await start.isEnabled(),
+    30_000, "Expected one configured, editable composer with an enabled Start control in the active chat pane", true);
     if (await textarea.inputValue()) fail("Expected an empty composer");
-
     step = "hold microphone and reach Listening";
     await start.hover();
     await page.mouse.down();
     try {
-      await until(() => shell.locator(".agent-chat__dictation-phase--listening").isVisible(),
+      await until(async () => await listeningLabel.count() === 1,
         15_000, "Dictation did not enter Listening", true);
       listening = true;
     } finally { await page.mouse.up(); }
-
     step = "observe OpenAI readiness and sufficient audio";
     await until(() => s.ready && s.bytes >= minimumBytes, 20_000, "OpenAI readiness or relay audio missing");
     if (!late) {
@@ -296,19 +298,17 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
       await waitFor(() => s.blocked || s.error || s.finals.length, 12_000, "VAD wait elapsed").catch(() => {});
     }
     step = "click Stop and observe a clean relay close";
-    await until(async () => await stop.isVisible() && await stop.isEnabled(),
+    await until(async () => await stop.count() === 1 && await stop.isEnabled(),
       15_000, "Stop and keep text was not available", true);
     await stop.click({ trial: true });
     s.stop = ++s.seq; // Stop action issued; the close RPC has its own later order.
     await stop.click();
     await until(() => s.close && s.ack && s.closed, 20_000, "No acknowledged Stop and completed relay close");
-
     step = "wait for the final composer state";
-    await until(async () => !(await phase.isVisible()) && await start.isVisible(),
+    await until(async () => await phase.count() === 0 && await start.count() === 1 && await textarea.count() === 1,
       15_000, "Composer did not return to its idle controls", true);
     draft = await textarea.inputValue();
     settled = true;
-
     step = "qualify final words, ordering, and composer text";
     const expected = words(c.expected.text);
     const joinFinals = (accept) => words(s.finals.filter(accept).map((f) => f.text).join(" "));
@@ -344,7 +344,6 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
     }
     await context?.close().catch(() => {});
   }
-
   if (s?.blocked) {
     status = "FAIL";
     error = diagnostic("guard no-send boundary", new Error("Blocked forbidden send RPC: " + s.blocked));
@@ -356,8 +355,8 @@ async function runTake(c, take, { chromium, cli, origin, env, work, output, lead
     gatewayEvents: (s?.events ?? []).map((event) => ({
       ...event, relativeToStop: !s.stop ? "stop-not-reached" : event.order < s.stop ? "before" : "after",
     })),
-    gatewayConnected, chatOpened, listening, providerReady: !!s?.ready, audioBytes: s?.bytes ?? 0,
-    stopAttempted: !!s?.stop, closeRequested: !!s?.close, stopAcknowledged: !!s?.ack, relayClosed: !!s?.closed,
+    gatewayConnected, chatOpened, listening, providerReady: !!s?.ready, audioBytes: s?.bytes ?? 0, stopAttempted: !!s?.stop,
+    closeRequested: !!s?.close, stopAcknowledged: !!s?.ack, relayClosed: !!s?.closed,
     blockedSend: s?.blocked ?? null, settled, expectedFinalRelativeToStop: c.expected.finalRelativeToStop,
     observedFinalRelativeToStop: relative, composer: safe(draft), screenshot, screenshotError,
   });
@@ -390,7 +389,7 @@ async function main() {
   let output, step = "prepare isolated run";
   try {
     const results = join(here, "results");
-    await fs.mkdir(results, { mode: 0o700 });
+    await fs.mkdir(results, { mode: 0o700 }); // Refuse stale results.
     output = results;
     delete process.env.DEBUG;
     delete process.env.PWDEBUG;
@@ -433,7 +432,7 @@ async function main() {
             cwd: work, env: gwEnv, timeout: 30_000, maxBuffer: 1 << 20,
           })).stdout;
         } catch (cause) {
-          // Dashboard output contains a grant; never include child stdout/stderr.
+          // Never include child stdout/stderr: dashboard output contains a grant.
           fail("Isolated CLI " + args.slice(0, 3).filter((s) => !s.startsWith("--")).join(" ") +
             (cause.killed ? " timed out" : " failed"));
         }
