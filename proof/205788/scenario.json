@@ -1,0 +1,22 @@
+{
+  "leadingSilenceMs": 500,
+  "tts": { "model": "gpt-4o-mini-tts", "voice": "alloy", "instructions": "Speak the supplied words verbatim, clearly and evenly. Read punctuation command words aloud instead of performing them." },
+  "takes": [
+    { "id": "alloy", "voice": "alloy" },
+    { "id": "nova", "voice": "nova" },
+    { "id": "sage", "voice": "sage" }
+  ],
+  "cases": [
+    {"id":"main-enter","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"main","policy":"automatic","finish":"enter-then-stop","after":"enter","words":"archive the notes"}},
+    {"id":"main-button","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"main","policy":"verbatim","finish":"send","after":"button","words":"archive the notes"}},
+    {"id":"main-undo","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"main","policy":"automatic","finish":"stop","after":"undo","words":"archive the notes"}},
+    {"id":"side-enter","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"side","policy":"automatic","finish":"enter","after":"enter","words":"archive the notes"}},
+    {"id":"side-button","segments":[{"text":"archive the notes","pauseAfterMs":120},{"text":"insert period","pauseAfterMs":1100}],"expect":{"surface":"side","policy":"explicit","finish":"send","after":"button","words":"archive the notes insert period"}},
+    {"id":"side-undo","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"side","policy":"verbatim","finish":"stop","after":"undo","words":"archive the notes"}},
+    {"id":"new-pending-enter","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"new","policy":"verbatim","finish":"stop","after":"blocked-enter","words":"archive the notes"}},
+    {"id":"new-enter","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"new","policy":"automatic","finish":"stop","after":"enter","words":"archive the notes"}},
+    {"id":"new-button","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"new","policy":"automatic","finish":"send","after":"button","words":"archive the notes"}},
+    {"id":"new-undo","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"new","policy":"verbatim","finish":"stop","after":"undo","words":"archive the notes"}},
+    {"id":"main-off","segments":[{"text":"archive the notes","pauseAfterMs":1100}],"expect":{"surface":"main","policy":"off","finish":"stop","after":"none","words":"archive the notes"}}
+  ]
+}
