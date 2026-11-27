@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const head = '22347650b31422c227b64e39d0ec0ad8a6c038dc';
-const stt = 'gpt-4o-mini-transcribe';
+const sttModels = ['gpt-4o-mini-transcribe', 'whisper-1'];
 const chatModel = 'openai/gpt-5.4-mini';
 const profileId = 'en-us-plain-code';
 const draft = 'Example: ';
@@ -181,8 +181,17 @@ async function readNotices(page) {
     })).filter(e => e.text), errors);
 }
 
-async function runTake({ chromium, env, origin, fixture, take, clip, scenario, out, redact }) {
-  const state = { case: fixture.id, take: take ?? null, head, model: stt, status: 'FAIL', step: 'validate WAV' };
+function catalogPinsModel(catalog, model) {
+  if (catalog?.ready !== true || catalog.source !== 'media-understanding' ||
+      catalog.activeProvider !== 'openai' || catalog.providers?.length !== 1) return false;
+  const [provider] = catalog.providers;
+  return provider.id === 'openai' && provider.configured === true &&
+    provider.models?.length === 1 && provider.models[0] === model;
+}
+
+async function runTake({ chromium, env, origin, fixture, take, clip, scenario, out, redact, stt }) {
+  const state = { case: fixture.id, take: take ?? null, head, requestedModel: stt, model: null,
+    status: 'FAIL', step: 'validate WAV' };
   let browser, page, input, review, log;
   const raw = () => log?.finals.join('\n') ?? '';
   const seen = new Map();
@@ -254,9 +263,8 @@ async function runTake({ chromium, env, origin, fixture, take, clip, scenario, o
       health();
       return await input.isVisible() && await input.isEnabled() && await input.isEditable() &&
         !await page.getByText('Set up a model', { exact: true }).first().isVisible() &&
-        log.catalog?.ready && log.catalog.source === 'media-understanding' && log.catalog.activeProvider === 'openai' &&
-        log.catalog.providers?.some(p => p.id === 'openai' && p.configured && p.models?.includes(stt));
-    }, 30000, 'Composer or OpenAI file transcription was not ready', undefined, true);
+        catalogPinsModel(log.catalog, stt);
+    }, 30000, 'Composer or OpenAI file transcription (' + stt + ') was not ready', undefined, true);
 
     state.step = 'enable Developer mode and seed draft';
     const disclosure = shell.locator('summary');
@@ -290,6 +298,10 @@ async function runTake({ chromium, env, origin, fixture, take, clip, scenario, o
     await waitUi(() => { health(); return log.closeAck && log.closed; }, 55000, 'Transcription did not settle', inReview);
     check(log.closed === 'completed' && log.creates === 1 && log.provider === 'openai' &&
       log.bytes >= (ms - 400) * 8 && log.finals.length === 1, 'Missing or incomplete OpenAI capture');
+    // File transcription events carry text, not a model ID. The singleton
+    // configuration plus the Gateway catalog and successful final establish the model.
+    check(catalogPinsModel(log.catalog, stt), 'Gateway catalog did not pin the requested file model');
+    state.model = stt;
     check(await value(input) === draft, 'Capture changed the draft before review');
 
     state.step = 'qualify transcript and verify exact review';
@@ -393,34 +405,19 @@ async function runTake({ chromium, env, origin, fixture, take, clip, scenario, o
     state.audioBytesSent = log?.bytes ?? 0;
     state.gatewayCompleted = log?.closed === 'completed' && log?.closeAck === true;
     state.provider = log?.provider === 'openai' ? 'openai' : null;
-    await fs.writeFile(join(out, 'transcript.txt'), redact(raw()), { mode: 0o600 });
+    const transcript = redact(raw());
+    console.log(JSON.stringify({ case: state.case, take: state.take, status: state.status,
+      requestedModel: state.requestedModel, model: state.model, transcript,
+      reason: state.error?.message ?? state.reason ?? null }));
+    await fs.writeFile(join(out, 'transcript.txt'), transcript, { mode: 0o600 });
     await fs.writeFile(join(out, 'state.json'), JSON.stringify(state, null, 2) + '\n', { mode: 0o600 });
-    console.log(fixture.id + (take ? '/' + take : '') + ': ' + state.status);
   }
   return state.status;
 }
 
-async function main(key) {
-  check(process.argv.length === 3 && key, 'Usage: OPENAI_API_KEY in env; node proof.mjs <built PR checkout>');
-  delete process.env.OPENAI_API_KEY;
-  const redact = s => scrub(s, key);
-  const checkout = resolve(process.argv[2]);
-  check(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: checkout, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() === head,
-    'Build and pass the pinned PR checkout, not the proof branch');
-  const ui = join(checkout, 'dist/control-ui');
-  await fs.access(join(ui, 'index.html'));
-  const { chromium } = createRequire(join(checkout, 'ui/package.json'))('playwright');
-  const scenario = JSON.parse(await fs.readFile(join(here, 'scenario.json'), 'utf8'));
-  const takes = scenario.takes?.length ? scenario.takes.map(t => t.id) : [null];
-  check(takes.every(t => t === null || id(t)) && new Set(takes).size === takes.length, 'Invalid take IDs');
-  const cases = scenario.cases;
-  check(cases.length && cases.every(c => id(c.id) && actions.has(c.expected?.action)) &&
-    new Set(cases.map(c => c.id)).size === cases.length, 'Invalid case IDs or actions');
-  for (const c of cases) {
-    check(!qualify(c.segments.map(s => s.text).join(' '), c).reason, 'Invalid canonical fixture: ' + c.id);
-  }
-  check((await fs.statfs('/dev/shm')).type === 0x01021994, 'Linux /dev/shm tmpfs is required');
+async function withGateway({ checkout, ui, key, stt }, use) {
   const tmp = await fs.mkdtemp('/dev/shm/openclaw-dictation-');
+  const previousTmp = process.env.TMPDIR;
   let gateway, exited;
   try {
     process.env.TMPDIR = tmp;
@@ -450,33 +447,12 @@ async function main(key) {
       gateway.once('close', finish);
     });
     await until(async () => {
-      check(!dead, 'Gateway exited during startup');
+      check(!dead, stt + ': Gateway exited during startup');
       const r = await fetch(origin + '/readyz', { signal: AbortSignal.timeout(1000) }).catch(() => null);
       await r?.body?.cancel();
       return r?.ok;
-    }, 90000, 'Gateway readiness timed out');
-    const results = join(here, 'results');
-    await fs.mkdir(results, { recursive: true });
-    const run = await fs.mkdtemp(join(results, head.slice(0, 8) + '-'));
-    const summary = {};
-    for (const fixture of cases) {
-      const statuses = {};
-      for (const take of takes) {
-        const stem = fixture.id + (take ? '--' + take : '');
-        const out = join(run, stem);
-        await fs.mkdir(out, { mode: 0o700 });
-        statuses[take ?? 'default'] = await runTake({ chromium, env, origin, fixture, take, scenario, out, redact,
-          clip: join(here, 'clips', stem + '.wav') });
-      }
-      const all = Object.values(statuses);
-      summary[fixture.id] = {
-        takes: statuses,
-        status: all.includes('ERROR') ? 'ERROR' : all.includes('FAIL') ? 'FAIL' : all.includes('PASS') ? 'PASS' : 'INCONCLUSIVE_STT' };
-    }
-    await fs.writeFile(join(run, 'summary.json'), JSON.stringify({ head, cases: summary }, null, 2) + '\n', { mode: 0o600 });
-    console.log('Results: ' + run);
-    const all = Object.values(summary).map(c => c.status);
-    process.exitCode = all.some(s => s === 'ERROR' || s === 'FAIL') ? 1 : all.includes('INCONCLUSIVE_STT') ? 2 : 0;
+    }, 90000, stt + ': Gateway readiness timed out');
+    await use({ env, origin });
   } finally {
     if (gateway) {
       gateway.kill('SIGTERM');
@@ -484,8 +460,64 @@ async function main(key) {
       if (gateway.exitCode === null && gateway.signalCode === null) gateway.kill('SIGKILL');
       await exited;
     }
+    if (previousTmp === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmp;
     await fs.rm(tmp, { recursive: true, force: true });
   }
+}
+
+async function main(key) {
+  check(process.argv.length === 3 && key, 'Usage: OPENAI_API_KEY in env; node proof.mjs <built PR checkout>');
+  delete process.env.OPENAI_API_KEY;
+  const redact = s => scrub(s, key);
+  const checkout = resolve(process.argv[2]);
+  check(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: checkout, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() === head,
+    'Build and pass the pinned PR checkout, not the proof branch');
+  const ui = join(checkout, 'dist/control-ui');
+  await fs.access(join(ui, 'index.html'));
+  const { chromium } = createRequire(join(checkout, 'ui/package.json'))('playwright');
+  const scenario = JSON.parse(await fs.readFile(join(here, 'scenario.json'), 'utf8'));
+  const takes = scenario.takes?.length ? scenario.takes.map(t => t.id) : [null];
+  check(takes.every(t => t === null || id(t)) && new Set(takes).size === takes.length, 'Invalid take IDs');
+  const cases = scenario.cases;
+  check(cases.length && cases.every(c => id(c.id) && actions.has(c.expected?.action) &&
+    sttModels.includes(c.transcriptionModel)) &&
+    new Set(cases.map(c => c.id)).size === cases.length, 'Invalid case IDs, actions, or transcription models');
+  for (const c of cases) {
+    check(!qualify(c.segments.map(s => s.text).join(' '), c).reason, 'Invalid canonical fixture: ' + c.id);
+  }
+  check((await fs.statfs('/dev/shm')).type === 0x01021994, 'Linux /dev/shm tmpfs is required');
+  const results = join(here, 'results');
+  await fs.mkdir(results, { recursive: true });
+  const run = await fs.mkdtemp(join(results, head.slice(0, 8) + '-'));
+  const summary = {};
+  for (const stt of sttModels) {
+    const group = cases.filter(c => c.transcriptionModel === stt);
+    if (!group.length) continue;
+    await withGateway({ checkout, ui, key, stt }, async ({ env, origin }) => {
+      for (const fixture of group) {
+        const statuses = {};
+        for (const take of takes) {
+          const stem = fixture.id + (take ? '--' + take : '');
+          const out = join(run, stem);
+          await fs.mkdir(out, { mode: 0o700 });
+          statuses[take ?? 'default'] = await runTake({ chromium, env, origin, fixture, take, scenario, out, redact, stt,
+            clip: join(here, 'clips', stem + '.wav') });
+        }
+        const all = Object.values(statuses);
+        summary[fixture.id] = {
+          requestedModel: stt,
+          takes: statuses,
+          status: all.includes('ERROR') ? 'ERROR' : all.includes('FAIL') ? 'FAIL'
+            : all.includes('PASS') ? 'PASS' : 'INCONCLUSIVE_STT',
+        };
+      }
+    });
+  }
+  await fs.writeFile(join(run, 'summary.json'), JSON.stringify({ head, cases: summary }, null, 2) + '\n', { mode: 0o600 });
+  console.log('Results: ' + run);
+  const all = Object.values(summary).map(c => c.status);
+  process.exitCode = all.some(s => s === 'ERROR' || s === 'FAIL') ? 1 : all.includes('INCONCLUSIVE_STT') ? 2 : 0;
 }
 
 const key = process.env.OPENAI_API_KEY?.trim();
